@@ -1,0 +1,29 @@
+{
+  "article_id": "20260521-sparse-attention-survey",
+  "model": "claude-sonnet-4-6",
+  "style": "socratic",
+  "generated_at": "2026-05-21T10:00:00Z",
+  "cards": [
+    {
+      "id": "1",
+      "type": "concept",
+      "q": "What problem does sparse attention solve?",
+      "a": "Standard attention scales quadratically with sequence length, making it too slow and memory-intensive for long documents. Sparse attention reduces this to near-linear complexity.",
+      "tags": ["attention", "complexity", "transformers"]
+    },
+    {
+      "id": "2",
+      "type": "fact",
+      "q": "What is the complexity of window-based attention?",
+      "a": "O of n times w, where n is sequence length and w is the window size. This compares to O of n squared for standard attention.",
+      "tags": ["attention", "complexity", "window"]
+    },
+    {
+      "id": "3",
+      "type": "insight",
+      "q": "Why does sparse attention lose so little quality despite computing fewer interactions?",
+      "a": "Because most attention weights are near zero in practice. Sparse attention simply skips the interactions that would have had negligible weight anyway.",
+      "tags": ["attention", "insight"]
+    }
+  ]
+}

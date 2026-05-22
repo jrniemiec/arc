@@ -1,0 +1,30 @@
+# Go build artifacts
+local/
+bin/
+cmd/
+*.exe
+*.exe~
+*.test
+*.out
+
+
+# Go workspace
+go.work
+go.work.sum
+
+#c2 sym link
+c2
+
+# IDE / editor
+.vscode/
+.idea/
+.claude/
+
+# CLAUDE CODE
+CLAUDE.md
+
+# OS junk
+.DS_Store
+
+# Build artifacts / release dist
+dist/

@@ -1,0 +1,22 @@
+Sparse Attention Mechanisms: A Survey
+
+Standard self-attention in transformer models scales quadratically with sequence length,
+making it impractical for long documents. This survey examines sparse attention mechanisms
+that reduce this complexity.
+
+Window-based attention restricts each token to attend only to a local window of size w,
+reducing complexity from O(n squared) to O(n times w). This is effective for tasks
+where local context is sufficient.
+
+Global attention tokens attend to all positions while local tokens attend only to nearby
+positions. This hybrid approach maintains global coherence while reducing overall compute.
+
+Learned sparsity patterns allow the model to dynamically select which positions to attend
+to, potentially capturing long-range dependencies more efficiently than fixed patterns.
+
+The key insight is that most attention weights in practice are near zero. Sparse attention
+exploits this by computing only the significant interactions, yielding both speed and
+memory improvements with minimal quality loss.
+
+Applications include long document summarization, genomics, and audio processing where
+sequences commonly exceed tens of thousands of tokens.

@@ -1,0 +1,18 @@
+## Sparse Attention Mechanisms
+
+### The Problem
+Standard transformer attention is O(n²) in sequence length — prohibitively expensive for long documents.
+
+### Key Approaches
+- **Window attention** — each token attends to a local window of size w. Complexity: O(n·w). Best for tasks where local context suffices.
+- **Global + local** — some tokens attend globally, others locally. Maintains coherence at lower cost.
+- **Learned sparsity** — model dynamically selects which positions to attend to. Captures long-range dependencies efficiently.
+
+### Core Insight
+Most attention weights are near zero in practice. Sparse attention exploits this — compute only significant interactions.
+
+### Result
+Speed and memory improvements with minimal quality loss. Enables practical processing of sequences with tens of thousands of tokens.
+
+### Applications
+Long document summarization, genomics, audio processing.

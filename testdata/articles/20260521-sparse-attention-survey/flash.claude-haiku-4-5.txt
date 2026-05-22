@@ -1,0 +1,1 @@
+Sparse attention reduces transformer complexity from quadratic to linear by computing only significant attention weights. Window attention, global-local hybrids, and learned sparsity are the main approaches. Most attention weights are near zero anyway, so little quality is lost. This unlocks practical processing of very long sequences.

@@ -1,0 +1,24 @@
+{
+  "id": "20260521-sparse-attention-survey",
+  "title": "Sparse Attention Mechanisms: A Survey",
+  "url": "https://example.com/sparse-attention-survey",
+  "source_type": "url",
+  "author": "Test Author",
+  "published_at": "2026-05-01",
+  "language": "en",
+  "ingested_at": "2026-05-21T10:00:00Z",
+  "collections": ["ml-papers", "rag"],
+  "tags": [
+    {"value": "attention", "source": "llm"},
+    {"value": "transformers", "source": "llm"},
+    {"value": "survey", "source": "llm"}
+  ],
+  "summary_model": "claude-opus-4-6",
+  "summary_style": "study-notes",
+  "flash_model": "claude-haiku-4-5",
+  "flashcard_model": "claude-sonnet-4-6",
+  "flashcard_style": "socratic",
+  "embed_model": "nomic-embed-text",
+  "quality_score": 0.85,
+  "source.url": "https://example.com/sparse-attention-survey"
+}
