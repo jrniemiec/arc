@@ -25,6 +25,157 @@ import (
 	"github.com/jrniemiec/llm"
 )
 
+// SummarizeRequest describes a standalone summarize operation.
+type SummarizeRequest struct {
+	Text     string // plain text to summarize
+	Title    string // optional, used for document metadata
+	Source   string // optional URL or file path
+	Style    string // overrides config ingest.summary_style
+	Profile  string // profile name, overrides config ingest.summary_profile
+	Progress func(string)
+}
+
+// SummarizeResult holds the output of a standalone summarize operation.
+type SummarizeResult struct {
+	Text  string
+	Model string
+	Style string
+	Usage llm.Usage
+}
+
+// Summarize runs just the summarize step against plain text.
+// It does not write any files.
+func Summarize(ctx context.Context, cfg config.Config, req SummarizeRequest) (SummarizeResult, error) {
+	progress := req.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	style := first(req.Style, cfg.Ingest.SummaryStyle)
+	profileName := first(req.Profile, cfg.Ingest.SummaryProfile)
+
+	prof, err := lookupProfile(cfg, profileName)
+	if err != nil {
+		return SummarizeResult{}, fmt.Errorf("profile: %w", err)
+	}
+
+	p, err := llm.New(llm.ProviderConfig{
+		Provider: prof.Provider,
+		Model:    prof.Model,
+		Host:     prof.Host,
+		APIKey:   resolveAPIKey(prof.Provider),
+	})
+	if err != nil {
+		return SummarizeResult{}, fmt.Errorf("llm provider: %w", err)
+	}
+
+	text, usage, err := summarizeText(ctx, p, req.Text, req.Title, req.Source, style, prof.Model,
+		cfg.Ingest.ChunkTokens, cfg.Ingest.SummaryMaxTokens, cfg.StylePrompt(style), progress)
+	if err != nil {
+		return SummarizeResult{}, err
+	}
+
+	return SummarizeResult{Text: text, Model: prof.Model, Style: style, Usage: usage}, nil
+}
+
+// FlashRequest describes a standalone flash generation operation.
+type FlashRequest struct {
+	Text     string // text to flash-summarize (summary or body)
+	Profile  string // profile name override
+	Progress func(string)
+}
+
+// FlashResult holds the output of a standalone flash operation.
+type FlashResult struct {
+	Text  string
+	Model string
+	Usage llm.Usage
+}
+
+// Flash runs just the flash generation step against plain text.
+// It does not write any files.
+func Flash(ctx context.Context, cfg config.Config, req FlashRequest) (FlashResult, error) {
+	progress := req.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	profileName := first(req.Profile, cfg.Ingest.FlashProfile)
+	prof, err := lookupProfile(cfg, profileName)
+	if err != nil {
+		return FlashResult{}, fmt.Errorf("profile: %w", err)
+	}
+
+	p, err := llm.New(llm.ProviderConfig{
+		Provider: prof.Provider,
+		Model:    prof.Model,
+		Host:     prof.Host,
+		APIKey:   resolveAPIKey(prof.Provider),
+	})
+	if err != nil {
+		return FlashResult{}, fmt.Errorf("llm provider: %w", err)
+	}
+
+	progress(fmt.Sprintf("generating flash (model: %s)...", prof.Model))
+	text, usage, err := generateFlash(ctx, p, req.Text, cfg.Ingest.FlashSystemPrompt, cfg.Ingest.FlashMaxTokens)
+	if err != nil {
+		return FlashResult{}, err
+	}
+
+	return FlashResult{Text: text, Model: prof.Model, Usage: usage}, nil
+}
+
+// FlashcardsRequest describes a standalone flashcard generation operation.
+type FlashcardsRequest struct {
+	Text     string // text to generate flashcards from
+	Style    string // "socratic" | "cloze"
+	Profile  string // profile name override
+	Progress func(string)
+}
+
+// FlashcardsResult holds the output of a standalone flashcard operation.
+type FlashcardsResult struct {
+	JSON  []byte
+	Model string
+	Style string
+	Usage llm.Usage
+}
+
+// Flashcards runs just the flashcard generation step against plain text.
+// It does not write any files.
+func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (FlashcardsResult, error) {
+	progress := req.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	style := first(req.Style, cfg.Ingest.FlashcardStyle)
+	profileName := first(req.Profile, cfg.Ingest.FlashcardProfile)
+
+	prof, err := lookupProfile(cfg, profileName)
+	if err != nil {
+		return FlashcardsResult{}, fmt.Errorf("profile: %w", err)
+	}
+
+	p, err := llm.New(llm.ProviderConfig{
+		Provider: prof.Provider,
+		Model:    prof.Model,
+		Host:     prof.Host,
+		APIKey:   resolveAPIKey(prof.Provider),
+	})
+	if err != nil {
+		return FlashcardsResult{}, fmt.Errorf("llm provider: %w", err)
+	}
+
+	progress(fmt.Sprintf("generating flashcards (style: %s, model: %s)...", style, prof.Model))
+	data, usage, err := generateFlashcards(ctx, p, req.Text, style, cfg.FlashcardStylePrompt(style))
+	if err != nil {
+		return FlashcardsResult{}, err
+	}
+
+	return FlashcardsResult{JSON: data, Model: prof.Model, Style: style, Usage: usage}, nil
+}
+
 // Request describes one ingest operation.
 type Request struct {
 	// Exactly one of URL or File must be set. File="-" reads stdin.
@@ -102,8 +253,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("extraction produced no text")
 	}
 
-	words := len(strings.Fields(extracted.Text))
-	progress(fmt.Sprintf("extracted %d words", words))
+	progress(extracted.Stats())
 
 	if req.DryRun {
 		return Result{}, nil
@@ -174,7 +324,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("llm provider: %w", err)
 	}
-	summaryText, su, err := summarizeText(ctx, summaryProvider, extracted.Text, title, req.URL, summaryStyle, summaryProf.Model, progress)
+	summaryText, su, err := summarizeText(ctx, summaryProvider, extracted.Text, title, req.URL, summaryStyle, summaryProf.Model, cfg.Ingest.ChunkTokens, cfg.Ingest.SummaryMaxTokens, cfg.StylePrompt(summaryStyle), progress)
 	if err != nil {
 		return Result{}, fmt.Errorf("summarize: %w", err)
 	}
@@ -192,7 +342,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("llm provider: %w", err)
 	}
-	flashText, fu, err := generateFlash(ctx, flashProvider, summaryText)
+	flashText, fu, err := generateFlash(ctx, flashProvider, summaryText, cfg.Ingest.FlashSystemPrompt, cfg.Ingest.FlashMaxTokens)
 	if err != nil {
 		return Result{}, fmt.Errorf("flash: %w", err)
 	}
@@ -209,7 +359,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("llm provider: %w", err)
 		}
-		fj, cu, err := generateFlashcards(ctx, fcProvider, summaryText, flashcardStyle)
+		fj, cu, err := generateFlashcards(ctx, fcProvider, summaryText, flashcardStyle, cfg.FlashcardStylePrompt(flashcardStyle))
 		if err != nil {
 			return Result{}, fmt.Errorf("flashcards: %w", err)
 		}
@@ -309,42 +459,61 @@ func chat(ctx context.Context, p llm.Provider, system, prompt string) (string, l
 
 // briefAdapter bridges github.com/jrniemiec/llm.Provider → brief/llm.Provider.
 // brief expects a simpler single-turn interface; we wrap the multi-turn one.
+// onCall, if set, is invoked before each LLM call (used for per-chunk progress).
 type briefAdapter struct {
-	p     llm.Provider
-	model string
+	p      llm.Provider
+	model  string
+	onCall func()
 }
 
 func (a *briefAdapter) Name() string { return a.model }
 func (a *briefAdapter) Chat(ctx context.Context, system, prompt string) (string, briefllm.Usage, error) {
+	if a.onCall != nil {
+		a.onCall()
+	}
 	out, u, err := a.p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
 	return out, briefllm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}, err
 }
 
 // summarizeText uses brief's paragraph-aware chunking and map-reduce summarization.
-func summarizeText(ctx context.Context, p llm.Provider, text, title, source, style, model string, progress func(string)) (string, llm.Usage, error) {
+func summarizeText(ctx context.Context, p llm.Provider, text, title, source, style, model string, chunkTokens, maxTokens int, systemPrompt string, progress func(string)) (string, llm.Usage, error) {
 	doc := brieftypes.Document{
-		ID:    brieftypes.ShortID(brieftypes.HashText(text)),
-		Hash:  brieftypes.HashText(text),
-		Title: title,
+		ID:     brieftypes.ShortID(brieftypes.HashText(text)),
+		Hash:   brieftypes.HashText(text),
+		Title:  title,
 		Source: source,
-		Text:  text,
+		Text:   text,
 	}
 
-	chunks, err := briefchunk.ChunkDocument(doc, 900)
+	chunks, err := briefchunk.ChunkDocument(doc, chunkTokens)
 	if err != nil {
 		return "", llm.Usage{}, fmt.Errorf("chunk: %w", err)
 	}
 
-	if len(chunks) > 1 {
-		progress(fmt.Sprintf("summarizing (%d chunks, model: %s)...", len(chunks), model))
-	} else {
-		progress(fmt.Sprintf("summarizing (model: %s)...", model))
+	// Build per-chunk token counts up front so the progress adapter can report them.
+	chunkTokenCounts := make([]int, len(chunks))
+	for i, ch := range chunks {
+		chunkTokenCounts[i] = briefchunk.ApproxTokens(ch.Text)
 	}
 
-	adapter := &briefAdapter{p: p, model: model}
-	systemPrompt := summarySystemPrompt(style)
+	n := len(chunks)
+	call := 0 // tracks which LLM call we're on (map calls first, then reduce)
+	adapter := &briefAdapter{
+		p:     p,
+		model: model,
+		onCall: func() {
+			call++
+			if call <= n {
+				// MAP phase
+				progress(fmt.Sprintf("chunk %d/%d (~%d tokens, model: %s)", call, n, chunkTokenCounts[call-1], model))
+			} else {
+				// REDUCE phase
+				progress(fmt.Sprintf("reducing %d chunk summaries...", n))
+			}
+		},
+	}
 
-	summary, bu, err := briefsummarize.SummarizeDocument(ctx, io.Discard, adapter, doc, chunks, style, systemPrompt, 2048, false)
+	summary, bu, err := briefsummarize.SummarizeDocument(ctx, io.Discard, adapter, doc, chunks, style, systemPrompt, maxTokens, false)
 	if err != nil {
 		return "", llm.Usage{}, fmt.Errorf("summarize: %w", err)
 	}
@@ -352,27 +521,19 @@ func summarizeText(ctx context.Context, p llm.Provider, text, title, source, sty
 	return summary.Markdown, llm.Usage{InputTokens: bu.InputTokens, OutputTokens: bu.OutputTokens}, nil
 }
 
-func summarySystemPrompt(style string) string {
-	switch style {
-	case "bullets":
-		return "You are a precise knowledge curator. Summarize in concise bullet points. No fluff, no preamble."
-	case "technical":
-		return "You are a technical writer. Summarize with emphasis on methods, results, and implementation details. Use markdown."
-	default: // study-notes
-		return "You are a knowledge curator. Write structured study notes: key concepts, insights, and takeaways. Use markdown headers and bullets."
-	}
+
+func generateFlash(ctx context.Context, p llm.Provider, text, systemPrompt string, maxTokens int) (string, llm.Usage, error) {
+	out, u, err := p.Chat(ctx, systemPrompt, []llm.Message{
+		{Role: llm.RoleUser, Content: "Write a flash summary for this text:\n\n" + text},
+	})
+	_ = maxTokens // passed to provider config in future; LLMs self-limit short outputs well
+	return out, u, err
 }
 
-func generateFlash(ctx context.Context, p llm.Provider, summary string) (string, llm.Usage, error) {
-	return chat(ctx, p,
-		"You write ultra-concise audio summaries. 3-5 sentences. No markdown. Natural speech rhythm. No bullet points.",
-		"Write a flash summary (spoken aloud) for this article summary:\n\n"+summary)
-}
-
-func generateFlashcards(ctx context.Context, p llm.Provider, summary, style string) ([]byte, llm.Usage, error) {
+func generateFlashcards(ctx context.Context, p llm.Provider, text, style, systemPrompt string) ([]byte, llm.Usage, error) {
 	raw, u, err := chat(ctx, p,
-		flashcardSystemPrompt(style),
-		"Generate flashcards from this article summary. Return valid JSON only, no markdown fences:\n\n"+summary)
+		systemPrompt,
+		"Generate flashcards from this text. Return valid JSON only, no markdown fences:\n\n"+text)
 	if err != nil {
 		return nil, u, err
 	}
@@ -387,20 +548,6 @@ func generateFlashcards(ctx context.Context, p llm.Provider, summary, style stri
 		return nil, u, fmt.Errorf("flashcards LLM returned invalid JSON")
 	}
 	return []byte(raw), u, nil
-}
-
-func flashcardSystemPrompt(style string) string {
-	base := `You generate flashcards as a JSON array. Each card:
-{"type":"concept|fact|insight","front":"question","back":"answer","tags":["tag1"]}.
-Written for the ear — no markdown, natural language. Return only the JSON array.`
-	switch style {
-	case "socratic":
-		return base + " Use probing questions that test deep understanding."
-	case "cloze":
-		return base + " Use fill-in-the-blank style fronts."
-	default:
-		return base
-	}
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -172,6 +173,168 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		CostThisMonth:    costMonth,
 		CostTotal:        costTotal,
 	}, nil
+}
+
+// Summarize runs the summarize step on an existing article (by slug) or raw text.
+// If req.Write is true and a slug is provided, the summary is written as a new
+// variant file alongside existing files in the article directory.
+func (s *Service) Summarize(ctx context.Context, req SummarizeRequest) (SummarizeResult, error) {
+	text := req.Text
+	var articleDir string
+
+	if req.Slug != "" {
+		a, err := s.lib.Get(ctx, req.Slug)
+		if err != nil {
+			return SummarizeResult{}, fmt.Errorf("get article %s: %w", req.Slug, err)
+		}
+		body, err := s.lib.ReadBody(a)
+		if err != nil {
+			return SummarizeResult{}, fmt.Errorf("read body: %w", err)
+		}
+		text = body
+		articleDir = filepath.Join(s.cfg.ArticlesRoot, req.Slug)
+	}
+
+	if strings.TrimSpace(text) == "" {
+		return SummarizeResult{}, fmt.Errorf("no text to summarize")
+	}
+
+	pr, err := pipeline.Summarize(ctx, s.cfg, pipeline.SummarizeRequest{
+		Text:     text,
+		Style:    req.Style,
+		Profile:  req.Profile,
+		Progress: req.Progress,
+	})
+	if err != nil {
+		return SummarizeResult{}, err
+	}
+
+	result := SummarizeResult{
+		Text:    pr.Text,
+		Model:   pr.Model,
+		Style:   pr.Style,
+		CostUSD: s.cfg.CalcCost(pr.Model, pr.Usage.InputTokens, pr.Usage.OutputTokens),
+	}
+
+	if req.Write && articleDir != "" {
+		fname := fmt.Sprintf("summary.%s.%s.txt", pr.Style, pr.Model)
+		fpath := filepath.Join(articleDir, fname)
+		if err := os.WriteFile(fpath, []byte(pr.Text), 0644); err != nil {
+			return result, fmt.Errorf("write summary file: %w", err)
+		}
+		result.Written = true
+		result.WritePath = fpath
+	}
+
+	return result, nil
+}
+
+// Flash runs the flash generation step on an existing article (by slug) or raw text.
+func (s *Service) Flash(ctx context.Context, req FlashRequest) (FlashResult, error) {
+	text := req.Text
+	var articleDir string
+
+	if req.Slug != "" {
+		a, err := s.lib.Get(ctx, req.Slug)
+		if err != nil {
+			return FlashResult{}, fmt.Errorf("get article %s: %w", req.Slug, err)
+		}
+		if req.FromBody {
+			text, err = s.lib.ReadBody(a)
+		} else {
+			text, err = s.lib.ReadSummary(a)
+		}
+		if err != nil {
+			return FlashResult{}, fmt.Errorf("read article: %w", err)
+		}
+		articleDir = filepath.Join(s.cfg.ArticlesRoot, req.Slug)
+	}
+
+	if strings.TrimSpace(text) == "" {
+		return FlashResult{}, fmt.Errorf("no text to flash")
+	}
+
+	pr, err := pipeline.Flash(ctx, s.cfg, pipeline.FlashRequest{
+		Text:     text,
+		Profile:  req.Profile,
+		Progress: req.Progress,
+	})
+	if err != nil {
+		return FlashResult{}, err
+	}
+
+	result := FlashResult{
+		Text:    pr.Text,
+		Model:   pr.Model,
+		CostUSD: s.cfg.CalcCost(pr.Model, pr.Usage.InputTokens, pr.Usage.OutputTokens),
+	}
+
+	if req.Write && articleDir != "" {
+		fname := fmt.Sprintf("flash.%s.txt", pr.Model)
+		fpath := filepath.Join(articleDir, fname)
+		if err := os.WriteFile(fpath, []byte(pr.Text), 0644); err != nil {
+			return result, fmt.Errorf("write flash file: %w", err)
+		}
+		result.Written = true
+		result.WritePath = fpath
+	}
+
+	return result, nil
+}
+
+// Flashcards runs the flashcard generation step on an existing article or raw text.
+func (s *Service) Flashcards(ctx context.Context, req FlashcardsRequest) (FlashcardsResult, error) {
+	text := req.Text
+	var articleDir string
+
+	if req.Slug != "" {
+		a, err := s.lib.Get(ctx, req.Slug)
+		if err != nil {
+			return FlashcardsResult{}, fmt.Errorf("get article %s: %w", req.Slug, err)
+		}
+		if req.FromBody {
+			text, err = s.lib.ReadBody(a)
+		} else {
+			text, err = s.lib.ReadSummary(a)
+		}
+		if err != nil {
+			return FlashcardsResult{}, fmt.Errorf("read article: %w", err)
+		}
+		articleDir = filepath.Join(s.cfg.ArticlesRoot, req.Slug)
+	}
+
+	if strings.TrimSpace(text) == "" {
+		return FlashcardsResult{}, fmt.Errorf("no text to generate flashcards from")
+	}
+
+	pr, err := pipeline.Flashcards(ctx, s.cfg, pipeline.FlashcardsRequest{
+		Text:     text,
+		Style:    req.Style,
+		Profile:  req.Profile,
+		Progress: req.Progress,
+	})
+	if err != nil {
+		return FlashcardsResult{}, err
+	}
+
+	result := FlashcardsResult{
+		JSON:    pr.JSON,
+		Style:   pr.Style,
+		Model:   pr.Model,
+		CostUSD: s.cfg.CalcCost(pr.Model, pr.Usage.InputTokens, pr.Usage.OutputTokens),
+	}
+
+	if req.Write && articleDir != "" {
+		fname := fmt.Sprintf("flashcards.%s.%s.json", pr.Style, pr.Model)
+		fpath := filepath.Join(articleDir, fname)
+		if err := os.WriteFile(fpath, pr.JSON, 0644); err != nil {
+			return result, fmt.Errorf("write flashcards file: %w", err)
+		}
+		result.Written = true
+		result.WritePath = fpath
+	}
+
+	return result, nil
 }
 
 // Ingest ingests a single article from a URL or file using the native Go pipeline.

@@ -23,6 +23,52 @@ type Result struct {
 	Author   string // byline if detected
 	Language string // language code if detected
 	HTML     string // raw HTML (URL extraction only, for source.html sidecar)
+
+	// Transfer stats — set by FromURL; zero for file/PDF sources.
+	DownloadBytes    int           // raw HTTP response body size in bytes
+	DownloadDuration time.Duration // time to fetch and read the response
+
+	// Size stats — set for all sources.
+	SourceBytes    int // original source size (download body, file, or PDF)
+	ExtractedBytes int // plain text size after extraction
+}
+
+// Stats returns a one-line human-readable summary of extraction metrics.
+func (r Result) Stats() string {
+	words := len(strings.Fields(r.Text))
+	tokens := len(r.Text) / 4 // ~4 chars per token
+
+	extracted := formatBytes(r.ExtractedBytes)
+
+	if r.DownloadBytes > 0 && r.DownloadDuration > 0 {
+		mbits := float64(r.DownloadBytes*8) / r.DownloadDuration.Seconds() / 1_000_000
+		pct := 0
+		if r.SourceBytes > 0 {
+			pct = r.ExtractedBytes * 100 / r.SourceBytes
+		}
+		return fmt.Sprintf("downloaded %s in %.1fs (%.2f Mbits/s) — extracted %s (%d%%), %d words, ~%d tokens",
+			formatBytes(r.DownloadBytes), r.DownloadDuration.Seconds(), mbits,
+			extracted, pct, words, tokens)
+	}
+
+	if r.SourceBytes > 0 && r.SourceBytes != r.ExtractedBytes {
+		pct := r.ExtractedBytes * 100 / r.SourceBytes
+		return fmt.Sprintf("read %s — extracted %s (%d%%), %d words, ~%d tokens",
+			formatBytes(r.SourceBytes), extracted, pct, words, tokens)
+	}
+
+	return fmt.Sprintf("read %s — %d words, ~%d tokens", extracted, words, tokens)
+}
+
+func formatBytes(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/float64(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 // FromURL fetches a URL and extracts the main article text via Readability.
@@ -39,6 +85,7 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	}
 	req.Header.Set("User-Agent", "arc/1.0 (+https://github.com/jrniemiec/arc)")
 
+	fetchStart := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("fetch %s: %w", rawURL, err)
@@ -53,6 +100,7 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("read response: %w", err)
 	}
+	downloadDuration := time.Since(fetchStart)
 
 	parser := readability.NewParser()
 	article, err := parser.Parse(bytes.NewReader(body), parsed)
@@ -65,12 +113,17 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 		return Result{}, fmt.Errorf("render text: %w", err)
 	}
 
+	text := strings.TrimSpace(textBuf.String())
 	return Result{
-		Text:     strings.TrimSpace(textBuf.String()),
-		Title:    article.Title(),
-		Author:   article.Byline(),
-		Language: article.Language(),
-		HTML:     string(body),
+		Text:             text,
+		Title:            article.Title(),
+		Author:           article.Byline(),
+		Language:         article.Language(),
+		HTML:             string(body),
+		DownloadBytes:    len(body),
+		DownloadDuration: downloadDuration,
+		SourceBytes:      len(body),
+		ExtractedBytes:   len(text),
 	}, nil
 }
 
@@ -102,7 +155,11 @@ func fromPDFWithPoppler(ctx context.Context, path string) (Result, error) {
 	if text == "" {
 		return Result{}, fmt.Errorf("pdftotext produced no output for %s", path)
 	}
-	return Result{Text: text}, nil
+	var sourceBytes int
+	if info, err := os.Stat(path); err == nil {
+		sourceBytes = int(info.Size())
+	}
+	return Result{Text: text, SourceBytes: sourceBytes, ExtractedBytes: len(text)}, nil
 }
 
 // FromFile reads plain text (or stdin if path is "-").
@@ -119,5 +176,6 @@ func FromFile(path string) (Result, error) {
 		return Result{}, fmt.Errorf("read file %s: %w", path, err)
 	}
 
-	return Result{Text: strings.TrimSpace(string(data))}, nil
+	text := strings.TrimSpace(string(data))
+	return Result{Text: text, SourceBytes: len(data), ExtractedBytes: len(text)}, nil
 }

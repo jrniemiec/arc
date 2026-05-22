@@ -72,6 +72,69 @@ type IngestResult struct {
 	DryRun    bool // true if no files were written
 }
 
+// SummarizeRequest describes a standalone summarize operation.
+type SummarizeRequest struct {
+	// Exactly one of Slug or Text must be set. Slug="-" reads from stdin.
+	Slug string // existing article ID; reads body from disk
+	Text string // raw text to summarize directly
+
+	Style   string // overrides config ingest.summary_style
+	Profile string // profile name, overrides config ingest.summary_profile
+	Write   bool   // if true and Slug is set, write variant file alongside existing files
+
+	Progress func(string)
+}
+
+// SummarizeResult holds the output of a summarize operation.
+type SummarizeResult struct {
+	Text      string
+	Model     string
+	Style     string
+	CostUSD   float64
+	Written   bool   // true if a variant file was written
+	WritePath string // path of written file, if any
+}
+
+// FlashRequest describes a standalone flash generation operation.
+type FlashRequest struct {
+	Slug     string // existing article ID; reads summary (or body if --from-body)
+	Text     string // raw text to flash directly (set when piping)
+	Profile  string // profile name override
+	FromBody bool   // read body instead of summary (slug mode only)
+	Write    bool   // write flash file into the article directory (slug mode only)
+	Progress func(string)
+}
+
+// FlashResult holds the output of a flash operation.
+type FlashResult struct {
+	Text      string
+	Model     string
+	CostUSD   float64
+	Written   bool
+	WritePath string
+}
+
+// FlashcardsRequest describes a standalone flashcard generation operation.
+type FlashcardsRequest struct {
+	Slug     string // existing article ID; reads summary by default
+	Text     string // raw text (set when piping)
+	Style    string // "socratic" | "cloze"
+	Profile  string // profile name override
+	FromBody bool   // use body instead of summary (slug mode only)
+	Write    bool   // write flashcard file into the article directory (slug mode only)
+	Progress func(string)
+}
+
+// FlashcardsResult holds the output of a flashcard operation.
+type FlashcardsResult struct {
+	JSON      []byte
+	Style     string
+	Model     string
+	CostUSD   float64
+	Written   bool
+	WritePath string
+}
+
 // Stats is a snapshot of the knowledge base.
 type Stats struct {
 	TotalArticles  int

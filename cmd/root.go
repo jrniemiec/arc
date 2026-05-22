@@ -32,7 +32,19 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "arc",
 	Short: "arc — personal knowledge OS",
-	Long:  `arc ingests articles, generates summaries and flashcards, and makes your knowledge searchable.`,
+	Long: `arc ingests articles, generates summaries and flashcards, and makes your knowledge searchable.
+
+Pipeline commands can be composed with Unix pipes:
+  arc extract <url>            extract plain text → stdout
+  arc summarize [slug]         summarize article or piped text → stdout
+  arc ingest <url|file>        full pipeline: extract → summarize → flash → flashcards → index
+
+Examples:
+  arc ingest https://example.com/article
+  arc extract https://example.com/article | arc summarize --style bullets
+  arc summarize --style technical --write 20260522-my-article
+  arc read --summary 20260522-my-article
+  arc search "attention mechanism"`,
 }
 
 // Execute runs the root command.

@@ -55,6 +55,8 @@ Examples:
 			return fmt.Errorf("extraction produced no text")
 		}
 
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", result.Stats())
+
 		if isJSON(cmd) {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(struct {
 				Text     string `json:"text"`

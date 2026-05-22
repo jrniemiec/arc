@@ -28,7 +28,18 @@ func init() {
 var readCmd = &cobra.Command{
 	Use:   "read <slug>",
 	Short: "Read an article or one of its generated outputs",
-	Args:  cobra.ExactArgs(1),
+	Long: `Read the body, summary, flash, or flashcards of an article.
+
+Variant selection follows preferred_models and preferred_styles from config.
+Use --model and --style to override for a specific read.
+
+Examples:
+  arc read 20260522-my-article
+  arc read --summary 20260522-my-article
+  arc read --summary --style bullets 20260522-my-article
+  arc read --flash 20260522-my-article
+  arc read --flashcards 20260522-my-article`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 

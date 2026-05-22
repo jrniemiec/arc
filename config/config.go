@@ -55,6 +55,12 @@ type ProfilePricing struct {
 	CachedInput float64 `json:"cached_input,omitempty"`
 }
 
+// SummaryStyleConfig holds the system prompt for one summary style.
+// Users can override built-in prompts or add new styles in config.json.
+type SummaryStyleConfig struct {
+	SystemPrompt string `json:"system_prompt"`
+}
+
 // IngestConfig specifies which profiles and styles to use for each ingest step.
 type IngestConfig struct {
 	SummaryProfile   string `json:"summary_profile"`   // profile name for summarization
@@ -63,7 +69,74 @@ type IngestConfig struct {
 	SummaryStyle     string `json:"summary_style"`     // "study-notes" | "bullets" | "technical"
 	FlashcardStyle   string `json:"flashcard_style"`   // "socratic" | "cloze"
 	EmbedProfile     string `json:"embed_profile"`     // profile name for embeddings
-	ChunkSize        int    `json:"chunk_size"`        // words per summarization chunk
+
+	// Summarization tuning
+	ChunkTokens      int                           `json:"chunk_tokens"`       // tokens per chunk; default 900
+	SummaryMaxTokens int                           `json:"summary_max_tokens"` // max output tokens per LLM call; default 2048
+	SummaryStyles    map[string]SummaryStyleConfig `json:"summary_styles"`     // per-style system prompts; user may override or add styles
+
+	// Flash tuning
+	FlashSystemPrompt string `json:"flash_system_prompt"` // system prompt for flash generation
+	FlashMaxTokens    int    `json:"flash_max_tokens"`    // max output tokens; default 256
+
+	// Flashcard tuning
+	FlashcardMaxTokens int                              `json:"flashcard_max_tokens"` // max output tokens; default 2048
+	FlashcardStyles    map[string]FlashcardStyleConfig  `json:"flashcard_styles"`     // per-style system prompts
+}
+
+// FlashcardStyleConfig holds the system prompt for one flashcard style.
+type FlashcardStyleConfig struct {
+	SystemPrompt string `json:"system_prompt"`
+}
+
+// builtinFlashcardStyles are the default system prompts for each flashcard style.
+var builtinFlashcardStyles = map[string]FlashcardStyleConfig{
+	"socratic": {SystemPrompt: `You generate flashcards as a JSON array. Each card: {"type":"concept|fact|insight","front":"question","back":"answer","tags":["tag1"]}. Written for the ear — no markdown, natural language. Use probing questions that test deep understanding. Return only the JSON array.`},
+	"cloze":    {SystemPrompt: `You generate flashcards as a JSON array. Each card: {"type":"concept|fact|insight","front":"question","back":"answer","tags":["tag1"]}. Written for the ear — no markdown, natural language. Use fill-in-the-blank style fronts. Return only the JSON array.`},
+}
+
+// FlashcardStylePrompt returns the system prompt for the given flashcard style.
+func (c *Config) FlashcardStylePrompt(style string) string {
+	if sc, ok := c.Ingest.FlashcardStyles[style]; ok && sc.SystemPrompt != "" {
+		return sc.SystemPrompt
+	}
+	if sc, ok := builtinFlashcardStyles[style]; ok {
+		return sc.SystemPrompt
+	}
+	return builtinFlashcardStyles["socratic"].SystemPrompt
+}
+
+// DefaultFlashSystemPrompt is the built-in system prompt for flash generation.
+// Optimised for TTS: natural sentences, no markdown, spoken-word rhythm.
+const DefaultFlashSystemPrompt = `You are generating a flash summary for audio playback.
+
+Goal: 3–5 spoken sentences that capture the essence of the article. Listeners should understand the main point, the key mechanism or finding, and why it matters — in under 30 seconds.
+
+Rules:
+- Natural speech rhythm, no bullet points, no markdown
+- No generic openers ("This article discusses...")
+- Preserve specific numbers, names, and facts where they add meaning
+- Use only information from the provided text`
+
+// builtinSummaryStyles are the default system prompts for each summary style.
+// Merged with user-defined styles from config (user overrides win).
+var builtinSummaryStyles = map[string]SummaryStyleConfig{
+	"study-notes": {SystemPrompt: "You are a knowledge curator building a personal reading archive. Write structured study notes using markdown. Sections: ## Key Concepts (define clearly), ## Insights (non-obvious or surprising takeaways), ## Key Facts (specific numbers, names, dates, examples worth remembering). Preserve specifics — vague summaries have no recall value. Use only information from the provided text."},
+	"bullets":     {SystemPrompt: "You are a precise knowledge curator. Write 8–15 bullet points grouped by theme. Lead with the single most important point. Preserve specific numbers and names. No filler, no preamble. Use only information from the provided text."},
+	"technical":   {SystemPrompt: "You are a technical writer. Summarize: what the system or approach does, how it works (architecture, methods, key decisions), results and benchmarks, and practical implications or limitations. Preserve version numbers, metrics, and technical terms exactly. Use markdown headers. Use only information from the provided text."},
+	"executive":   {SystemPrompt: "You are a senior analyst. Write 3–5 sentences: the core claim or problem, the key evidence or approach, and the most important implication or recommendation. Be direct. Use only information from the provided text."},
+}
+
+// StylePrompt returns the system prompt for the given summary style.
+// User-defined styles in config override built-in defaults.
+func (c *Config) StylePrompt(style string) string {
+	if sc, ok := c.Ingest.SummaryStyles[style]; ok && sc.SystemPrompt != "" {
+		return sc.SystemPrompt
+	}
+	if sc, ok := builtinSummaryStyles[style]; ok {
+		return sc.SystemPrompt
+	}
+	return builtinSummaryStyles["study-notes"].SystemPrompt
 }
 
 // builtinProfiles ships with the binary. Users can add/override in config.json.
@@ -176,13 +249,19 @@ func Default() Config {
 		EventsPath:   filepath.Join(dataRoot, "events.jsonl"),
 		Profiles:     builtinProfiles,
 		Ingest: IngestConfig{
-			SummaryProfile:   "oai-mini",
-			FlashProfile:     "oai-mini",
-			FlashcardProfile: "oai-mini",
-			SummaryStyle:     "study-notes",
-			FlashcardStyle:   "socratic",
-			EmbedProfile:     "llama",
-			ChunkSize:        3000,
+			SummaryProfile:    "oai-mini",
+			FlashProfile:      "oai-mini",
+			FlashcardProfile:  "oai-mini",
+			SummaryStyle:      "study-notes",
+			FlashcardStyle:    "socratic",
+			EmbedProfile:      "llama",
+			ChunkTokens:       900,
+			SummaryMaxTokens:  2048,
+			SummaryStyles:     builtinSummaryStyles,
+			FlashSystemPrompt:  DefaultFlashSystemPrompt,
+			FlashMaxTokens:     256,
+			FlashcardMaxTokens: 2048,
+			FlashcardStyles:    builtinFlashcardStyles,
 		},
 		PreferredModels: []string{
 			"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
@@ -259,8 +338,27 @@ func Load(path string) (Config, error) {
 	if overlay.Ingest.EmbedProfile != "" {
 		cfg.Ingest.EmbedProfile = overlay.Ingest.EmbedProfile
 	}
-	if overlay.Ingest.ChunkSize != 0 {
-		cfg.Ingest.ChunkSize = overlay.Ingest.ChunkSize
+	if overlay.Ingest.ChunkTokens != 0 {
+		cfg.Ingest.ChunkTokens = overlay.Ingest.ChunkTokens
+	}
+	if overlay.Ingest.SummaryMaxTokens != 0 {
+		cfg.Ingest.SummaryMaxTokens = overlay.Ingest.SummaryMaxTokens
+	}
+	// Merge user summary styles on top of builtins
+	for k, v := range overlay.Ingest.SummaryStyles {
+		cfg.Ingest.SummaryStyles[k] = v
+	}
+	if overlay.Ingest.FlashSystemPrompt != "" {
+		cfg.Ingest.FlashSystemPrompt = overlay.Ingest.FlashSystemPrompt
+	}
+	if overlay.Ingest.FlashMaxTokens != 0 {
+		cfg.Ingest.FlashMaxTokens = overlay.Ingest.FlashMaxTokens
+	}
+	if overlay.Ingest.FlashcardMaxTokens != 0 {
+		cfg.Ingest.FlashcardMaxTokens = overlay.Ingest.FlashcardMaxTokens
+	}
+	for k, v := range overlay.Ingest.FlashcardStyles {
+		cfg.Ingest.FlashcardStyles[k] = v
 	}
 	if len(overlay.PreferredModels) > 0 {
 		cfg.PreferredModels = overlay.PreferredModels

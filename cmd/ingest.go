@@ -22,7 +22,7 @@ var (
 func init() {
 	ingestCmd.Flags().StringVar(&ingestTitle, "title", "", "article title (default: auto-generated)")
 	ingestCmd.Flags().StringVar(&ingestCollection, "collection", "", "add to this collection ID")
-	ingestCmd.Flags().StringVar(&ingestSummaryStyle, "summary-style", "", "summary style: study-notes|bullets|technical (default: config)")
+	ingestCmd.Flags().StringVar(&ingestSummaryStyle, "summary-style", "", "summary style: study-notes|bullets|technical|executive (default: config)")
 	ingestCmd.Flags().StringVar(&ingestProfile, "profile", "", "override profile for all generation steps (e.g. oai-mini, opus)")
 	ingestCmd.Flags().BoolVar(&ingestNoFlashcards, "no-flashcards", false, "skip flashcard generation")
 	ingestCmd.Flags().BoolVar(&ingestDryRun, "dry-run", false, "extract only, do not write files or call LLM")
@@ -84,7 +84,7 @@ Examples:
 
 		fmt.Fprintln(cmd.OutOrStdout(), result.Slug)
 		if result.Cost.TotalUSD > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "cost: $%.4f\n", result.Cost.TotalUSD)
+			fmt.Fprintf(cmd.ErrOrStderr(), "cost: $%.4f\n", result.Cost.TotalUSD)
 		}
 		return nil
 	},
