@@ -99,27 +99,41 @@ func (s *Store) ReadFlashcards(a store.Article) ([]byte, error) {
 }
 
 // Walk calls fn for each valid article directory under the articles root.
-// Hidden directories (starting with '.') and files at depth < 2 are skipped.
+// Supports both flat (articles/<slug>/) and nested (articles/<group>/<slug>/) layouts.
+// Hidden directories (starting with '.') are skipped.
 func (s *Store) Walk(fn func(id string, files store.Files) error) error {
-	entries, err := os.ReadDir(s.root)
+	return s.walkDir(s.root, "", fn)
+}
+
+func (s *Store) walkDir(dir, prefix string, fn func(id string, files store.Files) error) error {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("read articles root %s: %w", s.root, err)
+		return fmt.Errorf("read dir %s: %w", dir, err)
 	}
 
 	for _, entry := range entries {
-		// skip files and hidden dirs at root level
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		// skip collections.json and other files
-		dir := filepath.Join(s.root, entry.Name())
-		files := ProbeFiles(dir)
-		if files.Body == "" {
-			// not a valid article dir
+		subdir := filepath.Join(dir, entry.Name())
+		var id string
+		if prefix == "" {
+			id = entry.Name()
+		} else {
+			id = prefix + "/" + entry.Name()
+		}
+		files := ProbeFiles(subdir)
+		if files.Body != "" {
+			if err := fn(id, files); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := fn(entry.Name(), files); err != nil {
-			return err
+		// no body found — recurse one more level (collection dir)
+		if prefix == "" {
+			if err := s.walkDir(subdir, entry.Name(), fn); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -318,9 +332,14 @@ func nonEmpty(a, b string) string {
 }
 
 // titleFromID converts "20260521-sparse-attention-survey" → "Sparse Attention Survey"
+// Also handles nested IDs like "anthropic/claude-code-guide" → "Claude Code Guide"
 func titleFromID(id string) string {
-	// strip leading date prefix if present (YYYYMMDD-)
+	// use only the last path segment
 	s := id
+	if i := strings.LastIndex(s, "/"); i >= 0 {
+		s = s[i+1:]
+	}
+	// strip leading date prefix if present (YYYYMMDD-)
 	if len(s) >= 9 && s[8] == '-' {
 		allDigits := true
 		for _, c := range s[:8] {

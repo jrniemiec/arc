@@ -434,6 +434,22 @@ func timePtr(t *time.Time) any {
 	return t.UTC().Format(time.RFC3339)
 }
 
+// UpsertRelation inserts or replaces a relation between two articles.
+func (s *Store) UpsertRelation(ctx context.Context, fromID, toID string, t store.RelationType) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	return sqlitex.Execute(conn, `
+		INSERT INTO relations (from_id, to_id, type, detected_by, detected_at)
+		VALUES (?, ?, ?, 'user', ?)
+		ON CONFLICT(from_id, to_id, type) DO NOTHING
+	`, &sqlitex.ExecOptions{
+		Args: []any{fromID, toID, string(t), time.Now().UTC().Format(time.RFC3339)},
+	})
+}
+
 // ExtractFlashcardQuestions pulls question text from a flashcards JSON blob
 // for FTS5 indexing.
 func ExtractFlashcardQuestions(data []byte) string {

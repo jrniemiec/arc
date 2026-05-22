@@ -1,7 +1,6 @@
 # Go build artifacts
 local/
 bin/
-cmd/
 *.exe
 *.exe~
 *.test

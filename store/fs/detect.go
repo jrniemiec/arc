@@ -13,9 +13,9 @@ import (
 func ProbeFiles(dir string) store.Files {
 	return store.Files{
 		Root:       dir,
-		Body:       firstExisting(dir, "body.txt"),
-		SourceURL:  firstExisting(dir, "source.url"),
-		SourcePDF:  firstExisting(dir, "source.pdf"),
+		Body:       firstExisting(dir, "body.txt", "article.txt", "text.txt"),
+		SourceURL:  firstExisting(dir, "source.url", "article.url", "url.txt"),
+		SourcePDF:  firstExisting(dir, "source.pdf", "article.pdf", "orig.pdf"),
 		SourceHTML: firstExisting(dir, "source.html"),
 		Meta:       firstExisting(dir, "meta.json"),
 		// Summary, Flash, Flashcards resolved separately via config preferences

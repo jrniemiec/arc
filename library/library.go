@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/store"
@@ -158,6 +159,21 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 		}
 		return nil
 	})
+}
+
+// MarkRead records that an article was read at time t.
+func (l *Library) MarkRead(ctx context.Context, id string, t time.Time) error {
+	return l.db.MarkRead(ctx, id, t)
+}
+
+// MarkPlayed records that an article was played at time t.
+func (l *Library) MarkPlayed(ctx context.Context, id string, t time.Time) error {
+	return l.db.MarkPlayed(ctx, id, t)
+}
+
+// Relate creates a directed relation between two articles.
+func (l *Library) Relate(ctx context.Context, fromID, toID string, t store.RelationType) error {
+	return l.db.UpsertRelation(ctx, fromID, toID, t)
 }
 
 // resolveFiles fills in the preferred file paths (summary, flash, flashcards)
