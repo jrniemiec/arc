@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,10 @@ import (
 	"time"
 	"unicode"
 
+	briefchunk "github.com/jrniemiec/brief/chunk"
+	briefllm "github.com/jrniemiec/brief/llm"
+	briefsummarize "github.com/jrniemiec/brief/summarize"
+	brieftypes "github.com/jrniemiec/brief/types"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/ingest/extractor"
 	"github.com/jrniemiec/arc/store"
@@ -165,17 +170,11 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	progress("slug: " + slug)
 
 	// ── 6. Summarize (map-reduce over chunks) ─────────────────────────────
-	chunks := splitWords(extracted.Text, chunkWords)
-	if len(chunks) > 1 {
-		progress(fmt.Sprintf("summarizing (%d chunks, model: %s)...", len(chunks), summaryProf.Model))
-	} else {
-		progress(fmt.Sprintf("summarizing (model: %s)...", summaryProf.Model))
-	}
 	summaryProvider, err := newProvider(summaryProf)
 	if err != nil {
 		return Result{}, fmt.Errorf("llm provider: %w", err)
 	}
-	summaryText, su, err := summarize(ctx, summaryProvider, extracted.Text, summaryStyle)
+	summaryText, su, err := summarizeText(ctx, summaryProvider, extracted.Text, title, req.URL, summaryStyle, summaryProf.Model, progress)
 	if err != nil {
 		return Result{}, fmt.Errorf("summarize: %w", err)
 	}
@@ -303,41 +302,54 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 // ── LLM helpers ───────────────────────────────────────────────────────────────
 
-const chunkWords = 3000
-
-// chat wraps llm.Provider.Chat for single-turn calls.
+// chat wraps llm.Provider.Chat for single-turn calls using brief's interface.
 func chat(ctx context.Context, p llm.Provider, system, prompt string) (string, llm.Usage, error) {
 	return p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
 }
 
-func summarize(ctx context.Context, p llm.Provider, text, style string) (string, llm.Usage, error) {
-	chunks := splitWords(text, chunkWords)
-	var total llm.Usage
-
-	if len(chunks) == 1 {
-		return summarizeChunk(ctx, p, chunks[0], style, &total)
-	}
-
-	var chunkSummaries []string
-	for _, chunk := range chunks {
-		s, _, err := summarizeChunk(ctx, p, chunk, style, &total)
-		if err != nil {
-			return "", total, err
-		}
-		chunkSummaries = append(chunkSummaries, s)
-	}
-
-	combined := strings.Join(chunkSummaries, "\n\n---\n\n")
-	final, _, err := summarizeChunk(ctx, p, combined, style, &total)
-	return final, total, err
+// briefAdapter bridges github.com/jrniemiec/llm.Provider → brief/llm.Provider.
+// brief expects a simpler single-turn interface; we wrap the multi-turn one.
+type briefAdapter struct {
+	p     llm.Provider
+	model string
 }
 
-func summarizeChunk(ctx context.Context, p llm.Provider, text, style string, total *llm.Usage) (string, llm.Usage, error) {
-	result, u, err := chat(ctx, p, summarySystemPrompt(style),
-		"Summarize the following article:\n\n"+text)
-	total.InputTokens += u.InputTokens
-	total.OutputTokens += u.OutputTokens
-	return result, u, err
+func (a *briefAdapter) Name() string { return a.model }
+func (a *briefAdapter) Chat(ctx context.Context, system, prompt string) (string, briefllm.Usage, error) {
+	out, u, err := a.p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
+	return out, briefllm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}, err
+}
+
+// summarizeText uses brief's paragraph-aware chunking and map-reduce summarization.
+func summarizeText(ctx context.Context, p llm.Provider, text, title, source, style, model string, progress func(string)) (string, llm.Usage, error) {
+	doc := brieftypes.Document{
+		ID:    brieftypes.ShortID(brieftypes.HashText(text)),
+		Hash:  brieftypes.HashText(text),
+		Title: title,
+		Source: source,
+		Text:  text,
+	}
+
+	chunks, err := briefchunk.ChunkDocument(doc, 900)
+	if err != nil {
+		return "", llm.Usage{}, fmt.Errorf("chunk: %w", err)
+	}
+
+	if len(chunks) > 1 {
+		progress(fmt.Sprintf("summarizing (%d chunks, model: %s)...", len(chunks), model))
+	} else {
+		progress(fmt.Sprintf("summarizing (model: %s)...", model))
+	}
+
+	adapter := &briefAdapter{p: p, model: model}
+	systemPrompt := summarySystemPrompt(style)
+
+	summary, bu, err := briefsummarize.SummarizeDocument(ctx, io.Discard, adapter, doc, chunks, style, systemPrompt, 2048, false)
+	if err != nil {
+		return "", llm.Usage{}, fmt.Errorf("summarize: %w", err)
+	}
+
+	return summary.Markdown, llm.Usage{InputTokens: bu.InputTokens, OutputTokens: bu.OutputTokens}, nil
 }
 
 func summarySystemPrompt(style string) string {
