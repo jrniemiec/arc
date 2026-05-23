@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/service"
 )
 
@@ -68,9 +69,23 @@ Examples:
 			req.Slug = slug
 		}
 
+		cfg := cmd.Context().Value(keyConfig).(config.Config)
+		tiers := make(map[string]string)
+		for _, p := range cfg.Profiles {
+			tiers[p.Model] = p.Info.CostTier
+		}
+		tty := isTTY(os.Stdout)
+		errTTY := isTTY(os.Stderr)
+
+		effectiveProfile := flashProfile
+		if effectiveProfile == "" {
+			effectiveProfile = cfg.Ingest.FlashProfile
+		}
+		progressTier := cfg.Profiles[effectiveProfile].Info.CostTier
+
 		if !isJSON(cmd) {
 			req.Progress = func(msg string) {
-				fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
+				fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", colorize(msg, progressTier, errTTY))
 			}
 		}
 
@@ -80,7 +95,17 @@ Examples:
 			return fmt.Errorf("flash: %w", err)
 		}
 
-		fmt.Fprintln(cmd.OutOrStdout(), result.Text)
+		label := "Flash"
+		if result.Model != "" {
+			label += " · " + result.Model
+		}
+		if tty {
+			fmt.Fprintln(cmd.OutOrStdout(), header(label, result.Model, tiers, tty))
+			fmt.Fprintln(cmd.OutOrStdout(), renderMarkdown(result.Text, tiers[result.Model], tty))
+		} else {
+			fmt.Fprintln(cmd.ErrOrStderr(), header(label, result.Model, tiers, errTTY))
+			fmt.Fprintln(cmd.OutOrStdout(), result.Text)
+		}
 
 		if result.CostUSD > 0 {
 			fmt.Fprintf(cmd.ErrOrStderr(), "cost: $%.4f\n", result.CostUSD)

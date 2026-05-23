@@ -3,10 +3,12 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/store"
 )
 
@@ -60,36 +62,48 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
+		cfg := cmd.Context().Value(keyConfig).(config.Config)
+		tty := isTTY(os.Stdout)
+
+		// Build model → cost tier lookup
+		tierByModel := make(map[string]string)
+		for _, p := range cfg.Profiles {
+			tierByModel[p.Model] = p.Info.CostTier
+		}
+
 		for _, a := range articles {
 			read := " "
 			if a.ReadAt != nil {
 				read = "✓"
 			}
 
-			date := a.IngestedAt.Format("2006-01-02")
+			date := dim(a.IngestedAt.Format("2006-01-02"), tty)
 			collections := strings.Join(a.Collections, ", ")
 			collStr := ""
 			if collections != "" {
-				collStr = "  [" + collections + "]"
+				collStr = "  " + dim("["+collections+"]", tty)
 			}
 
 			// Line 1: read marker, date, slug, title
 			fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %-50s  %s%s\n",
 				read, date, truncate(a.ID, 50), truncate(a.Title, 50), collStr)
 
-			// Line 2: variant indicators
+			// Line 2: variant indicators, model colored by cost tier
 			var variants []string
 			if a.SummaryStyle != "" && a.SummaryModel != "" {
-				variants = append(variants, fmt.Sprintf("summary:%s/%s", a.SummaryStyle, a.SummaryModel))
+				model := colorize(a.SummaryModel, tierByModel[a.SummaryModel], tty)
+				variants = append(variants, fmt.Sprintf("summary:%s/%s", a.SummaryStyle, model))
 			}
 			if a.FlashModel != "" {
-				variants = append(variants, fmt.Sprintf("flash:%s", a.FlashModel))
+				model := colorize(a.FlashModel, tierByModel[a.FlashModel], tty)
+				variants = append(variants, fmt.Sprintf("flash:%s", model))
 			}
 			if a.FlashcardStyle != "" && a.FlashcardModel != "" {
-				variants = append(variants, fmt.Sprintf("flashcards:%s/%s", a.FlashcardStyle, a.FlashcardModel))
+				model := colorize(a.FlashcardModel, tierByModel[a.FlashcardModel], tty)
+				variants = append(variants, fmt.Sprintf("flashcards:%s/%s", a.FlashcardStyle, model))
 			}
 			if len(variants) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "             %s\n", strings.Join(variants, "  ·  "))
+				fmt.Fprintf(cmd.OutOrStdout(), "             %s\n", dim(strings.Join(variants, "  ·  "), tty))
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
 		}

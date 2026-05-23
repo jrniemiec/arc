@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -81,6 +82,7 @@ Examples:
 		fmt.Fprintf(cmd.OutOrStdout(), "  flashcard: %s\n", cfg.Ingest.FlashcardProfile)
 		fmt.Fprintln(cmd.OutOrStdout())
 
+		tty := isTTY(os.Stdout)
 		for _, np := range sorted {
 			p := np.p
 			steps := activeSteps(np.name, cfg)
@@ -93,8 +95,12 @@ Examples:
 				}
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "%-12s  %-10s  %-36s  [%s]%s\n",
-				np.name, p.Provider, p.Model, p.Info.CostTier, active)
+			tier := p.Info.CostTier
+			name := colorize(fmt.Sprintf("%-12s", np.name), tier, tty)
+			tierBadge := colorize("["+tier+"]", tier, tty)
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%s  %-10s  %-36s  %s%s\n",
+				name, p.Provider, p.Model, tierBadge, active)
 
 			if p.Info.Pricing != nil {
 				pr := p.Info.Pricing

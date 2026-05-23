@@ -146,8 +146,10 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		return Stats{}, fmt.Errorf("read collections: %w", err)
 	}
 
-	// Collect unique tags and count unread/unplayed
+	// Collect unique tags, unread/unplayed counts, and article breakdowns
 	tagSet := make(map[string]struct{})
+	byModel := make(map[string]int)
+	byStyle := make(map[string]int)
 	var unread, unplayed int
 	for _, a := range articles {
 		for _, t := range a.Tags {
@@ -159,10 +161,16 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		if a.PlayedAt == nil {
 			unplayed++
 		}
+		if a.SummaryModel != "" {
+			byModel[a.SummaryModel]++
+		}
+		if a.SummaryStyle != "" {
+			byStyle[a.SummaryStyle]++
+		}
 	}
 
 	// Cost from events.jsonl
-	costTotal, costMonth := s.aggregateCosts()
+	costTotal, costMonth, costByModel := s.aggregateCosts()
 
 	return Stats{
 		TotalArticles:    len(articles),
@@ -172,6 +180,9 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		Unplayed:         unplayed,
 		CostThisMonth:    costMonth,
 		CostTotal:        costTotal,
+		CostByModel:      costByModel,
+		ArticlesByModel:  byModel,
+		ArticlesByStyle:  byStyle,
 	}, nil
 }
 
@@ -415,10 +426,12 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 }
 
 // aggregateCosts reads events.jsonl and sums up costs.
-func (s *Service) aggregateCosts() (total, thisMonth float64) {
+// Returns total, thisMonth, and a per-model USD breakdown.
+func (s *Service) aggregateCosts() (total, thisMonth float64, byModel map[string]float64) {
+	byModel = make(map[string]float64)
 	data, err := os.ReadFile(s.cfg.EventsPath)
 	if err != nil {
-		return 0, 0
+		return 0, 0, byModel
 	}
 
 	now := time.Now()
@@ -429,17 +442,26 @@ func (s *Service) aggregateCosts() (total, thisMonth float64) {
 		if line == "" {
 			continue
 		}
-		// Quick parse: look for total_usd field
 		var e store.Event
 		if err := parseEventLine(line, &e); err != nil {
 			continue
 		}
-		if e.Cost != nil {
-			total += e.Cost.TotalUSD
-			if e.TS.After(monthStart) {
-				thisMonth += e.Cost.TotalUSD
+		if e.Cost == nil {
+			continue
+		}
+		total += e.Cost.TotalUSD
+		if e.TS.After(monthStart) {
+			thisMonth += e.Cost.TotalUSD
+		}
+		// Accumulate per-model costs across all operation types
+		for _, entry := range []store.CostEntry{e.Cost.Summary, e.Cost.Flash, e.Cost.Flashcards} {
+			if entry.Model != "" {
+				byModel[entry.Model] += entry.USD
 			}
 		}
+		if e.Cost.Embed.Model != "" {
+			byModel[e.Cost.Embed.Model] += e.Cost.Embed.USD
+		}
 	}
-	return total, thisMonth
+	return total, thisMonth, byModel
 }

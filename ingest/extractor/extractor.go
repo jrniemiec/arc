@@ -60,6 +60,62 @@ func (r Result) Stats() string {
 	return fmt.Sprintf("read %s — %d words, ~%d tokens", extracted, words, tokens)
 }
 
+// extractJinaTitle extracts the first H1 title from Jina markdown output.
+func extractJinaTitle(md string) string {
+	for _, line := range strings.SplitN(md, "\n", 20) {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "# ") {
+			return strings.TrimPrefix(line, "# ")
+		}
+	}
+	return ""
+}
+
+// cleanJinaMarkdown strips navigation noise, image refs, bare URLs, and boilerplate
+// from Jina reader markdown output, leaving clean readable prose.
+func cleanJinaMarkdown(md string) string {
+	lines := strings.Split(md, "\n")
+	var out []string
+	skipPatterns := []string{
+		"sign in", "sign up", "subscribe", "member-only",
+		"open in app", "get the app", "follow me on", "follow us on",
+		"clap for this story", "responses",
+	}
+
+	for _, line := range lines {
+		// Strip image references: ![alt](url)
+		if strings.HasPrefix(strings.TrimSpace(line), "![") {
+			continue
+		}
+		// Strip bare URL lines: lines that are just a markdown link with no description
+		// e.g. [https://...](https://...) or just https://...
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[http") || strings.HasPrefix(trimmed, "http") {
+			continue
+		}
+		// Skip navigation boilerplate (case-insensitive)
+		lower := strings.ToLower(trimmed)
+		skip := false
+		for _, p := range skipPatterns {
+			if strings.Contains(lower, p) && len(strings.Fields(trimmed)) < 8 {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		out = append(out, line)
+	}
+
+	// Collapse runs of 3+ blank lines to 2
+	result := strings.Join(out, "\n")
+	for strings.Contains(result, "\n\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n\n", "\n\n\n")
+	}
+	return strings.TrimSpace(result)
+}
+
 // isBotCheckPage returns true if the extracted text looks like a bot-verification page.
 func isBotCheckPage(text string) bool {
 	lower := strings.ToLower(text)
@@ -113,6 +169,7 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	}
 
 	// On 403, retry via Jina reader proxy (handles paywalls and bot-detection).
+	viaJina := false
 	if resp.StatusCode == http.StatusForbidden {
 		resp.Body.Close()
 		jinaURL := "https://r.jina.ai/" + rawURL
@@ -126,6 +183,7 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("fetch via jina %s: %w", rawURL, err)
 		}
+		viaJina = true
 	}
 	defer resp.Body.Close()
 
@@ -139,18 +197,27 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	}
 	downloadDuration := time.Since(fetchStart)
 
-	parser := readability.NewParser()
-	article, err := parser.Parse(bytes.NewReader(body), parsed)
-	if err != nil {
-		return Result{}, fmt.Errorf("readability parse: %w", err)
-	}
+	var text, title, author, language string
 
-	var textBuf bytes.Buffer
-	if err := article.RenderText(&textBuf); err != nil {
-		return Result{}, fmt.Errorf("render text: %w", err)
+	if viaJina {
+		// Jina returns cleaned markdown — extract text directly without readability.
+		text = cleanJinaMarkdown(string(body))
+		title = extractJinaTitle(string(body))
+	} else {
+		parser := readability.NewParser()
+		article, err := parser.Parse(bytes.NewReader(body), parsed)
+		if err != nil {
+			return Result{}, fmt.Errorf("readability parse: %w", err)
+		}
+		var textBuf bytes.Buffer
+		if err := article.RenderText(&textBuf); err != nil {
+			return Result{}, fmt.Errorf("render text: %w", err)
+		}
+		text = strings.TrimSpace(textBuf.String())
+		title = article.Title()
+		author = article.Byline()
+		language = article.Language()
 	}
-
-	text := strings.TrimSpace(textBuf.String())
 
 	// Detect bot-check pages that slipped through (Jina fallback may return these).
 	if isBotCheckPage(text) {
@@ -159,9 +226,9 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 
 	return Result{
 		Text:             text,
-		Title:            article.Title(),
-		Author:           article.Byline(),
-		Language:         article.Language(),
+		Title:            title,
+		Author:           author,
+		Language:         language,
 		HTML:             string(body),
 		DownloadBytes:    len(body),
 		DownloadDuration: downloadDuration,

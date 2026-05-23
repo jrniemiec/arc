@@ -138,11 +138,16 @@ type FlashcardsResult struct {
 
 // Stats is a snapshot of the knowledge base.
 type Stats struct {
-	TotalArticles  int
+	TotalArticles    int
 	TotalCollections int
-	TotalTags      int
-	Unread         int
-	Unplayed       int
-	CostThisMonth  float64
-	CostTotal      float64
+	TotalTags        int
+	Unread           int
+	Unplayed         int
+	CostThisMonth    float64
+	CostTotal        float64
+
+	// Breakdowns
+	CostByModel      map[string]float64 // total USD spent per model (all operations)
+	ArticlesByModel  map[string]int     // article count by summary model
+	ArticlesByStyle  map[string]int     // article count by summary style
 }

@@ -1,0 +1,43 @@
+# Study Notes
+
+## Key Concepts
+- **Claude Code**: A development tool leveraging large language models to facilitate interaction with local codebases, enabling reasoning and execution of commands.
+- **Execution Model**: A structured framework consisting of five phases:
+  - **Understand**: Grasp the requirements and context of the task.
+  - **Plan**: Draft a strategy for modifications or implementations.
+  - **Act**: Execute the planned code changes.
+  - **Observe**: Monitor the effects and outcomes of the actions taken.
+  - **Refine**: Make necessary adjustments based on observations to enhance accuracy.
+
+## Insights
+- The **iterative refinement** approach employed in Claude Code is essential for achieving high levels of precision and quality in coding tasks.
+- By ensuring **session-specific context**, users can effectively manage interactions, reducing confusion that could arise from referencing previous sessions.
+
+## Key Facts
+- **Core Capabilities** of Claude Code:
+  - Understanding repository structure.
+  - Editing files efficiently.
+  - Executing shell commands.
+  - Performing iterative refinement of code.
+  - Testing and troubleshooting failures during execution.
+  
+- **Tool Use** incorporates:
+  - Access to the file system for navigation.
+  - Execution of various commands and tests.
+  
+- **Limitations of Claude Code**:
+  - Lacks transactional safety, which could lead to potential data loss or corruption.
+  - Risk of **incomplete edits** if the process is interrupted before completion.
+
+- **Recommended Workflow** for using Claude Code:
+  1. **Define task clearly**: Identify what needs to be achieved in specific terms.
+  2. **Run Claude Code**: Initiate the tool based on the defined task.
+  3. **Review changes**: Examine modifications made by the tool for accuracy and relevance.
+  4. **Run tests/build**: Execute tests or build processes to verify functionality.
+  5. **Iterate or refine prompt**: Make adjustments or iterate on the input prompt for further precision.
+
+- **Prompting Best Practices**:
+  - Clearly articulate goals for the coding task.
+  - Specify relevant files to limit the scope of modifications.
+  - Validate each step of the process to ensure coherence and accuracy.
+  - Encourage iterative changes to adjust for improvements based on previous outcomes.

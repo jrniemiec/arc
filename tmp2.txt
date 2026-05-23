@@ -1,0 +1,589 @@
+Sidebar menu
+Search
+
+Get app
+Write
+Notifications
+
+Janusz Niemiec
+Home
+Library
+Profile
+Stories
+Stats
+Following
+Medium Staff
+Medium Staff
+Find writers and publications to follow.
+
+See suggestions
+Data Science Collective
+
+Anubhav
+ highlighted
+
+
+1
+
+Member-only story
+
+I Spent 6 Months Tuning Claude Code. Here’s the Exact Setup That Finally Worked.
+CLAUDE.md, subagents, hooks, skills, worktrees, and the five MCP servers that earn their place
+Anubhav
+Anubhav
+
+Follow
+16 min read
+·
+Apr 24, 2026
+1.9K
+
+
+16
+
+18
+
+
+
+
+
+Press enter or click to view image in full size
+
+Open a terminal. Go to your main AI project. Run tree .claude
+
+For most engineers using Claude Code right now the answer is “command not found” or a single file containing a vague instruction to write clean code. That is fine. It also leaves roughly 80% of the product on the floor.
+
+Not a medium member? Read the full article here.
+
+Here is what the same command looks like in a repository configured by a power user.
+
+.claude/
+├── CLAUDE.md
+├── rules/
+│   ├── langgraph.md
+│   ├── retrieval.md
+│   ├── tests.md
+│   └── python-types.md
+├── agents/
+│   ├── retrieval-reviewer.md
+│   ├── prompt-auditor.md
+│   └── eval-runner.md
+├── skills/
+│   ├── new-rag-eval/
+│   │   └── SKILL.md
+│   └── claude-pr-checklist/
+│       └── SKILL.md
+├── settings.json
+└── .mcp.json
+None of these files is long. The main memory file is under 500 tokens on purpose. Each rules file is a short path-scoped behavior. Each subagent is maybe thirty lines. The hooks configuration in the settings file is one pre-tool gate and one post-tool formatter. The server configuration has five servers instead of fifteen.
+
+Picture two engineers taking the exact same task. They need to add citation-backed answer generation to an existing retrieval service. They also need to write the evaluations and open a PR against the main branch.
+
+One engineer has the empty folder. The other has the tree above and a wired-up headless mode. The first engineer spends an afternoon on a feature that ships in the evening. The second engineer ships a pull request in thirty minutes. The difference is not in the prompts they type. The difference is in a configuration stack that no one bothered to set up.
+
+Start with the memory file, because every other layer is cheaper when this one is short.
+
+Press enter or click to view image in full size
+
+Layer 1: The Memory Hierarchy
+Claude Code uses a five-level memory hierarchy. You have personal preferences in your home directory, the project root file, path-scoped rules, local uncommitted overrides and the automatic memory tool writes per session.
+
+The project root file is loaded at every session start. It burns tokens permanently. Many teams dump their entire engineering wiki into this file, treating it like a vector database instead of a hot cache.
+
+Cache hit rates drop noticeably past ~500 tokens in my own workloads. The new Opus 4.7 tokenizer maps existing prompts to roughly 1.0 to 1.35x more tokens, meaning the exact same workload is now more expensive if you do not strictly control your ambient context.
+
+Keep the file under 200 lines. Keep it imperative. Do not write descriptive suggestions like “write clean code”. Write literal rules like “all functions must have TypeScript type annotations”. Every line must actually change behavior.
+
+Here is the minimal file for our RAG service.
+
+# citation-rag
+Retrieval + answer-generation service. LangGraph-based pipeline,
+PostgreSQL+pgvector retrieval, Gemini answer generation, eval harness
+in `evals/`.
+
+## Layout
+- `services/retrieval/`  — chunking, embedding, reranker, citation packer
+- `services/answer/`     — prompt templates, generator node, guardrails
+- `shared/`              — schemas, tracing, settings
+- `evals/`               — golden sets, runners, scoring
+
+## Build & test
+- Install:           `uv sync`
+- Unit tests:        `uv run pytest -q`
+- Eval harness:      `uv run python -m evals.run --suite citations`
+- Lint + types:      `uv run ruff format . && uv run mypy .`
+
+## Canonical conventions
+- The canonical answer prompt lives at `services/answer/prompts/v4.md`.
+  Do not edit `v3.md` because it is frozen for regression evals.
+- All LLM outputs are validated with the pydantic models in
+  `shared/schemas/answers.py`. No raw dict returns from generator nodes.
+- Retrieval always returns `Chunk` objects with a `citation_id`.
+  The answer node must emit citations using those exact ids.
+
+## Guardrails (Claude: follow these literally)
+- Never bump the model version string without updating
+  `evals/snapshots/<version>.json` in the same commit.
+- Never introduce network calls inside `tests/unit/`. Use fixtures in
+  `tests/fixtures/` and the fakes in `tests/fakes/`.
+- Prefer editing existing modules over adding new top-level packages.
+- If a change touches `services/retrieval/`, read `.claude/rules/retrieval.md`
+  before planning.
+- Keep functions under ~40 lines. Split by responsibility, not by length.
+
+## Before opening a PR
+- Run the eval harness and attach the diff output to the PR body.
+- Update `CHANGELOG.md` under `## Unreleased`.
+- Use the `claude-pr-checklist` skill.
+This tells the agent exactly what the directories do. It defines the strict citation contract between the retrieval node and the answer node. It establishes hard guardrails for the test suite that prevent the model from hallucinating a network mock.
+
+Press enter or click to view image in full size
+
+Layer 2: Path-Scoped Rules
+Once you discipline your root memory you still have file-specific instructions. You put them in path-scoped rules.
+
+The pattern uses YAML frontmatter. You define an array of glob paths. The tool loads the rule file only when it touches a matching file. It costs zero tokens the rest of the time. If the agent is editing database migration scripts it does not need to read frontend styling conventions.
+
+(Note: While paths: is the documented schema key, current versions sometimes drop it due to a known bug. Using globs: or a CSV format works more reliably in practice if you notice your rules being silently ignored).
+
+Here is the rule file for our retrieval service.
+
+---
+name: retrieval-rules
+description: Conventions for services/retrieval/**. Loaded only when
+  Claude is editing or planning changes inside the retrieval service.
+globs:
+  - "services/retrieval/**"
+  - "tests/retrieval/**"
+---
+# Retrieval service rules
+
+## Chunking
+- Use `shared/chunking.semantic_chunker` for all document ingest.
+  Do not introduce a second chunker without updating the eval snapshot.
+- Chunk size target: 512 tokens, 64 overlap. Changes require an ADR.
+
+## Reranker
+- The reranker interface is `services/retrieval/reranker.Reranker`.
+  New backends must implement it, not parallel it.
+- Never rerank more than the top 50 hits from vector search. Rerank latency
+  is the #1 service SLO risk.
+
+## Citations
+- Every `Chunk` returned from retrieval must carry a stable `citation_id`.
+- Citation ids are produced by `shared/citations.make_citation_id`. Do not
+  hand-roll ids anywhere else.
+- The answer node assumes `citation_id` is URL-safe. Do not change that
+  without updating `services/answer/citation_packer.py` in the same diff.
+
+## Tests
+- Unit tests for retrieval must never hit the embedding API. Use the fake
+  embedder in `tests/fakes/embeddings.py`.
+- Integration tests live under `tests/retrieval/integration/` and are
+  opt-in via `pytest -m integration`.
+Three or four short rule files beat one large root file. The token savings compound on every turn of the conversation.
+
+Press enter or click to view image in full size
+
+Layer 3: Plan Mode
+Most people never use Plan Mode in production. They type a prompt and watch the files change immediately.
+
+Plan Mode separates thinking from doing. It keeps exploration out of the main execution context and produces an explicit plan document that you can review and amend before any destructive actions take place.
+
+Claude Code offers three planning tiers. Simple Plan handles short tasks in a single file. Visual Plan maps out multi-file changes where structure matters. Deep Plan handles multi-service changes and risk-bearing refactors.
+
+Deep Plan uses subagents for risk assessment and architecture review. The planning subagent is read-only by design. It is explicitly denied write and edit permissions. It cannot accidentally mutate your codebase while it maps the dependencies.
+
+In our RAG service example we use Deep Plan to trace the existing answer generation path. The explore subagent pulls the relevant files into a short context. The planner outputs an explicit list of edits, lists the evaluation additions, and drafts the pull request description. You review the plan and lock it in. The actual changes happen only after you exit Plan Mode.
+
+Press enter or click to view image in full size
+
+Layer 4: Custom Subagents
+Subagents are the single most underused feature in the tool.
+
+The tool ships with built-in subagents. The explore agent handles read-only codebase searches. The general-purpose agent handles multi-step work that needs a clean context. The code-reviewer and code-architect handle specialized roles.
+
+You write a custom subagent when you have a task you repeat frequently, when you need a role with specific tool restrictions, or when a specific system prompt conflicts with your main configuration.
+
+Our RAG service engineer uses three custom agents. The prompt-auditor checks prompt changes against the rules. The eval-runner executes the harness and produces structured results. The retrieval-reviewer checks the reranker code with domain-specific criteria.
+
+Here is the retrieval reviewer.
+
+---
+name: retrieval-reviewer
+description: Reviews changes under services/retrieval/ for chunking,
+  reranker, and citation-contract regressions. Read-only. Invoke
+  proactively before opening a PR that touches retrieval code.
+tools: Read, Grep, Glob, Bash(git diff:*), Bash(uv run pytest:*)
+model: sonnet
+---
+You are a retrieval-service reviewer for the citation-rag repo.
+
+Scope:
+- Only review files under `services/retrieval/**` and their tests.
+- Do not comment on unrelated files even if they appear in the diff.
+
+Review checklist, in order:
+1. Chunking: does the change respect the 512/64 target, and does it keep
+   `shared.chunking.semantic_chunker` as the single entry point?
+2. Reranker: if the reranker interface changed, is every implementation
+   updated, and is the top-k cap still ≤ 50?
+3. Citations: every returned `Chunk` must have a `citation_id` produced
+   by `shared.citations.make_citation_id`. Flag any hand-rolled ids.
+4. Tests: no new network calls in unit tests. Integration tests gated
+   by `pytest -m integration`.
+5. Eval impact: if behavior changed, confirm `evals/snapshots/*.json`
+   has been regenerated in the same commit.
+
+Output format:
+- A short "Verdict" (pass / needs-changes / blocker).
+- Bullet list of findings, each with the file path and a one-line fix.
+- Do not suggest unrelated refactors.
+Look at the frontmatter. The tools line is a narrow allowlist granting read access and scoped bash execution. The model line downshifts the agent to Sonnet. The main loop stays on the expensive model for the hard reasoning while the subagent runs cheaply in the background.
+
+Layer 5: Skills
+Skills package a workflow so you can trigger it by name.
+
+A skill is a folder containing a markdown file with YAML frontmatter. It can bundle Python scripts, bash commands, and test fixtures.
+
+The architecture relies on progressive disclosure. The metadata loads at session start. The actual instructions load only when you trigger the skill. The bundled resources load only when the agent references them. This keeps your ambient token cost low even if you install fifty skills.
+
+We built a skill called new-rag-eval. It supports a new evaluation case from a template, wires the case into the harness, runs it against the current pipeline, and writes a result summary.
+
+---
+name: new-rag-eval
+description: Support a new RAG eval case from a golden example, wire it
+  into the eval harness, run it against the current pipeline, and write
+  a result summary. Use when the user asks to "add an eval for ..."
+  or "cover this regression with an eval."
+allowed-tools: Read, Write, Edit, Bash(uv run:*), Bash(git add:*)
+---
+# new-rag-eval
+
+## When to use
+Trigger when the user wants to add a new eval case to
+`evals/suites/citations/` or reproduce a regression in the eval harness.
+
+## Inputs to gather first
+1. A natural-language description of the query.
+2. The expected citation ids (or the expected answer text).
+3. Optional: the failing trace id from production.
+
+## Steps
+1. Read `evals/templates/case.json` — this is the case template.
+2. Ask the user for the query, expected citations, and any notes.
+3. Write a new case file at `evals/suites/citations/<slug>.json` using
+   the template. Slug is kebab-case from the query.
+4. Run the harness for just this case:
+   `uv run python -m evals.run --suite citations --case <slug>`
+5. Parse the JSON output at `evals/out/<slug>.json`. Summarize:
+   - pass / fail
+   - grounded-citation rate
+   - unsupported-claim rate
+   - any new latency outliers
+6. If failing, add a short "why this is expected to fail today" note
+   to the case file under `notes:`.
+7. Stage the new case with `git add evals/suites/citations/<slug>.json`.
+
+## Do not
+- Do not edit `evals/templates/case.json`.
+- Do not touch other eval suites.
+- Do not open a PR from this skill. The PR flow lives in the
+  `claude-pr-checklist` skill.
+The allowed tools restrict the skill deterministically. It can run the evaluation script and stage files. It cannot push to production. It points the agent to a second skill for the pull request flow.
+
+Press enter or click to view image in full size
+
+Layer 6: Hooks and Determinism
+Hooks make the agent safe to run with fewer babysitters. They add deterministic guardrails to a probabilistic system.
+
+You configure hooks in your settings file. The events include session start, user prompt submit, and tool use. The April 2026 release added a specific hook for safety classifier rejections so you can audit denied operations.
+
+The most important addition is Deferred Permissions. A pre-tool hook can now return a defer decision which pauses the agent mid-run in headless mode. You inspect the session and approve the action out of band. The agent resumes exactly where it left off. Before deferred permissions, a nightly run that needed to push to main either had --dangerously-skip-permissions on or the job failed at 3am.
+
+We configure two practical hooks for the RAG service. The post-tool hook runs our code formatter quietly after every write operation. The pre-tool hook defers any git push that targets the main branch.
+
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/gate_git_push.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ruff format $CLAUDE_TOOL_FILE_PATH >/dev/null 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c . >> .claude/logs/denied.jsonl"
+          }
+        ]
+      }
+    ]
+  }
+}
+Here is the companion shell script for the gate.
+
+#!/usr/bin/env bash
+# Defer any `git push` that targets main. The session pauses. A human
+# approves out-of-band and the agent resumes via `claude --resume`.
+set -euo pipefail
+
+payload="$(cat)"
+cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // empty')"
+
+case "$cmd" in
+  *"git push"*"origin main"*|*"git push"*" main"*)
+    jq -nc '{
+      "permissionDecision": "defer",
+      "reason": "Push to main requires human approval."
+    }'
+    ;;
+  *)
+    jq -nc '{"permissionDecision": "allow"}'
+    ;;
+esac
+The post-tool hook is boring on purpose. One-liner formatting hooks are the highest return on investment you can get. The agent writes a messy file and the hook runs the linter. This way the file is clean before the next turn. The agent never gets confused by its own bad indentation.
+
+Layer 7: The Server Stack
+The Model Context Protocol connects the agent to external tools. Many developers install fifteen servers and wonder why the agent gets confused.
+
+Every server you install provides tool schemas. Those schemas consume context tokens on every single turn. Anthropic’s Tool Search documentation notes that without lazy loading, 50 tools can consume 10,000 to 20,000 tokens per turn. Tool search lazy loading reduces that by roughly 85%, but fewer servers is still the better strategy.
+
+You need exactly five servers for a serious engineering setup.
+
+You need a code graph server with persistent session memory, a GitHub server for branch and commit management, a filesystem server for cross-directory access, a live web search server for current documentation and a dedicated context server for version-specific library pulls.
+
+{
+  "mcpServers": {
+    "vexp": {
+      "command": "npx",
+      "args": ["-y", "@vexp/mcp-server@latest"],
+      "env": {
+        "VEXP_PROJECT": "citation-rag",
+        "VEXP_MEMORY_DIR": ".vexp"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${HOME}/code/citation-rag",
+        "${HOME}/code/shared-prompts"
+      ]
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": { "BRAVE_API_KEY": "${BRAVE_API_KEY}" }
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    }
+  }
+}
+If you are an AI engineer querying production shapes directly you might add a sixth server for your database. Keep the list small. The vexp server alone drives a 65–70% token reduction on long-running agent setups according to vexp's own published benchmarks.
+
+The April 2026 release also added a subtle server-side feature you should look for in documentation tools. Servers can now set an anthropic/maxResultSizeChars annotation in their tool's _meta field. This keeps large library documentation pulls inline instead of forcing the agent to read them from disk, entirely bypassing the old file-write workarounds.
+
+Press enter or click to view image in full size
+
+Layer 8: Parallel Worktrees and Headless Automation
+Worktrees are how you stop waiting for the agent to finish typing.
+
+You run a single command and the tool creates a branch, a worktree, and an isolated session. Each worktree keeps its own editor state and running processes. You manage them in parallel panes.
+
+Our engineer parallelizes the citation task. One pane implements the core generation change. The second pane rewrites the evaluation harness. The third pane adds tracing to the new retrieval path and fourth pane drafts the pull request. Each pane runs its own session with its own context. Overlapping tasks produce overlapping edits, but if you scope the tasks to distinct domains — like evals in one pane and core logic in another — you rarely hit merge conflicts in practice.
+
+The final piece is headless mode. You run the agent non-interactively in your continuous integration pipeline. You whitelist specific tools and strip the local configuration for reproducible behavior.
+
+Here is the nightly evaluation job running in GitHub Actions.
+
+name: claude-nightly-evals
+on:
+  schedule: [{cron: "0 7 * * *"}]
+  workflow_dispatch:
+
+jobs:
+  run-evals-and-open-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      
+      - name: Install Claude Code
+        run: npm i -g @anthropic-ai/claude-code@latest
+        
+      - name: Run nightly eval + draft PR (headless)
+        id: claude
+        run: |
+          set -o pipefail
+          claude -p \
+            --bare \
+            --output-format stream-json \
+            --allowedTools "Bash(uv run:*),Read,Grep,Glob,Write,Edit,mcp__github__*" \
+            --append-system-prompt "You are the nightly eval runner. \
+              Run the citations eval suite. If regressions appear, \
+              open a draft PR with a fix attempt and the eval diff." \
+            "Run: uv run python -m evals.run --suite citations. \
+             If any case regresses, implement the minimal fix and open \
+             a draft PR against main via the GitHub MCP." \
+          | tee claude.ndjson
+          
+          if grep -q '"permissionDecision":"defer"' claude.ndjson; then
+            echo "deferred=true" >> "$GITHUB_OUTPUT"
+          fi
+          
+      - name: Resume if the run deferred on push-to-main
+        if: steps.claude.outputs.deferred == 'true'
+        run: |
+          SESSION_ID="$(jq -r 'select(.type=="deferred") | .session_id' \
+                        claude.ndjson | head -n1)"
+          claude --resume "$SESSION_ID" \
+            --append-system-prompt "Approved. Continue." \
+            --output-format stream-json
+The allowed tools interact with the hooks we built earlier. The job runs the evaluation. It drafts the fix and attempts to push to the main branch. The hook catches the push and defers the permission. The pipeline parses the JSON log, sets the output variable, and pauses. A human reviews the structured log and approves it. The resume command picks up the exact session ID and finishes the job.
+
+Press enter or click to view image in full size
+
+The Replay
+We have the stack. Let us watch the ninety minute shipment using actual artifacts.
+
+The session starts. The engineer opens the project and creates the feature worktree. The memory file and rules load automatically. The five servers connect.
+
+The engineer enters Deep Plan mode. The explore subagent maps the current retrieval paths and the planner outputs a concrete document.
+
+## Implementation Plan: Citation-Backed Generation
+1. **Modify `services/retrieval/search.py`**: Ensure `Chunk` objects attach `citation_id` via `shared.citations.make_citation_id`.
+2. **Update `services/answer/generator.py`**: Inject `[Source: {citation_id}]` into the Gemini system prompt context block.
+3. **Create Eval**: Add `evals/suites/citations/defective-charger.json` to verify strict citation formatting.
+The engineer reviews the plan and locks it in. Implementation runs in the main worktree. When the agent finishes modifying the retrieval logic, it invokes the retrieval-reviewer subagent. The subagent returns a hard blocker based on the path-scoped rules.
+
+**Verdict: blocker**
+* `services/retrieval/search.py`: You hand-rolled a UUID for the citation ID on line 42. Rule `.claude/rules/retrieval.md` requires `shared.citations.make_citation_id`.
+* `tests/retrieval/test_search.py`: Missing `@pytest.mark.integration` on the new database test.
+The agent fixes the hand-rolled ID and the missing decorator. The post-tool hook keeps the formatting clean after every single write operation.
+
+Parallel work begins. The second worktree uses the new-rag-eval skill to rewrite the evaluations. The headless run executes the final evaluation harness and generates the diff.
+
+{
+  "suite": "citations",
+  "cases_run": 45,
+  "grounded_citation_rate": {"previous": 0.82, "current": 0.98, "delta": "+0.16"},
+  "unsupported_claims": {"previous": 12, "current": 0, "delta": "-12"},
+  "status": "PASS"
+}
+The deferred permission pauses the push. The engineer approves it. The pull request opens via the GitHub server with the full change set and the evaluation diff attached.
+
+This assumes the task is well scoped and the stack is already built. The first time you build this out it takes an afternoon. Every task after that compounds.
+
+Floor and Ceiling
+You can ruin this setup very quickly. Do not write a large memory file or install fifteen servers. Tool schemas are not free.
+
+Do not use the main session where a subagent belongs. Exploration and review belong in isolated contexts.
+
+If you will not do everything you should at least do the minimum. Build a short imperative memory file at the project root. Write two path-scoped rule files for the directories you touch the most. Add one formatting hook. Install three servers for your repository, your filesystem, and your library documentation. Force yourself to use Plan Mode for any task with a risk of being wrong.
+
+Add subagents when a task keeps repeating. Add skills when a workflow is stable enough to package. Add worktrees when you catch yourself switching branches more than twice an hour. Add headless mode when you want the agent shipping code while you sleep.
+
+Our agent can now navigate the codebase perfectly. It still struggles with long-running tasks where the context window slowly fills with outdated observations. In the next post we cover the advanced track, looking at Context Rot, Compaction, and Tool-Result Clearing to keep long-running agents from drowning in their own memory.
+
+The stack is the workflow. The workflow is the multiplier. The prompt is just the last five percent.
+
+Continue Reading
+The 8 Skills Every Claude Code Setup Needs in 2026 — Turn the setup into repeatable workflows your agents can trigger.
+
+Claude Code vs Cursor vs Devin vs Copilot in 2026: The Comparison Everyone Is Still Getting Wrong — Compare coding agents by workflow architecture, not shallow benchmark theater.
+
+Inside Claude Code’s Leak: 8 Compaction Modes, 3 Memory Tiers, 44 Flags Anthropic Never Talked About — Go deeper on memory, compaction, flags, and long-running agent control.
+
+Data Science
+Programming
+Machine Learning
+Technology
+Artificial Intelligence
+1.9K
+
+
+16
+
+18
+
+
+
+
+Data Science Collective
+Published in Data Science Collective
+923K followers
+·
+Last published 2 days ago
+Advice, insights, and ideas from the Medium data science community
+
+
+Follow
+Anubhav
+Written by Anubhav
+1.3K followers
+·
+17 following
+I write deep-dives on agents, RAG, evals, and what actually breaks when you ship AI systems
+
+
+Follow
+Help
+
+Status
+
+About
+
+Careers
+
+Press
+
+Blog
+
+Privacy
+
+Rules
+
+Terms
+
+Text to speech
+
+Repost to your network. A new and easy way to share your recommended stories with your followers.
+
+Okay, got it
+
