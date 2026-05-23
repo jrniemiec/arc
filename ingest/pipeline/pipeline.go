@@ -590,22 +590,6 @@ func truncateWords(text string, maxWords int) string {
 	return strings.Join(words[:maxWords], " ")
 }
 
-func splitWords(text string, chunkSize int) []string {
-	words := strings.Fields(text)
-	if len(words) <= chunkSize {
-		return []string{text}
-	}
-	var chunks []string
-	for i := 0; i < len(words); i += chunkSize {
-		end := i + chunkSize
-		if end > len(words) {
-			end = len(words)
-		}
-		chunks = append(chunks, strings.Join(words[i:end], " "))
-	}
-	return chunks
-}
-
 // lookupProfile resolves a profile name from config. Returns an error if not found.
 func lookupProfile(cfg config.Config, name string) (config.Profile, error) {
 	p, ok := cfg.Profile(name)

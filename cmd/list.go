@@ -61,26 +61,37 @@ var listCmd = &cobra.Command{
 		}
 
 		for _, a := range articles {
-			tags := make([]string, 0, len(a.Tags))
-			for _, t := range a.Tags {
-				tags = append(tags, t.Value)
-			}
-			tagStr := ""
-			if len(tags) > 0 {
-				tagStr = "  [" + strings.Join(tags, ", ") + "]"
-			}
-			collections := strings.Join(a.Collections, ", ")
 			read := " "
 			if a.ReadAt != nil {
 				read = "✓"
 			}
-			fmt.Printf("%s  %-45s  %-20s  %s%s\n",
-				read,
-				truncate(a.ID, 45),
-				truncate(collections, 20),
-				truncate(a.Title, 50),
-				tagStr,
-			)
+
+			date := a.IngestedAt.Format("2006-01-02")
+			collections := strings.Join(a.Collections, ", ")
+			collStr := ""
+			if collections != "" {
+				collStr = "  [" + collections + "]"
+			}
+
+			// Line 1: read marker, date, slug, title
+			fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %-50s  %s%s\n",
+				read, date, truncate(a.ID, 50), truncate(a.Title, 50), collStr)
+
+			// Line 2: variant indicators
+			var variants []string
+			if a.SummaryStyle != "" && a.SummaryModel != "" {
+				variants = append(variants, fmt.Sprintf("summary:%s/%s", a.SummaryStyle, a.SummaryModel))
+			}
+			if a.FlashModel != "" {
+				variants = append(variants, fmt.Sprintf("flash:%s", a.FlashModel))
+			}
+			if a.FlashcardStyle != "" && a.FlashcardModel != "" {
+				variants = append(variants, fmt.Sprintf("flashcards:%s/%s", a.FlashcardStyle, a.FlashcardModel))
+			}
+			if len(variants) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "             %s\n", strings.Join(variants, "  ·  "))
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
 		}
 		return nil
 	},

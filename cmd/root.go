@@ -133,6 +133,11 @@ func isJSON(cmd *cobra.Command) bool {
 	return v
 }
 
+// resolveSlug resolves a user query to an article slug via the service.
+func resolveSlug(cmd *cobra.Command, query string) (string, error) {
+	return svcFrom(cmd).ResolveSlug(cmd.Context(), query)
+}
+
 // exitErr prints an error and exits with code 1.
 func exitErr(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "arc: "+format+"\n", args...)

@@ -66,7 +66,11 @@ Examples:
 				return fmt.Errorf("no text on stdin")
 			}
 		} else {
-			req.Slug = args[0]
+			slug, err := resolveSlug(cmd, args[0])
+			if err != nil {
+				return err
+			}
+			req.Slug = slug
 		}
 
 		if !isJSON(cmd) {

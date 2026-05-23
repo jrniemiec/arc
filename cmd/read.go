@@ -41,6 +41,11 @@ Examples:
   arc read --flashcards 20260522-my-article`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		slug, err := resolveSlug(cmd, args[0])
+		if err != nil {
+			return err
+		}
+
 		svc := svcFrom(cmd)
 
 		part := service.PartBody
@@ -54,7 +59,7 @@ Examples:
 		}
 
 		text, err := svc.Read(cmd.Context(), service.ReadRequest{
-			ID:    args[0],
+			ID:    slug,
 			Part:  part,
 			Model: readModel,
 			Style: readStyle,

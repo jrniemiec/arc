@@ -175,6 +175,43 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 	}, nil
 }
 
+// ResolveSlug resolves a user-supplied query to an article slug.
+// Tries exact match first, then case-insensitive substring match on slug and title.
+// Returns an error listing candidates if more than one article matches.
+func (s *Service) ResolveSlug(ctx context.Context, query string) (string, error) {
+	// Exact match
+	if _, err := s.lib.Get(ctx, query); err == nil {
+		return query, nil
+	}
+
+	articles, err := s.lib.List(ctx, store.Filter{})
+	if err != nil {
+		return "", fmt.Errorf("list articles: %w", err)
+	}
+
+	q := strings.ToLower(query)
+	var matches []store.Article
+	for _, a := range articles {
+		if strings.Contains(strings.ToLower(a.ID), q) ||
+			strings.Contains(strings.ToLower(a.Title), q) {
+			matches = append(matches, a)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no article matching %q", query)
+	case 1:
+		return matches[0].ID, nil
+	default:
+		msg := fmt.Sprintf("%q matches multiple articles — be more specific:\n", query)
+		for _, a := range matches {
+			msg += fmt.Sprintf("  %s  %s\n", a.ID, a.Title)
+		}
+		return "", fmt.Errorf("%s", strings.TrimRight(msg, "\n"))
+	}
+}
+
 // Summarize runs the summarize step on an existing article (by slug) or raw text.
 // If req.Write is true and a slug is provided, the summary is written as a new
 // variant file alongside existing files in the article directory.
