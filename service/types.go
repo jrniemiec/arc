@@ -66,10 +66,11 @@ type IngestRequest struct {
 
 // IngestResult is returned after a successful ingest.
 type IngestResult struct {
-	ArticleID string
-	Slug      string
-	Cost      store.CostRecord
-	DryRun    bool // true if no files were written
+	ArticleID       string
+	Slug            string
+	Cost            store.CostRecord
+	DryRun          bool   // true if no files were written
+	ExtractionStats string // human-readable extraction stats line
 }
 
 // SummarizeRequest describes a standalone summarize operation.

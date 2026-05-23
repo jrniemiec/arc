@@ -204,8 +204,9 @@ type Request struct {
 
 // Result is returned after a successful ingest.
 type Result struct {
-	Slug string
-	Cost store.CostRecord
+	Slug            string
+	Cost            store.CostRecord
+	ExtractionStats string // human-readable extraction stats line
 }
 
 // Run executes the full ingest pipeline and returns the new article slug.
@@ -253,10 +254,11 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("extraction produced no text")
 	}
 
-	progress(extracted.Stats())
+	stats := extracted.Stats()
+	progress(stats)
 
 	if req.DryRun {
-		return Result{}, nil
+		return Result{ExtractionStats: stats}, nil
 	}
 
 	// ── 2. Resolve profiles and styles ───────────────────────────────────
@@ -447,7 +449,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		Cost:      &costRec,
 	})
 
-	return Result{Slug: slug, Cost: costRec}, nil
+	return Result{Slug: slug, Cost: costRec, ExtractionStats: stats}, nil
 }
 
 // ── LLM helpers ───────────────────────────────────────────────────────────────
@@ -505,10 +507,10 @@ func summarizeText(ctx context.Context, p llm.Provider, text, title, source, sty
 			call++
 			if call <= n {
 				// MAP phase
-				progress(fmt.Sprintf("chunk %d/%d (~%d tokens, model: %s)", call, n, chunkTokenCounts[call-1], model))
+				progress(fmt.Sprintf("chunk %d/%d (~%d tokens, style: %s, model: %s)", call, n, chunkTokenCounts[call-1], style, model))
 			} else {
 				// REDUCE phase
-				progress(fmt.Sprintf("reducing %d chunk summaries...", n))
+				progress(fmt.Sprintf("reducing %d chunk summaries (style: %s)...", n, style))
 			}
 		},
 	}

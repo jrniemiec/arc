@@ -60,6 +60,27 @@ func (r Result) Stats() string {
 	return fmt.Sprintf("read %s — %d words, ~%d tokens", extracted, words, tokens)
 }
 
+// isBotCheckPage returns true if the extracted text looks like a bot-verification page.
+func isBotCheckPage(text string) bool {
+	lower := strings.ToLower(text)
+	triggers := []string{
+		"security verification",
+		"verifying you are not a bot",
+		"please enable javascript",
+		"checking your browser",
+		"ddos protection",
+		"just a moment",
+	}
+	count := 0
+	for _, t := range triggers {
+		if strings.Contains(lower, t) {
+			count++
+		}
+	}
+	// Require at least 2 signals and short text (real articles are longer)
+	return count >= 2 && len(strings.Fields(text)) < 200
+}
+
 func formatBytes(n int) string {
 	switch {
 	case n >= 1<<20:
@@ -90,6 +111,22 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("fetch %s: %w", rawURL, err)
 	}
+
+	// On 403, retry via Jina reader proxy (handles paywalls and bot-detection).
+	if resp.StatusCode == http.StatusForbidden {
+		resp.Body.Close()
+		jinaURL := "https://r.jina.ai/" + rawURL
+		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, jinaURL, nil)
+		if err != nil {
+			return Result{}, fmt.Errorf("build jina request: %w", err)
+		}
+		req2.Header.Set("User-Agent", req.Header.Get("User-Agent"))
+		req2.Header.Set("X-Return-Format", "markdown")
+		resp, err = client.Do(req2)
+		if err != nil {
+			return Result{}, fmt.Errorf("fetch via jina %s: %w", rawURL, err)
+		}
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
@@ -114,6 +151,12 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	}
 
 	text := strings.TrimSpace(textBuf.String())
+
+	// Detect bot-check pages that slipped through (Jina fallback may return these).
+	if isBotCheckPage(text) {
+		return Result{}, fmt.Errorf("fetch %s: site requires JavaScript or bot verification — try downloading the page manually", rawURL)
+	}
+
 	return Result{
 		Text:             text,
 		Title:            article.Title(),

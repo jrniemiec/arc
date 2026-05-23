@@ -380,10 +380,6 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 		return IngestResult{}, fmt.Errorf("ingest: URL or File must be specified")
 	}
 
-	if req.DryRun {
-		return IngestResult{DryRun: true}, nil
-	}
-
 	result, err := pipeline.Run(ctx, s.cfg, pipeline.Request{
 		URL:            req.URL,
 		File:           req.File,
@@ -395,10 +391,15 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 		FlashcardModel: req.FlashcardProfile,
 		FlashcardStyle: req.FlashcardStyle,
 		NoFlashcards:   req.NoFlashcards,
+		DryRun:         req.DryRun,
 		Progress:       req.Progress,
 	})
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("ingest pipeline: %w", err)
+	}
+
+	if req.DryRun {
+		return IngestResult{DryRun: true, ExtractionStats: result.ExtractionStats}, nil
 	}
 
 	// Index the new article into SQLite

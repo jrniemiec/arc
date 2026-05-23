@@ -74,7 +74,7 @@ Examples:
 		}
 
 		if result.DryRun {
-			fmt.Fprintln(cmd.OutOrStdout(), "dry-run: extraction successful, no files written")
+			fmt.Fprintln(cmd.OutOrStdout(), "dry-run: no files written")
 			return nil
 		}
 
