@@ -110,6 +110,16 @@ func (s *Service) Read(ctx context.Context, req ReadRequest) (string, error) {
 	}
 }
 
+// GetArticle returns a single article by ID with Files populated from disk.
+func (s *Service) GetArticle(ctx context.Context, id string) (store.Article, error) {
+	a, err := s.lib.Get(ctx, id)
+	if err != nil {
+		return store.Article{}, err
+	}
+	a.Files = fs.ProbeFiles(filepath.Join(s.cfg.ArticlesRoot, id))
+	return a, nil
+}
+
 // MarkRead records that an article was read.
 func (s *Service) MarkRead(ctx context.Context, id string) error {
 	return s.lib.MarkRead(ctx, id, time.Now())
