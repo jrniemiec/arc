@@ -30,6 +30,21 @@ var summarizeCmd = &cobra.Command{
 	Short: "Summarize an article or piped text",
 	Long: `Summarize an existing article (by slug) or text from stdin.
 
+Reads the article body from disk and calls the configured summary LLM profile.
+Does not modify SQLite or the vector index — use arc reindex to sync after --write.
+
+Modes:
+  slug       reads body.txt from the article directory
+  stdin      pipe text directly; --write is not available in this mode
+
+With --write, saves the result as summary.<style>.<model>.txt alongside any
+existing summary variants in the article directory. Existing variants with the
+same style+model are overwritten; others are untouched.
+
+Output:
+  stdout  summary text (plain when piped, markdown-rendered on terminal)
+  stderr  progress, model header, cost
+
 If no slug is given and stdin is a pipe, reads from stdin automatically.
 
 Examples:

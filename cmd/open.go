@@ -16,14 +16,18 @@ func init() {
 var openCmd = &cobra.Command{
 	Use:   "open <slug>",
 	Short: "Open the article's source in the default viewer",
-	Long: `Open the article's source using the system 'open' command.
+	Long: `Open the article's original source using the macOS 'open' command.
 
-  url  — opens in the default browser
-  pdf  — opens in the default PDF viewer
-  text — prints a message directing you to 'arc read'
+Behaviour depends on source type:
+  url / rss  — opens source.url in the default browser
+  pdf        — opens source.pdf in the default PDF viewer
+  text/other — falls back to printing body.txt (same as arc read)
+
+Does not modify any files or databases. Read-only.
 
 Examples:
-  arc open 20260522-my-article`,
+  arc open 20260522-my-article
+  arc open my-article   (fuzzy slug match)`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		slug, err := resolveSlug(cmd, args[0])

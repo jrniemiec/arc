@@ -47,10 +47,25 @@ var searchCmd = &cobra.Command{
 	Short: "Search articles by keyword",
 	Long: `Search the knowledge base and print matching articles with context snippets.
 
-By default uses combined FTS5 keyword + semantic (vector) search when embeddings exist.
-Use --no-semantic for keyword-only search.
+Searches are performed against the preferred summary variant (same variant used
+by arc read --summary), not the full body. Both indexes are built from the same
+summary text.
 
-Matched terms are highlighted in the excerpt (bold on terminal, *asterisks* in pipes).
+Search modes (set by --no-semantic):
+  combined (default)  FTS5 keyword + vector semantic search run in parallel;
+                      scores normalized to [0,1] and summed; results deduped.
+                      Falls back to keyword-only if the vector index is empty.
+  keyword             FTS5 BM25 ranking only; fast, exact-term matching.
+
+Each result shows a source badge indicating which index returned it:
+  [fts]     keyword match only
+  [vector]  semantic match only (similarity ≥ 0.5)
+  [both]    matched in both indexes (highest combined score)
+
+Excerpt shows the matching context from the summary with matched terms highlighted
+(bold on terminal, *asterisks* in pipes). Vector-only hits have no excerpt.
+
+To populate the vector index: arc reindex (requires OPENAI_API_KEY).
 
 Examples:
   arc search "attention mechanism"

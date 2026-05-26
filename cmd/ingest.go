@@ -35,12 +35,32 @@ var ingestCmd = &cobra.Command{
 	Use:   "ingest <url|file|->",
 	Short: "Ingest an article from a URL, file, or stdin",
 	Long: `Ingest fetches and processes an article through the full pipeline:
-  extract → summarize → flash → flashcards → index
+  extract → summarize → flash → flashcards → embed → index
+
+Files written to ~/.arc/articles/<slug>/:
+  body.txt                          extracted plain text
+  source.url / source.pdf           original source reference
+  source.html                       raw HTML (URL sources only)
+  meta.json                         title, author, model, style, tags
+  summary.<style>.<model>.txt       generated summary
+  flash.<model>.txt                 generated flash summary
+  flashcards.<style>.<model>.json   generated flashcards
+
+Databases updated:
+  SQLite  — article metadata and FTS5 full-text index (summary + flashcard questions)
+  Vector  — embedding of the summary text (skip with --no-embed)
+
+Multiple variants can coexist (different models or styles). The preferred variant
+for reading/search is determined by preferred_models and preferred_styles in config.
+
+Cookie jars from config (cookie_jars) are applied automatically for URL sources.
+Use --dry-run to extract and report stats without writing any files or calling LLMs.
 
 Examples:
   arc ingest https://example.com/article
   arc ingest paper.pdf --no-flashcards
   arc ingest notes.txt --title "My Notes" --collection my-collection
+  arc ingest https://example.com/article --dry-run
   cat article.txt | arc ingest -`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

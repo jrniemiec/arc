@@ -32,6 +32,28 @@ func init() {
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List articles in the knowledge base",
+	Long: `List articles stored in the knowledge base with variant and status indicators.
+
+Reads from SQLite — does not scan the filesystem directly.
+
+Each article is shown on two lines:
+  Line 1:  read marker (✓/space), ingested date, slug, title, collections
+  Line 2:  variant indicators — summary:<style>/<model>, flash:<model>,
+           flashcards:<style>/<model>, embed:<model> (dimmed, colored by cost tier)
+
+Filtering:
+  --collection  show only articles in the given collection
+  --tag         show only articles with the given tag
+  --unread      show only articles not yet marked as read
+  --unplayed    show only articles not yet marked as played
+  --limit       cap the number of results (default 50)
+
+Examples:
+  arc list
+  arc list --unread
+  arc list --collection my-collection
+  arc list --tag ml --limit 20
+  arc list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 

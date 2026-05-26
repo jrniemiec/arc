@@ -18,6 +18,22 @@ func init() {
 var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show knowledge base statistics",
+	Long: `Show a summary of the knowledge base state.
+
+Data is read from SQLite (article counts, models, styles) and events.jsonl
+(cost totals). Does not read the filesystem or call any LLM.
+
+Output:
+  Articles      total count with unread, unplayed, and embed coverage
+  Collections   number of defined collections
+  Tags          number of unique tags
+  By model      article count per summary model (colored by cost tier)
+  By style      article count per summary style
+  Cost          this month and all-time total, broken down by model
+
+Examples:
+  arc stats
+  arc stats --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 

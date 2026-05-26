@@ -32,11 +32,28 @@ var flashcardsCmd = &cobra.Command{
 	Short: "Generate flashcards from an article or piped text",
 	Long: `Generate flashcards as a JSON array from an article summary or piped text.
 
-Input is the article summary by default (slug mode). Use --from-body to use
-the raw body instead. If no slug is given and stdin is a pipe, reads from
-stdin automatically.
+Reads the preferred summary (or body with --from-body) from disk and calls
+the configured flashcard LLM profile. Does not modify SQLite or the vector index.
 
-Each flashcard: {"type":"concept|fact|insight","front":"...","back":"...","tags":["..."]}
+With --write, saves the result as flashcards.<style>.<model>.json in the article
+directory. Existing flashcard files for the same style+model are overwritten.
+
+Styles:
+  socratic  question-and-answer pairs that test understanding
+  cloze     fill-in-the-blank sentences
+
+Each card: {"type":"concept|fact|insight","front":"...","back":"...","tags":["..."]}
+
+Input (slug mode):
+  default     reads preferred summary.<style>.<model>.txt
+  --from-body reads body.txt instead
+
+Input (stdin mode):
+  pipe text directly; --write is not available
+
+Output:
+  stdout  JSON array (syntax-highlighted on terminal)
+  stderr  progress, model header, cost
 
 Examples:
   arc flashcards 20260522-my-article

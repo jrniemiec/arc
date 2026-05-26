@@ -30,9 +30,22 @@ var flashCmd = &cobra.Command{
 	Short: "Generate a flash summary for audio playback",
 	Long: `Generate a 3–5 sentence flash summary optimised for TTS playback.
 
-Input is the article summary by default (slug mode). Use --from-body to use
-the raw body instead. If no slug is given and stdin is a pipe, reads from
-stdin automatically.
+Reads the preferred summary (or body with --from-body) from disk and calls
+the configured flash LLM profile. Does not modify SQLite or the vector index.
+
+With --write, saves the result as flash.<model>.txt in the article directory.
+Existing flash files for the same model are overwritten; others are untouched.
+
+Input (slug mode):
+  default     reads preferred summary.<style>.<model>.txt
+  --from-body reads body.txt instead
+
+Input (stdin mode):
+  pipe text directly; --write is not available
+
+Output:
+  stdout  flash text (plain when piped, rendered on terminal)
+  stderr  progress, model header, cost
 
 Examples:
   arc flash 20260522-my-article

@@ -31,13 +31,24 @@ var extractCmd = &cobra.Command{
 	Short: "Extract article text from a URL, file, or stdin",
 	Long: `Extract fetches and extracts the main article text, writing it to stdout.
 
-No library or API keys required. Output is plain text unless --json is set.
+Does not write anything to disk or touch any database. No API keys required.
+Useful for previewing what arc would ingest, or for piping into arc summarize.
+
+Sources:
+  url   — HTTP fetch with readability extraction; retries via Jina on bot-check
+  pdf   — pdftotext extraction
+  file  — plain text passthrough; html files are stripped to text
+  -     — read from stdin
+
+Cookie jars from config (cookie_jars) are applied automatically for matching domains.
+Extraction stats (download speed, size, words, tokens) are printed to stderr.
 
 Examples:
   arc extract https://example.com/article
   arc extract paper.pdf
   arc extract notes.txt
-  cat raw.html | arc extract -`,
+  cat raw.html | arc extract -
+  arc extract https://example.com/article | arc summarize`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()

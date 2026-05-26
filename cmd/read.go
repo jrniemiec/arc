@@ -30,15 +30,27 @@ var readCmd = &cobra.Command{
 	Short: "Read an article or one of its generated outputs",
 	Long: `Read the body, summary, flash, or flashcards of an article.
 
-Variant selection follows preferred_models and preferred_styles from config.
-Use --model and --style to override for a specific read.
+Reads directly from the filesystem — does not call any LLM or modify any database.
+
+Default (no flag): body.txt — the raw extracted text.
+--summary:         preferred summary.<style>.<model>.txt
+--flash:           preferred flash.<model>.txt
+--flashcards:      preferred flashcards.<style>.<model>.json
+
+Variant selection uses preferred_models and preferred_styles from config,
+trying each combination in order and returning the first file that exists.
+Use --model and --style to prepend an override to those preference lists
+for this read only.
+
+The slug argument accepts a full article ID or a partial slug/title — arc
+will error if the partial match is ambiguous.
 
 Examples:
   arc read 20260522-my-article
   arc read --summary 20260522-my-article
   arc read --summary --style bullets 20260522-my-article
-  arc read --flash 20260522-my-article
-  arc read --flashcards 20260522-my-article`,
+  arc read --flash my-article
+  arc read --flashcards my-article`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		slug, err := resolveSlug(cmd, args[0])

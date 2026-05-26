@@ -35,11 +35,35 @@ func init() {
 var reprocessCmd = &cobra.Command{
 	Use:   "reprocess [<slug>]",
 	Short: "Re-run generation steps on existing articles",
-	Long: `Re-run summary, flash, flashcards, and embedding on existing articles
-without re-fetching. Model selection is driven by the active config profiles.
+	Long: `Re-run generation steps on existing articles without re-fetching.
 
-By default adds new variant files alongside existing ones. Use --clean to
-delete existing variants and start fresh.
+Model and style selection is driven entirely by config profiles — to switch
+models, update config then run arc reprocess (no --profile flag by design).
+
+Pipeline (each step skippable with --no-*):
+  1. Replace body.txt      (--body <file> or --body -)
+  2. Refetch from source   (--refetch: re-fetches URL or re-extracts PDF)
+  3. Clean variants        (--clean: delete existing files + clear vector)
+  4. Summarize             → writes summary.<style>.<model>.txt
+  5. Flash                 → writes flash.<model>.txt
+  6. Flashcards            → writes flashcards.<style>.<model>.json
+  7. Embed                 → upserts summary embedding into vector index
+  8. Update meta.json      with new model/style fields
+  After all articles: arc reindex rebuilds SQLite from the updated filesystem.
+
+What --clean deletes:
+  summary.*.*.txt, flash.*.txt, flashcards.*.*.json
+  vector index entry for the article
+  summary_model, flash_model, flashcard_model, embed_model in meta.json
+
+What --clean never touches:
+  body.txt, source.url, source.pdf, source.html, meta.json identity fields
+  (title, author, ingested_at, tags, collections)
+
+What --refetch requires:
+  URL sources: source.url must exist; cookie jars from config are applied.
+  PDF sources: source.pdf must exist in the article directory.
+  Text-only sources: error — use --body to replace body.txt manually.
 
 Examples:
   arc reprocess my-article

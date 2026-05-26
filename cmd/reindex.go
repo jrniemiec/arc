@@ -16,7 +16,37 @@ func init() {
 var reindexCmd = &cobra.Command{
 	Use:   "reindex",
 	Short: "Rebuild the search index from the filesystem",
-	Long:  `Walk the articles directory and rebuild the SQLite metadata and FTS5 search index.`,
+	Long: `Rebuild the search indexes by walking ~/.arc/articles/.
+
+Two indexes are rebuilt in sequence:
+
+  SQLite / FTS5
+    Reads every meta.json and preferred summary file from disk and
+    re-populates the database from scratch. Records for articles that
+    no longer exist on disk are removed (full rebuild, not incremental).
+    Updates: article metadata, full-text search index (summary text +
+    flashcard questions), collection memberships.
+
+  Vector index (chromem-go)
+    Generates embeddings for articles that have a summary but no
+    embed_model recorded in meta.json (i.e. not yet embedded).
+    Does NOT remove stale vectors for articles deleted from disk —
+    orphaned vectors are harmless but waste space; a future --clean-vector
+    flag will address this.
+    Requires OPENAI_API_KEY (or ARC_OPENAI_API_KEY) to be set.
+    Skip with --no-embed.
+
+When to run arc reindex:
+  - After manually editing or deleting article files
+  - After changing preferred_models or preferred_styles in config
+    (to re-select which variant is indexed)
+  - After arc reprocess (called automatically at end of reprocess)
+  - To backfill embeddings for articles ingested before semantic search
+    was added
+
+Examples:
+  arc reindex
+  arc reindex --no-embed`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 
