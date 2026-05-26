@@ -34,6 +34,10 @@ type Config struct {
 	// e.g. {"medium.com": "~/.arc/cookies/medium.txt"}
 	// Used automatically when fetching URLs whose host matches a key.
 	CookieJars map[string]string `json:"cookie_jars,omitempty"`
+
+	// Logging
+	LogPath  string `json:"log_path,omitempty"`  // default: <DataRoot>/arc.log
+	LogLevel string `json:"log_level,omitempty"` // debug|info|warn|error; default: info
 }
 
 // Profile describes one LLM provider+model combination.
@@ -87,6 +91,9 @@ type IngestConfig struct {
 	// Flashcard tuning
 	FlashcardMaxTokens int                              `json:"flashcard_max_tokens"` // max output tokens; default 2048
 	FlashcardStyles    map[string]FlashcardStyleConfig  `json:"flashcard_styles"`     // per-style system prompts
+
+	// Teaser detection
+	MinWords int `json:"min_words"` // articles below this word count are tagged "teaser" and skip LLM steps; default 300
 }
 
 // FlashcardStyleConfig holds the system prompt for one flashcard style.
@@ -276,12 +283,15 @@ func Default() Config {
 			FlashMaxTokens:     256,
 			FlashcardMaxTokens: 2048,
 			FlashcardStyles:    builtinFlashcardStyles,
+			MinWords:           300,
 		},
 		PreferredModels: []string{
 			"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
 			"gpt-4.1", "gpt-4o-mini",
 		},
 		PreferredStyles: []string{"study-notes", "bullets", "technical"},
+		LogPath:         filepath.Join(dataRoot, "arc.log"),
+		LogLevel:        "info",
 	}
 }
 
@@ -311,6 +321,8 @@ func Load(path string) (Config, error) {
 		PreferredModels []string           `json:"preferred_models"`
 		PreferredStyles []string           `json:"preferred_styles"`
 		CookieJars      map[string]string  `json:"cookie_jars"`
+		LogPath         string             `json:"log_path"`
+		LogLevel        string             `json:"log_level"`
 	}
 	if err := json.NewDecoder(f).Decode(&overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -372,6 +384,9 @@ func Load(path string) (Config, error) {
 	if overlay.Ingest.FlashcardMaxTokens != 0 {
 		cfg.Ingest.FlashcardMaxTokens = overlay.Ingest.FlashcardMaxTokens
 	}
+	if overlay.Ingest.MinWords != 0 {
+		cfg.Ingest.MinWords = overlay.Ingest.MinWords
+	}
 	for k, v := range overlay.Ingest.FlashcardStyles {
 		cfg.Ingest.FlashcardStyles[k] = v
 	}
@@ -383,6 +398,12 @@ func Load(path string) (Config, error) {
 	}
 	if len(overlay.CookieJars) > 0 {
 		cfg.CookieJars = overlay.CookieJars
+	}
+	if overlay.LogPath != "" {
+		cfg.LogPath = overlay.LogPath
+	}
+	if overlay.LogLevel != "" {
+		cfg.LogLevel = overlay.LogLevel
 	}
 
 	return cfg, nil

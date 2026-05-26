@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/internal/clog"
 	"github.com/jrniemiec/arc/library"
 	"github.com/jrniemiec/arc/service"
 )
@@ -69,6 +70,11 @@ func openLibrary(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Initialise logging. clog.Init is idempotent — safe to call every command.
+	logLevel, _ := clog.ParseLevel(cfg.LogLevel)
+	clog.Init(cfg.LogPath, logLevel)
+	clog.Info("arc start", "cmd", cmd.Name())
 
 	lib, err := library.Open(cmd.Context(), cfg)
 	if err != nil {

@@ -39,6 +39,35 @@ type SearchResult struct {
 	Source  string // "fts" | "vector" | "both"
 }
 
+// BatchIngestRequest describes a batch ingest operation from a file or stdin.
+type BatchIngestRequest struct {
+	// Source — exactly one must be set
+	File string // path to file with one URL/file per line; "-" reads stdin
+
+	// Shared options applied to every item
+	Collection       string
+	SummaryStyle     string
+	SummaryProfile   string
+	FlashProfile     string
+	FlashcardProfile string
+	NoFlashcards     bool
+	NoEmbed          bool
+	DryRun           bool
+	Force            bool
+
+	Progress func(msg string)
+}
+
+// BatchIngestResult summarizes a batch ingest run.
+type BatchIngestResult struct {
+	Ingested   int
+	Teasers    int      // articles tagged as teaser (subset of Ingested)
+	Skipped    int      // duplicates
+	Errors     int
+	Slugs      []string // successfully ingested slugs
+	CostUSD    float64
+}
+
 // IngestRequest describes an article to ingest.
 type IngestRequest struct {
 	// Input — exactly one must be set
@@ -60,6 +89,7 @@ type IngestRequest struct {
 	NoFlashcards bool
 	NoEmbed      bool
 	DryRun       bool
+	Force        bool // skip URL duplicate check
 
 	// Progress is called with a human-readable status at each pipeline step.
 	Progress func(msg string)
@@ -71,6 +101,7 @@ type IngestResult struct {
 	Slug            string
 	Cost            store.CostRecord
 	DryRun          bool   // true if no files were written
+	Teaser          bool   // true if article was below min_words threshold
 	ExtractionStats string // human-readable extraction stats line
 }
 

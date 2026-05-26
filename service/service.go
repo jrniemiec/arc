@@ -864,10 +864,108 @@ func (s *Service) Flashcards(ctx context.Context, req FlashcardsRequest) (Flashc
 	return result, nil
 }
 
+// BatchIngest ingests multiple URLs or files listed one per line in a file or stdin.
+// Blank lines and lines starting with '#' are ignored.
+// Errors are logged via Progress and counted; they do not abort the batch.
+func (s *Service) BatchIngest(ctx context.Context, req BatchIngestRequest) (BatchIngestResult, error) {
+	var data []byte
+	var err error
+	if req.File == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(req.File)
+	}
+	if err != nil {
+		return BatchIngestResult{}, fmt.Errorf("read input: %w", err)
+	}
+
+	// Parse lines.
+	var inputs []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		inputs = append(inputs, line)
+	}
+	if len(inputs) == 0 {
+		return BatchIngestResult{}, fmt.Errorf("no URLs or files found in input")
+	}
+
+	progress := req.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	var result BatchIngestResult
+	total := len(inputs)
+
+	for i, input := range inputs {
+		prefix := fmt.Sprintf("[%d/%d] %s: ", i+1, total, input)
+
+		ir := IngestRequest{
+			Collection:       req.Collection,
+			SummaryStyle:     req.SummaryStyle,
+			SummaryProfile:   req.SummaryProfile,
+			FlashProfile:     req.FlashProfile,
+			FlashcardProfile: req.FlashcardProfile,
+			NoFlashcards:     req.NoFlashcards,
+			NoEmbed:          req.NoEmbed,
+			DryRun:           req.DryRun,
+			Force:            req.Force,
+			Progress: func(msg string) {
+				progress(prefix + msg)
+			},
+		}
+
+		if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+			ir.URL = input
+		} else {
+			ir.File = input
+		}
+
+		res, err := s.Ingest(ctx, ir)
+		if err != nil {
+			// Duplicate — count as skipped, not error.
+			if strings.Contains(err.Error(), "already ingested") {
+				progress(prefix + "skipped: " + err.Error())
+				result.Skipped++
+				continue
+			}
+			progress(prefix + "error: " + err.Error())
+			result.Errors++
+			continue
+		}
+
+		if !req.DryRun {
+			result.Slugs = append(result.Slugs, res.Slug)
+			result.CostUSD += res.Cost.TotalUSD
+			if res.Teaser {
+				result.Teasers++
+			}
+		}
+		result.Ingested++
+	}
+
+	return result, nil
+}
+
 // Ingest ingests a single article from a URL or file using the native Go pipeline.
 func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, error) {
 	if req.URL == "" && req.File == "" {
 		return IngestResult{}, fmt.Errorf("ingest: URL or File must be specified")
+	}
+
+	// URL deduplication: check if this URL was already ingested.
+	if req.URL != "" && !req.Force && !req.DryRun {
+		articles, err := s.lib.List(ctx, store.Filter{})
+		if err == nil {
+			for _, a := range articles {
+				if a.URL == req.URL {
+					return IngestResult{}, fmt.Errorf("already ingested as %q — use --force to ingest again", a.ID)
+				}
+			}
+		}
 	}
 
 	result, err := pipeline.Run(ctx, s.cfg, pipeline.Request{
@@ -903,6 +1001,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 		ArticleID: result.Slug,
 		Slug:      result.Slug,
 		Cost:      result.Cost,
+		Teaser:    result.Teaser,
 	}, nil
 }
 

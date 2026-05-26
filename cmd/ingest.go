@@ -18,6 +18,8 @@ var (
 	ingestNoFlashcards bool
 	ingestNoEmbed      bool
 	ingestDryRun       bool
+	ingestForce        bool
+	ingestFile         string
 )
 
 func init() {
@@ -28,6 +30,8 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestNoFlashcards, "no-flashcards", false, "skip flashcard generation")
 	ingestCmd.Flags().BoolVar(&ingestNoEmbed, "no-embed", false, "skip vector embedding generation")
 	ingestCmd.Flags().BoolVar(&ingestDryRun, "dry-run", false, "extract only, do not write files or call LLM")
+	ingestCmd.Flags().BoolVar(&ingestForce, "force", false, "ingest even if URL was already ingested")
+	ingestCmd.Flags().StringVar(&ingestFile, "file", "", "batch mode: file with one URL/file per line (\"-\" for stdin)")
 	rootCmd.AddCommand(ingestCmd)
 }
 
@@ -54,6 +58,9 @@ Multiple variants can coexist (different models or styles). The preferred varian
 for reading/search is determined by preferred_models and preferred_styles in config.
 
 Cookie jars from config (cookie_jars) are applied automatically for URL sources.
+URL deduplication: if the URL was already ingested, arc errors with the existing
+slug. Use --force to ingest again (e.g. to regenerate with a different model).
+
 Use --dry-run to extract and report stats without writing any files or calling LLMs.
 
 Examples:
@@ -61,11 +68,78 @@ Examples:
   arc ingest paper.pdf --no-flashcards
   arc ingest notes.txt --title "My Notes" --collection my-collection
   arc ingest https://example.com/article --dry-run
-  cat article.txt | arc ingest -`,
-	Args: cobra.ExactArgs(1),
+  cat article.txt | arc ingest -
+
+Batch mode (--file):
+  arc ingest --file urls.txt
+  arc ingest --file urls.txt --no-flashcards --dry-run
+  cat urls.txt | arc ingest --file -
+
+  The file format is one URL or file path per line. Blank lines and lines
+  starting with '#' are ignored. Duplicates are skipped (not errors).
+  Errors are logged per-item and do not abort the batch.
+  Output: one slug per line to stdout; progress and summary to stderr.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 && ingestFile == "" {
+			return fmt.Errorf("provide a URL/file argument or use --file for batch mode")
+		}
+		if len(args) > 0 && ingestFile != "" {
+			return fmt.Errorf("cannot specify a URL and --file together")
+		}
+
 		svc := svcFrom(cmd)
 
+		// ── Batch mode ────────────────────────────────────────────────────────
+		if ingestFile != "" {
+			req := service.BatchIngestRequest{
+				File:             ingestFile,
+				Collection:       ingestCollection,
+				SummaryStyle:     ingestSummaryStyle,
+				SummaryProfile:   ingestProfile,
+				FlashProfile:     ingestProfile,
+				FlashcardProfile: ingestProfile,
+				NoFlashcards:     ingestNoFlashcards,
+				NoEmbed:          ingestNoEmbed,
+				DryRun:           ingestDryRun,
+				Force:            ingestForce,
+			}
+			if !isJSON(cmd) {
+				req.Progress = func(msg string) {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
+				}
+			}
+
+			result, err := svc.BatchIngest(cmd.Context(), req)
+			if err != nil {
+				return fmt.Errorf("batch ingest: %w", err)
+			}
+
+			if isJSON(cmd) {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+
+			for _, slug := range result.Slugs {
+				fmt.Fprintln(cmd.OutOrStdout(), slug)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "ingested %d", result.Ingested)
+			if result.Teasers > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), " (%d teasers)", result.Teasers)
+			}
+			if result.Skipped > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), ", skipped %d (duplicates)", result.Skipped)
+			}
+			if result.Errors > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), ", errors %d", result.Errors)
+			}
+			if result.CostUSD > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  ($%.4f)", result.CostUSD)
+			}
+			fmt.Fprintln(cmd.ErrOrStderr())
+			return nil
+		}
+
+		// ── Single mode ───────────────────────────────────────────────────────
 		input := args[0]
 		req := service.IngestRequest{
 			Title:            ingestTitle,
@@ -77,6 +151,7 @@ Examples:
 			NoFlashcards:     ingestNoFlashcards,
 			NoEmbed:          ingestNoEmbed,
 			DryRun:           ingestDryRun,
+			Force:            ingestForce,
 		}
 
 		if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
@@ -105,7 +180,11 @@ Examples:
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 		}
 
-		fmt.Fprintln(cmd.OutOrStdout(), result.Slug)
+		if result.Teaser {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s  [teaser]\n", result.Slug)
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), result.Slug)
+		}
 		if result.Cost.TotalUSD > 0 {
 			fmt.Fprintf(cmd.ErrOrStderr(), "cost: $%.4f\n", result.Cost.TotalUSD)
 		}

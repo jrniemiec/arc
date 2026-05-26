@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode"
 
+	"log/slog"
+
 	briefchunk "github.com/jrniemiec/brief/chunk"
 	briefllm "github.com/jrniemiec/brief/llm"
 	briefsummarize "github.com/jrniemiec/brief/summarize"
@@ -214,6 +216,7 @@ type Result struct {
 	Slug            string
 	Cost            store.CostRecord
 	ExtractionStats string // human-readable extraction stats line
+	Teaser          bool   // true if article was below min_words threshold
 }
 
 // Run executes the full ingest pipeline and returns the new article slug.
@@ -223,6 +226,12 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	if progress == nil {
 		progress = func(string) {}
 	}
+
+	source := req.URL
+	if source == "" {
+		source = req.File
+	}
+	slog.Info("ingest start", "source", source)
 
 	// ── 1. Extract ────────────────────────────────────────────────────────
 	var extracted extractor.Result
@@ -258,14 +267,27 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	}
 
 	if strings.TrimSpace(extracted.Text) == "" {
+		slog.Error("extraction produced no text", "source", source)
 		return Result{}, fmt.Errorf("extraction produced no text")
 	}
 
 	stats := extracted.Stats()
 	progress(stats)
 
+	// ── Teaser detection ──────────────────────────────────────────────────
+	minWords := cfg.Ingest.MinWords
+	if minWords <= 0 {
+		minWords = 300
+	}
+	wordCount := len(strings.Fields(extracted.Text))
+	isTeaser := wordCount < minWords
+	if isTeaser {
+		slog.Info("teaser detected", "source", source, "words", wordCount, "threshold", minWords)
+		progress(fmt.Sprintf("teaser detected (%d words, threshold %d) — skipping LLM generation", wordCount, minWords))
+	}
+
 	if req.DryRun {
-		return Result{ExtractionStats: stats}, nil
+		return Result{ExtractionStats: stats, Teaser: isTeaser}, nil
 	}
 
 	// ── 2. Resolve profiles and styles ───────────────────────────────────
@@ -296,6 +318,77 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	}
 
 	var costRec store.CostRecord
+
+	// ── Teaser fast-path: skip all LLM steps ─────────────────────────────
+	if isTeaser {
+		title := req.Title
+		if title == "" {
+			if extracted.Title != "" {
+				title = extracted.Title
+			} else {
+				title = "Untitled"
+			}
+		}
+		progress("title: " + title)
+		date := time.Now().Format("20060102")
+		slug := date + "-" + slugify(title)
+		progress("slug: " + slug)
+		progress("writing files (teaser)...")
+
+		dir := filepath.Join(cfg.ArticlesRoot, slug)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return Result{}, fmt.Errorf("mkdir %s: %w", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "body.txt"), []byte(extracted.Text), 0644); err != nil {
+			return Result{}, fmt.Errorf("write body: %w", err)
+		}
+		if req.URL != "" {
+			_ = os.WriteFile(filepath.Join(dir, "source.url"), []byte(req.URL+"\n"), 0644)
+		}
+
+		now := time.Now().UTC().Format(time.RFC3339)
+		collections := []string{}
+		if req.Collection != "" {
+			collections = []string{req.Collection}
+		}
+		meta := fs.Meta{
+			ID:          slug,
+			Title:       title,
+			URL:         req.URL,
+			SourceType:  sourceType,
+			Author:      extracted.Author,
+			Language:    extracted.Language,
+			IngestedAt:  now,
+			Collections: collections,
+			Tags:        []fs.MetaTag{{Value: "teaser", Source: "auto"}},
+		}
+		if err := fs.WriteMeta(dir, meta); err != nil {
+			return Result{}, fmt.Errorf("write meta: %w", err)
+		}
+
+		// Still embed — useful for search even with short content.
+		var embedModel string
+		if !req.NoEmbed && req.VectorStore != nil && cfg.Ingest.EmbedProfile != "" {
+			if embedProf, err := lookupProfile(cfg, cfg.Ingest.EmbedProfile); err == nil {
+				if embedClient, err := embed.NewClient(embedProf.Model); err == nil {
+					if er, err := embedClient.Embed(ctx, extracted.Text); err == nil {
+						if uErr := req.VectorStore.Upsert(ctx, slug, er.Embedding, extracted.Text); uErr == nil {
+							embedModel = embedProf.Model
+						}
+					}
+				}
+			}
+		}
+		if embedModel != "" {
+			meta.EmbedModel = embedModel
+			_ = fs.WriteMeta(dir, meta)
+		}
+
+		appendEvent(cfg.EventsPath, store.Event{
+			TS: time.Now().UTC(), Type: "ingest", ArticleID: slug,
+		})
+		return Result{Slug: slug, Teaser: true, ExtractionStats: stats}, nil
+	}
 
 	// ── 4. Title ──────────────────────────────────────────────────────────
 	title := req.Title
@@ -335,6 +428,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	}
 	summaryText, su, err := summarizeText(ctx, summaryProvider, extracted.Text, title, req.URL, summaryStyle, summaryProf.Model, cfg.Ingest.ChunkTokens, cfg.Ingest.SummaryMaxTokens, cfg.StylePrompt(summaryStyle), progress)
 	if err != nil {
+		slog.Error("summarize failed", "slug", slug, "err", err)
 		return Result{}, fmt.Errorf("summarize: %w", err)
 	}
 	costRec.Summary = store.CostEntry{
@@ -486,6 +580,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		Cost:      &costRec,
 	})
 
+	slog.Info("ingest done", "slug", slug, "cost_usd", costRec.TotalUSD)
 	return Result{Slug: slug, Cost: costRec, ExtractionStats: stats}, nil
 }
 
