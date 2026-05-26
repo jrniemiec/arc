@@ -225,7 +225,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	case req.URL != "":
 		progress("fetching " + req.URL)
 		var err error
-		extracted, err = extractor.FromURL(ctx, req.URL)
+		extracted, err = extractor.FromURLWithCookies(ctx, req.URL, cfg.CookieJars)
 		if err != nil {
 			return Result{}, fmt.Errorf("extract url: %w", err)
 		}

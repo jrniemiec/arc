@@ -1,18 +1,28 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/ingest/extractor"
 )
 
 func init() {
-	// Override PersistentPreRunE so extract does not open the library.
-	extractCmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
+	// Override PersistentPreRunE so extract loads config but does not open the library.
+	extractCmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		cfg, err := loadConfig()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		ctx := context.WithValue(cmd.Context(), keyConfig, cfg)
+		cmd.SetContext(ctx)
+		return nil
+	}
 	rootCmd.AddCommand(extractCmd)
 }
 
@@ -36,10 +46,12 @@ Examples:
 		var result extractor.Result
 		var err error
 
+		cfg := cmd.Context().Value(keyConfig).(config.Config)
+
 		switch {
 		case strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://"):
 			fmt.Fprintf(cmd.ErrOrStderr(), "fetching %s...\n", input)
-			result, err = extractor.FromURL(ctx, input)
+			result, err = extractor.FromURLWithCookies(ctx, input, cfg.CookieJars)
 		case strings.HasSuffix(strings.ToLower(input), ".pdf"):
 			fmt.Fprintf(cmd.ErrOrStderr(), "extracting PDF...\n")
 			result, err = extractor.FromPDF(ctx, input)

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -148,8 +149,87 @@ func formatBytes(n int) string {
 	}
 }
 
+// cookiesForURL returns cookies from the jar map that match the URL's host.
+// A jar entry matches if the URL host equals or ends with the domain key.
+func cookiesForURL(rawURL string, jars map[string]string) []*http.Cookie {
+	if len(jars) == 0 {
+		return nil
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil
+	}
+	host := strings.ToLower(u.Hostname())
+
+	for domain, path := range jars {
+		domain = strings.ToLower(strings.TrimPrefix(domain, "."))
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return parseNetscapeCookies(path)
+		}
+	}
+	return nil
+}
+
+// parseNetscapeCookies reads a Netscape/curl cookie jar file and returns HTTP cookies.
+// Lines starting with '#' are comments (except #HttpOnly_ prefixed domain lines).
+// Format: domain \t flag \t path \t secure \t expiry \t name \t value
+func parseNetscapeCookies(path string) []*http.Cookie {
+	// Expand ~ in path
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, path[2:])
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var cookies []*http.Cookie
+	for _, line := range strings.Split(string(data), "\n") {
+		// Strip #HttpOnly_ prefix — these are valid cookies
+		line = strings.TrimPrefix(line, "#HttpOnly_")
+		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 7 {
+			continue
+		}
+		cookies = append(cookies, &http.Cookie{
+			Name:  fields[5],
+			Value: fields[6],
+		})
+	}
+	return cookies
+}
+
+// fetchViaJina retries a URL through the Jina reader proxy.
+func fetchViaJina(ctx context.Context, client *http.Client, rawURL, userAgent string) (*http.Response, bool, error) {
+	jinaURL := "https://r.jina.ai/" + rawURL
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jinaURL, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("build jina request: %w", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("X-Return-Format", "markdown")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("fetch via jina %s: %w", rawURL, err)
+	}
+	return resp, true, nil
+}
+
 // FromURL fetches a URL and extracts the main article text via Readability.
 func FromURL(ctx context.Context, rawURL string) (Result, error) {
+	return fromURL(ctx, rawURL, nil)
+}
+
+// FromURLWithCookies fetches a URL using the provided cookie jar map.
+func FromURLWithCookies(ctx context.Context, rawURL string, cookieJars map[string]string) (Result, error) {
+	return fromURL(ctx, rawURL, cookieJars)
+}
+
+func fromURL(ctx context.Context, rawURL string, cookieJars map[string]string) (Result, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return Result{}, fmt.Errorf("parse url: %w", err)
@@ -162,28 +242,28 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	}
 	req.Header.Set("User-Agent", "arc/1.0 (+https://github.com/jrniemiec/arc)")
 
+	// Inject cookies from the matching jar, if any.
+	cookies := cookiesForURL(rawURL, cookieJars)
+	hasCookies := len(cookies) > 0
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+
 	fetchStart := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("fetch %s: %w", rawURL, err)
 	}
 
-	// On 403, retry via Jina reader proxy (handles paywalls and bot-detection).
+	// On 403 with no cookies, retry via Jina.
+	// With cookies, a 403 means auth failed — Jina won't help.
 	viaJina := false
-	if resp.StatusCode == http.StatusForbidden {
+	if resp.StatusCode == http.StatusForbidden && !hasCookies {
 		resp.Body.Close()
-		jinaURL := "https://r.jina.ai/" + rawURL
-		req2, err := http.NewRequestWithContext(ctx, http.MethodGet, jinaURL, nil)
+		resp, viaJina, err = fetchViaJina(ctx, client, rawURL, req.Header.Get("User-Agent"))
 		if err != nil {
-			return Result{}, fmt.Errorf("build jina request: %w", err)
+			return Result{}, err
 		}
-		req2.Header.Set("User-Agent", req.Header.Get("User-Agent"))
-		req2.Header.Set("X-Return-Format", "markdown")
-		resp, err = client.Do(req2)
-		if err != nil {
-			return Result{}, fmt.Errorf("fetch via jina %s: %w", rawURL, err)
-		}
-		viaJina = true
 	}
 	defer resp.Body.Close()
 
@@ -200,7 +280,6 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 	var text, title, author, language string
 
 	if viaJina {
-		// Jina returns cleaned markdown — extract text directly without readability.
 		text = cleanJinaMarkdown(string(body))
 		title = extractJinaTitle(string(body))
 	} else {
@@ -219,7 +298,25 @@ func FromURL(ctx context.Context, rawURL string) (Result, error) {
 		language = article.Language()
 	}
 
-	// Detect bot-check pages that slipped through (Jina fallback may return these).
+	// If direct fetch returned a bot-check page, retry via Jina regardless of cookies.
+	// Jina has its own rendering pipeline that often bypasses these interstitials.
+	if !viaJina && isBotCheckPage(text) {
+		resp.Body.Close()
+		jinaResp, _, err := fetchViaJina(ctx, client, rawURL, req.Header.Get("User-Agent"))
+		if err != nil {
+			return Result{}, fmt.Errorf("fetch %s: site requires JavaScript or bot verification — try downloading the page manually", rawURL)
+		}
+		defer jinaResp.Body.Close()
+		jinaBody, err := io.ReadAll(jinaResp.Body)
+		if err != nil {
+			return Result{}, fmt.Errorf("read jina response: %w", err)
+		}
+		text = cleanJinaMarkdown(string(jinaBody))
+		title = extractJinaTitle(string(jinaBody))
+		body = jinaBody
+	}
+
+	// Final bot-check guard — if Jina also returned a bot-check page, give up.
 	if isBotCheckPage(text) {
 		return Result{}, fmt.Errorf("fetch %s: site requires JavaScript or bot verification — try downloading the page manually", rawURL)
 	}

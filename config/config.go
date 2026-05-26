@@ -29,6 +29,11 @@ type Config struct {
 
 	// PreferredStyles controls variant file selection for summaries/flashcards.
 	PreferredStyles []string `json:"preferred_styles"`
+
+	// CookieJars maps domain suffixes to Netscape cookie jar file paths.
+	// e.g. {"medium.com": "~/.arc/cookies/medium.txt"}
+	// Used automatically when fetching URLs whose host matches a key.
+	CookieJars map[string]string `json:"cookie_jars,omitempty"`
 }
 
 // Profile describes one LLM provider+model combination.
@@ -296,6 +301,7 @@ func Load(path string) (Config, error) {
 		Ingest          IngestConfig       `json:"ingest"`
 		PreferredModels []string           `json:"preferred_models"`
 		PreferredStyles []string           `json:"preferred_styles"`
+		CookieJars      map[string]string  `json:"cookie_jars"`
 	}
 	if err := json.NewDecoder(f).Decode(&overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -365,6 +371,9 @@ func Load(path string) (Config, error) {
 	}
 	if len(overlay.PreferredStyles) > 0 {
 		cfg.PreferredStyles = overlay.PreferredStyles
+	}
+	if len(overlay.CookieJars) > 0 {
+		cfg.CookieJars = overlay.CookieJars
 	}
 
 	return cfg, nil
