@@ -218,6 +218,15 @@ var builtinProfiles = map[string]Profile{
 			Pricing:     &ProfilePricing{Input: 0.80, Output: 4.00},
 		},
 	},
+	"oai-embed": {
+		Provider: "openai",
+		Model:    "text-embedding-3-small",
+		Info: ProfileInfo{
+			CostTier:    "very_low",
+			CostVsValue: "OpenAI text-embedding-3-small. Used for semantic search vector index. 1536 dims, ~$0.02/million tokens.",
+			Pricing:     &ProfilePricing{Input: 0.02},
+		},
+	},
 	"llama": {
 		Provider: "ollama",
 		Host:     "http://localhost:11434",
@@ -259,7 +268,7 @@ func Default() Config {
 			FlashcardProfile:  "oai-mini",
 			SummaryStyle:      "study-notes",
 			FlashcardStyle:    "socratic",
-			EmbedProfile:      "llama",
+			EmbedProfile:      "oai-embed",
 			ChunkTokens:       900,
 			SummaryMaxTokens:  2048,
 			SummaryStyles:     builtinSummaryStyles,

@@ -3,16 +3,22 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/ingest/embed"
+	"github.com/jrniemiec/arc/ingest/extractor"
 	"github.com/jrniemiec/arc/ingest/pipeline"
 	"github.com/jrniemiec/arc/library"
 	"github.com/jrniemiec/arc/store"
 	"github.com/jrniemiec/arc/store/fs"
+	"github.com/jrniemiec/arc/store/vector"
 )
 
 // Service is the arc business logic layer. All frontends (CLI, TUI, MCP, bot)
@@ -20,11 +26,17 @@ import (
 type Service struct {
 	lib *library.Library
 	cfg config.Config
+	vec *vector.Store // nil if vector index could not be opened
 }
 
 // New creates a Service from an open Library.
+// It attempts to open the vector index at cfg.VectorPath; failures are non-fatal.
 func New(lib *library.Library, cfg config.Config) *Service {
-	return &Service{lib: lib, cfg: cfg}
+	svc := &Service{lib: lib, cfg: cfg}
+	if vs, err := vector.Open(cfg.VectorPath); err == nil {
+		svc.vec = vs
+	}
+	return svc
 }
 
 // Reindex rebuilds the SQLite index from the filesystem.
@@ -33,7 +45,312 @@ func (s *Service) Reindex(ctx context.Context, progress func(indexed, total int)
 	return s.lib.Reindex(ctx, progress)
 }
 
-// Search runs a keyword (FTS5) or semantic search and returns ranked results.
+// ReindexEmbed generates embeddings for articles that have a summary but no
+// embed_model recorded. progress is called with (embedded, total) after each
+// article. Returns the number of articles embedded.
+func (s *Service) ReindexEmbed(ctx context.Context, progress func(done, total int)) (int, error) {
+	if s.vec == nil {
+		return 0, fmt.Errorf("vector store not available")
+	}
+	if s.cfg.Ingest.EmbedProfile == "" {
+		return 0, fmt.Errorf("embed_profile not configured")
+	}
+	prof, ok := s.cfg.Profiles[s.cfg.Ingest.EmbedProfile]
+	if !ok {
+		return 0, fmt.Errorf("embed profile %q not found", s.cfg.Ingest.EmbedProfile)
+	}
+	embedClient, err := embed.NewClient(prof.Model)
+	if err != nil {
+		return 0, fmt.Errorf("embed client: %w", err)
+	}
+
+	articles, err := s.lib.List(ctx, store.Filter{})
+	if err != nil {
+		return 0, fmt.Errorf("list articles: %w", err)
+	}
+
+	// Only articles that have a summary but no embedding yet.
+	var pending []store.Article
+	for _, a := range articles {
+		if a.EmbedModel == "" && a.SummaryModel != "" && a.Files.Summary != "" {
+			pending = append(pending, a)
+		}
+	}
+
+	if progress == nil {
+		progress = func(int, int) {}
+	}
+
+	embedded := 0
+	for _, a := range pending {
+		summaryText, err := s.lib.ReadSummary(a)
+		if err != nil || strings.TrimSpace(summaryText) == "" {
+			continue
+		}
+		er, err := embedClient.Embed(ctx, summaryText)
+		if err != nil {
+			continue
+		}
+		if err := s.vec.Upsert(ctx, a.ID, er.Embedding, summaryText); err != nil {
+			continue
+		}
+		embedded++
+		progress(embedded, len(pending))
+	}
+	return embedded, nil
+}
+
+// Reprocess re-runs generation steps on existing articles.
+// It respects the No* flags and optionally cleans or refetches before regenerating.
+// After all articles are processed it rebuilds the SQLite index from the filesystem.
+func (s *Service) Reprocess(ctx context.Context, req ReprocessRequest) (ReprocessResult, error) {
+	var articles []store.Article
+	if req.All {
+		var err error
+		articles, err = s.lib.List(ctx, store.Filter{})
+		if err != nil {
+			return ReprocessResult{}, fmt.Errorf("list articles: %w", err)
+		}
+	} else {
+		id, err := s.ResolveSlug(ctx, req.Slug)
+		if err != nil {
+			return ReprocessResult{}, err
+		}
+		a, err := s.lib.Get(ctx, id)
+		if err != nil {
+			return ReprocessResult{}, err
+		}
+		articles = []store.Article{a}
+	}
+
+	progress := req.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	var result ReprocessResult
+	for i, a := range articles {
+		prefix := fmt.Sprintf("[%d/%d] %s: ", i+1, len(articles), a.ID)
+		articleReq := req
+		articleReq.Progress = func(msg string) { progress(prefix + msg) }
+
+		cost, err := s.reprocessOne(ctx, a, articleReq)
+		result.CostUSD += cost
+		if err != nil {
+			progress(prefix + "error: " + err.Error())
+			result.Skipped++
+			continue
+		}
+		result.Processed++
+	}
+
+	// Rebuild SQLite index from updated filesystem state.
+	if err := s.lib.Reindex(ctx, nil); err != nil {
+		return result, fmt.Errorf("reindex: %w", err)
+	}
+
+	return result, nil
+}
+
+// reprocessOne runs the reprocess pipeline for a single article.
+func (s *Service) reprocessOne(ctx context.Context, a store.Article, req ReprocessRequest) (float64, error) {
+	articleDir := filepath.Join(s.cfg.ArticlesRoot, a.ID)
+	progress := req.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	// 1. Replace body from file/stdin.
+	if req.BodyFile != "" {
+		var data []byte
+		var err error
+		if req.BodyFile == "-" {
+			data, err = io.ReadAll(os.Stdin)
+		} else {
+			data, err = os.ReadFile(req.BodyFile)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("read body file: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(articleDir, "body.txt"), data, 0644); err != nil {
+			return 0, fmt.Errorf("write body.txt: %w", err)
+		}
+		progress("replaced body.txt")
+	}
+
+	// 2. Refetch from source URL or PDF.
+	if req.Refetch {
+		if a.URL != "" {
+			progress("fetching " + a.URL)
+			res, err := extractor.FromURLWithCookies(ctx, a.URL, s.cfg.CookieJars)
+			if err != nil {
+				return 0, fmt.Errorf("refetch: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(articleDir, "body.txt"), []byte(res.Text), 0644); err != nil {
+				return 0, fmt.Errorf("write body.txt: %w", err)
+			}
+			progress("refetched from URL")
+		} else if a.Files.SourcePDF != "" {
+			progress("re-extracting PDF")
+			res, err := extractor.FromPDF(ctx, a.Files.SourcePDF)
+			if err != nil {
+				return 0, fmt.Errorf("refetch pdf: %w", err)
+			}
+			if err := os.WriteFile(filepath.Join(articleDir, "body.txt"), []byte(res.Text), 0644); err != nil {
+				return 0, fmt.Errorf("write body.txt: %w", err)
+			}
+			progress("re-extracted from PDF")
+		} else {
+			return 0, fmt.Errorf("no source URL or PDF — use --body to replace body.txt manually")
+		}
+	}
+
+	// 3. Clean existing variant files and model state.
+	if req.Clean {
+		for _, f := range fs.ListSummaries(articleDir) {
+			os.Remove(f)
+		}
+		for _, f := range fs.ListFlashes(articleDir) {
+			os.Remove(f)
+		}
+		for _, f := range fs.ListFlashcards(articleDir) {
+			os.Remove(f)
+		}
+		if s.vec != nil {
+			s.vec.Delete(ctx, a.ID)
+		}
+		if err := s.clearMetaModels(a.ID); err != nil {
+			return 0, fmt.Errorf("clear meta: %w", err)
+		}
+		progress("cleaned variants")
+	}
+
+	var totalCost float64
+	var mu metaModelUpdate
+
+	// 4. Summarize.
+	if !req.NoSummary {
+		progress("summarizing...")
+		r, err := s.Summarize(ctx, SummarizeRequest{Slug: a.ID, Write: true})
+		if err != nil {
+			return totalCost, fmt.Errorf("summarize: %w", err)
+		}
+		totalCost += r.CostUSD
+		mu.SummaryModel = r.Model
+		mu.SummaryStyle = r.Style
+		progress(fmt.Sprintf("summarized (%s, $%.4f)", r.Model, r.CostUSD))
+	}
+
+	// 5. Flash.
+	if !req.NoFlash {
+		progress("flash...")
+		r, err := s.Flash(ctx, FlashRequest{Slug: a.ID, Write: true})
+		if err != nil {
+			return totalCost, fmt.Errorf("flash: %w", err)
+		}
+		totalCost += r.CostUSD
+		mu.FlashModel = r.Model
+		progress(fmt.Sprintf("flash (%s, $%.4f)", r.Model, r.CostUSD))
+	}
+
+	// 6. Flashcards.
+	if !req.NoFlashcards {
+		progress("flashcards...")
+		r, err := s.Flashcards(ctx, FlashcardsRequest{Slug: a.ID, Write: true})
+		if err != nil {
+			return totalCost, fmt.Errorf("flashcards: %w", err)
+		}
+		totalCost += r.CostUSD
+		mu.FlashcardModel = r.Model
+		mu.FlashcardStyle = r.Style
+		progress(fmt.Sprintf("flashcards (%s, $%.4f)", r.Model, r.CostUSD))
+	}
+
+	// 7. Embed.
+	if !req.NoEmbed && s.vec != nil && s.cfg.Ingest.EmbedProfile != "" {
+		if prof, ok := s.cfg.Profiles[s.cfg.Ingest.EmbedProfile]; ok {
+			// Re-get article to resolve newly written summary file.
+			a2, _ := s.lib.Get(ctx, a.ID)
+			if summaryText, err := s.lib.ReadSummary(a2); err == nil && strings.TrimSpace(summaryText) != "" {
+				if client, err := embed.NewClient(prof.Model); err == nil {
+					if er, err := client.Embed(ctx, summaryText); err == nil {
+						if err := s.vec.Upsert(ctx, a.ID, er.Embedding, summaryText); err == nil {
+							mu.EmbedModel = prof.Model
+							cost := s.cfg.CalcCost(prof.Model, er.Tokens, 0)
+							totalCost += cost
+							progress(fmt.Sprintf("embedded (%s)", prof.Model))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 8. Persist updated model/style metadata.
+	if err := s.updateMetaModels(a.ID, mu); err != nil {
+		return totalCost, fmt.Errorf("update meta: %w", err)
+	}
+
+	return totalCost, nil
+}
+
+type metaModelUpdate struct {
+	SummaryModel   string
+	SummaryStyle   string
+	FlashModel     string
+	FlashcardModel string
+	FlashcardStyle string
+	EmbedModel     string
+}
+
+func (s *Service) clearMetaModels(id string) error {
+	dir := filepath.Join(s.cfg.ArticlesRoot, id)
+	metaPath := filepath.Join(dir, "meta.json")
+	m, err := fs.ReadMeta(metaPath)
+	if err != nil {
+		return err
+	}
+	m.SummaryModel = ""
+	m.SummaryStyle = ""
+	m.FlashModel = ""
+	m.FlashcardModel = ""
+	m.FlashcardStyle = ""
+	m.EmbedModel = ""
+	return fs.WriteMeta(dir, m)
+}
+
+func (s *Service) updateMetaModels(id string, u metaModelUpdate) error {
+	if u == (metaModelUpdate{}) {
+		return nil // nothing to update
+	}
+	dir := filepath.Join(s.cfg.ArticlesRoot, id)
+	metaPath := filepath.Join(dir, "meta.json")
+	m, err := fs.ReadMeta(metaPath)
+	if err != nil {
+		return err
+	}
+	if u.SummaryModel != "" {
+		m.SummaryModel = u.SummaryModel
+	}
+	if u.SummaryStyle != "" {
+		m.SummaryStyle = u.SummaryStyle
+	}
+	if u.FlashModel != "" {
+		m.FlashModel = u.FlashModel
+	}
+	if u.FlashcardModel != "" {
+		m.FlashcardModel = u.FlashcardModel
+	}
+	if u.FlashcardStyle != "" {
+		m.FlashcardStyle = u.FlashcardStyle
+	}
+	if u.EmbedModel != "" {
+		m.EmbedModel = u.EmbedModel
+	}
+	return fs.WriteMeta(dir, m)
+}
+
+// Search runs a keyword (FTS5), semantic (vector), or combined search.
 func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
 	if strings.TrimSpace(req.Query) == "" {
 		return nil, fmt.Errorf("search query cannot be empty")
@@ -44,31 +361,179 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 		limit = 20
 	}
 
+	// Determine effective mode: fall back to keyword if no vector store available.
+	mode := req.Mode
+	if mode != store.QueryKeyword && s.vec == nil {
+		mode = store.QueryKeyword
+	}
+
+	switch mode {
+	case store.QuerySemantic:
+		return s.searchSemantic(ctx, req.Query, limit)
+	case store.QueryCombined:
+		return s.searchCombined(ctx, req, limit)
+	default:
+		return s.searchKeyword(ctx, req, limit)
+	}
+}
+
+func (s *Service) searchKeyword(ctx context.Context, req SearchRequest, limit int) ([]SearchResult, error) {
 	q := store.Query{
 		Text: req.Query,
-		Mode: req.Mode,
+		Mode: store.QueryKeyword,
 		TopK: limit,
 		Filter: store.Filter{
 			Collection: req.Collection,
 			Tags:       req.Tags,
 		},
 	}
-
 	hits, err := s.lib.Search(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("search: %w", err)
+		return nil, fmt.Errorf("fts search: %w", err)
 	}
-
 	results := make([]SearchResult, 0, len(hits))
 	for _, h := range hits {
 		results = append(results, SearchResult{
 			Article: h.Article,
 			Score:   h.Score,
 			Excerpt: h.Excerpt,
-			Source:  h.Source,
+			Source:  "fts",
 		})
 	}
 	return results, nil
+}
+
+func (s *Service) searchSemantic(ctx context.Context, query string, limit int) ([]SearchResult, error) {
+	embedding, err := s.embedQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	hits, err := s.vec.Query(ctx, embedding, limit, 0.5)
+	if err != nil {
+		return nil, fmt.Errorf("vector search: %w", err)
+	}
+	results := make([]SearchResult, 0, len(hits))
+	for _, h := range hits {
+		a, err := s.lib.Get(ctx, h.ID)
+		if err != nil {
+			continue
+		}
+		results = append(results, SearchResult{
+			Article: a,
+			Score:   float64(h.Similarity),
+			Source:  "vector",
+		})
+	}
+	return results, nil
+}
+
+func (s *Service) searchCombined(ctx context.Context, req SearchRequest, limit int) ([]SearchResult, error) {
+	// Run FTS and vector searches concurrently.
+	type ftsOut struct {
+		results []SearchResult
+		err     error
+	}
+	type vecOut struct {
+		results []SearchResult
+		err     error
+	}
+	ftsCh := make(chan ftsOut, 1)
+	vecCh := make(chan vecOut, 1)
+
+	go func() {
+		r, err := s.searchKeyword(ctx, req, limit)
+		ftsCh <- ftsOut{r, err}
+	}()
+	go func() {
+		r, err := s.searchSemantic(ctx, req.Query, limit)
+		vecCh <- vecOut{r, err}
+	}()
+
+	ftsResult := <-ftsCh
+	vecResult := <-vecCh
+
+	// If both fail, return the FTS error.
+	if ftsResult.err != nil && vecResult.err != nil {
+		return nil, ftsResult.err
+	}
+
+	// Merge: normalize each set to [0,1] then sum.
+	type merged struct {
+		r     SearchResult
+		score float64
+	}
+	byID := make(map[string]*merged)
+
+	normalize := func(results []SearchResult) {
+		if len(results) == 0 {
+			return
+		}
+		// BM25 scores are negative (lower = better); invert and normalize.
+		// Vector similarity is already [0,1].
+		maxAbs := 0.0
+		for _, r := range results {
+			if abs := math.Abs(r.Score); abs > maxAbs {
+				maxAbs = abs
+			}
+		}
+		for _, r := range results {
+			norm := 0.0
+			if maxAbs > 0 {
+				norm = 1.0 - math.Abs(r.Score)/maxAbs
+			}
+			if m, ok := byID[r.Article.ID]; ok {
+				m.score += norm
+				if m.r.Source != r.Source {
+					m.r.Source = "both"
+				}
+				if m.r.Excerpt == "" {
+					m.r.Excerpt = r.Excerpt
+				}
+			} else {
+				rc := r
+				byID[r.Article.ID] = &merged{r: rc, score: norm}
+			}
+		}
+	}
+
+	if ftsResult.err == nil {
+		normalize(ftsResult.results)
+	}
+	if vecResult.err == nil {
+		normalize(vecResult.results)
+	}
+
+	// Collect, sort by combined score descending, trim to limit.
+	out := make([]SearchResult, 0, len(byID))
+	for _, m := range byID {
+		m.r.Score = m.score
+		out = append(out, m.r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// embedQuery generates an embedding for a search query using the configured embed profile.
+func (s *Service) embedQuery(ctx context.Context, query string) ([]float32, error) {
+	if s.cfg.Ingest.EmbedProfile == "" {
+		return nil, fmt.Errorf("embed_profile not configured")
+	}
+	prof, ok := s.cfg.Profiles[s.cfg.Ingest.EmbedProfile]
+	if !ok {
+		return nil, fmt.Errorf("embed profile %q not found", s.cfg.Ingest.EmbedProfile)
+	}
+	client, err := embed.NewClient(prof.Model)
+	if err != nil {
+		return nil, fmt.Errorf("embed client: %w", err)
+	}
+	result, err := client.Embed(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+	return result.Embedding, nil
 }
 
 // List returns articles matching the filter.
@@ -160,7 +625,7 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 	tagSet := make(map[string]struct{})
 	byModel := make(map[string]int)
 	byStyle := make(map[string]int)
-	var unread, unplayed int
+	var unread, unplayed, embedCoverage int
 	for _, a := range articles {
 		for _, t := range a.Tags {
 			tagSet[t.Value] = struct{}{}
@@ -177,6 +642,9 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		if a.SummaryStyle != "" {
 			byStyle[a.SummaryStyle]++
 		}
+		if a.EmbedModel != "" {
+			embedCoverage++
+		}
 	}
 
 	// Cost from events.jsonl
@@ -188,6 +656,7 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		TotalTags:        len(tagSet),
 		Unread:           unread,
 		Unplayed:         unplayed,
+		EmbedCoverage:    embedCoverage,
 		CostThisMonth:    costMonth,
 		CostTotal:        costTotal,
 		CostByModel:      costByModel,
@@ -412,6 +881,8 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 		FlashcardModel: req.FlashcardProfile,
 		FlashcardStyle: req.FlashcardStyle,
 		NoFlashcards:   req.NoFlashcards,
+		NoEmbed:        req.NoEmbed,
+		VectorStore:    s.vec,
 		DryRun:         req.DryRun,
 		Progress:       req.Progress,
 	})

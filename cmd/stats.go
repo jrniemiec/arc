@@ -39,8 +39,13 @@ var statsCmd = &cobra.Command{
 			tierByModel[p.Model] = p.Info.CostTier
 		}
 
-		fmt.Fprintf(w, "Articles:    %d  (unread: %d, unplayed: %d)\n",
-			stats.TotalArticles, stats.Unread, stats.Unplayed)
+		embedPct := 0
+		if stats.TotalArticles > 0 {
+			embedPct = stats.EmbedCoverage * 100 / stats.TotalArticles
+		}
+		fmt.Fprintf(w, "Articles:    %d  (unread: %d, unplayed: %d, embedded: %d/%d %d%%)\n",
+			stats.TotalArticles, stats.Unread, stats.Unplayed,
+			stats.EmbedCoverage, stats.TotalArticles, embedPct)
 		fmt.Fprintf(w, "Collections: %d\n", stats.TotalCollections)
 		fmt.Fprintf(w, "Tags:        %d\n", stats.TotalTags)
 

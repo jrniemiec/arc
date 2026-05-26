@@ -58,6 +58,7 @@ type IngestRequest struct {
 
 	// Flags
 	NoFlashcards bool
+	NoEmbed      bool
 	DryRun       bool
 
 	// Progress is called with a human-readable status at each pipeline step.
@@ -143,6 +144,7 @@ type Stats struct {
 	TotalTags        int
 	Unread           int
 	Unplayed         int
+	EmbedCoverage    int // articles with an embedding
 	CostThisMonth    float64
 	CostTotal        float64
 
@@ -150,4 +152,25 @@ type Stats struct {
 	CostByModel      map[string]float64 // total USD spent per model (all operations)
 	ArticlesByModel  map[string]int     // article count by summary model
 	ArticlesByStyle  map[string]int     // article count by summary style
+}
+
+// ReprocessRequest describes which articles to reprocess and how.
+type ReprocessRequest struct {
+	Slug         string // article ID or fuzzy slug; ignored when All=true
+	All          bool   // process all articles
+	Clean        bool   // delete existing variant files before regenerating
+	Refetch      bool   // re-fetch body from source URL or PDF
+	BodyFile     string // replace body.txt from this file ("-" = stdin)
+	NoSummary    bool
+	NoFlash      bool
+	NoFlashcards bool
+	NoEmbed      bool
+	Progress     func(msg string)
+}
+
+// ReprocessResult summarizes a reprocess run.
+type ReprocessResult struct {
+	Processed int
+	Skipped   int
+	CostUSD   float64
 }

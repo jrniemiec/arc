@@ -11,12 +11,13 @@ import (
 )
 
 var (
-	ingestTitle          string
-	ingestCollection     string
-	ingestSummaryStyle   string
-	ingestProfile        string
-	ingestNoFlashcards   bool
-	ingestDryRun         bool
+	ingestTitle        string
+	ingestCollection   string
+	ingestSummaryStyle string
+	ingestProfile      string
+	ingestNoFlashcards bool
+	ingestNoEmbed      bool
+	ingestDryRun       bool
 )
 
 func init() {
@@ -25,6 +26,7 @@ func init() {
 	ingestCmd.Flags().StringVar(&ingestSummaryStyle, "summary-style", "", "summary style: study-notes|bullets|technical|executive (default: config)")
 	ingestCmd.Flags().StringVar(&ingestProfile, "profile", "", "override profile for all generation steps (e.g. oai-mini, opus)")
 	ingestCmd.Flags().BoolVar(&ingestNoFlashcards, "no-flashcards", false, "skip flashcard generation")
+	ingestCmd.Flags().BoolVar(&ingestNoEmbed, "no-embed", false, "skip vector embedding generation")
 	ingestCmd.Flags().BoolVar(&ingestDryRun, "dry-run", false, "extract only, do not write files or call LLM")
 	rootCmd.AddCommand(ingestCmd)
 }
@@ -53,6 +55,7 @@ Examples:
 			FlashProfile:     ingestProfile,
 			FlashcardProfile: ingestProfile,
 			NoFlashcards:     ingestNoFlashcards,
+			NoEmbed:          ingestNoEmbed,
 			DryRun:           ingestDryRun,
 		}
 

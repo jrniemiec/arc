@@ -102,6 +102,9 @@ var listCmd = &cobra.Command{
 				model := colorize(a.FlashcardModel, tierByModel[a.FlashcardModel], tty)
 				variants = append(variants, fmt.Sprintf("flashcards:%s/%s", a.FlashcardStyle, model))
 			}
+			if a.EmbedModel != "" {
+				variants = append(variants, fmt.Sprintf("embed:%s", a.EmbedModel))
+			}
 			if len(variants) > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "             %s\n", dim(strings.Join(variants, "  ·  "), tty))
 			}

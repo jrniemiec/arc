@@ -17,12 +17,14 @@ var (
 	searchCollection string
 	searchTag        string
 	searchLimit      int
+	searchNoSemantic bool
 )
 
 func init() {
 	searchCmd.Flags().StringVar(&searchCollection, "collection", "", "filter by collection ID")
 	searchCmd.Flags().StringVar(&searchTag, "tag", "", "filter by tag")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "maximum number of results")
+	searchCmd.Flags().BoolVar(&searchNoSemantic, "no-semantic", false, "keyword-only search, skip vector component")
 	rootCmd.AddCommand(searchCmd)
 }
 
@@ -43,7 +45,10 @@ func highlightSnippet(s string, tty bool) string {
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search articles by keyword",
-	Long: `Search the knowledge base by keyword and print matching articles with context snippets.
+	Long: `Search the knowledge base and print matching articles with context snippets.
+
+By default uses combined FTS5 keyword + semantic (vector) search when embeddings exist.
+Use --no-semantic for keyword-only search.
 
 Matched terms are highlighted in the excerpt (bold on terminal, *asterisks* in pipes).
 
@@ -51,6 +56,7 @@ Examples:
   arc search "attention mechanism"
   arc search "transformer" --limit 5
   arc search "diffusion" --tag ml
+  arc search "gpt" --no-semantic
   arc search "gpt" --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -61,11 +67,16 @@ Examples:
 			tags = []string{searchTag}
 		}
 
+		mode := store.QueryCombined
+		if searchNoSemantic {
+			mode = store.QueryKeyword
+		}
+
 		req := service.SearchRequest{
 			Query:      args[0],
 			Collection: searchCollection,
 			Tags:       tags,
-			Mode:       store.QueryKeyword,
+			Mode:       mode,
 			Limit:      searchLimit,
 		}
 
@@ -90,12 +101,13 @@ Examples:
 		for i, r := range results {
 			a := r.Article
 
-			// Line 1: index + slug + date
+			// Line 1: index + slug + date + source badge (when not pure FTS)
 			date := a.IngestedAt.Format("2006-01-02")
+			badge := "  " + dim("["+r.Source+"]", tty)
 			if tty {
-				fmt.Fprintf(w, "\033[1m%d.\033[0m  %s  \033[2m(%s)\033[0m\n", i+1, a.ID, date)
+				fmt.Fprintf(w, "\033[1m%d.\033[0m  %s  \033[2m(%s)\033[0m%s\n", i+1, a.ID, date, badge)
 			} else {
-				fmt.Fprintf(w, "%d.  %s  (%s)\n", i+1, a.ID, date)
+				fmt.Fprintf(w, "%d.  %s  (%s)%s\n", i+1, a.ID, date, badge)
 			}
 
 			// Line 2: title (if present)

@@ -19,9 +19,11 @@ import (
 	briefsummarize "github.com/jrniemiec/brief/summarize"
 	brieftypes "github.com/jrniemiec/brief/types"
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/ingest/embed"
 	"github.com/jrniemiec/arc/ingest/extractor"
 	"github.com/jrniemiec/arc/store"
 	"github.com/jrniemiec/arc/store/fs"
+	"github.com/jrniemiec/arc/store/vector"
 	"github.com/jrniemiec/llm"
 )
 
@@ -195,7 +197,12 @@ type Request struct {
 
 	// Flags
 	NoFlashcards bool
+	NoEmbed      bool
 	DryRun       bool
+
+	// VectorStore, if non-nil, receives the article embedding after generation.
+	// If nil or NoEmbed is true, the embed step is skipped.
+	VectorStore *vector.Store
 
 	// Progress is called with a human-readable status message at each pipeline step.
 	// May be nil.
@@ -374,9 +381,38 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		}
 	}
 
-	costRec.TotalUSD = costRec.Summary.USD + costRec.Flash.USD + costRec.Flashcards.USD
+	// ── 9. Embed ──────────────────────────────────────────────────────────
+	var embedModel string
+	if !req.NoEmbed && req.VectorStore != nil && summaryText != "" && cfg.Ingest.EmbedProfile != "" {
+		embedProf, err := lookupProfile(cfg, cfg.Ingest.EmbedProfile)
+		if err == nil {
+			progress(fmt.Sprintf("embedding (model: %s)...", embedProf.Model))
+			embedClient, err := embed.NewClient(embedProf.Model)
+			if err == nil {
+				er, err := embedClient.Embed(ctx, summaryText)
+				if err == nil {
+					if uErr := req.VectorStore.Upsert(ctx, slug, er.Embedding, summaryText); uErr == nil {
+						embedModel = embedProf.Model
+						embedUSD := float64(er.Tokens) * embedProf.Info.Pricing.Input / 1_000_000
+						costRec.Embed = store.EmbedCostEntry{
+							Model:  embedProf.Model,
+							Tokens: er.Tokens,
+							USD:    embedUSD,
+						}
+						progress(fmt.Sprintf("embedding done ($%.5f)", embedUSD))
+					}
+				} else {
+					progress(fmt.Sprintf("embedding skipped: %v", err))
+				}
+			} else {
+				progress(fmt.Sprintf("embedding skipped: %v", err))
+			}
+		}
+	}
 
-	// ── 9. Write files ────────────────────────────────────────────────────
+	costRec.TotalUSD = costRec.Summary.USD + costRec.Flash.USD + costRec.Flashcards.USD + costRec.Embed.USD
+
+	// ── 10. Write files ──────────────────────────────────────────────────
 	progress("writing files...")
 	dir := filepath.Join(cfg.ArticlesRoot, slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -416,7 +452,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		}
 	}
 
-	// ── 10. meta.json ─────────────────────────────────────────────────────
+	// ── 11. meta.json ─────────────────────────────────────────────────────
 	now := time.Now().UTC().Format(time.RFC3339)
 	collections := []string{}
 	if req.Collection != "" {
@@ -436,12 +472,13 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		FlashModel:     flashProf.Model,
 		FlashcardModel: flashcardProf.Model,
 		FlashcardStyle: flashcardStyle,
+		EmbedModel:     embedModel,
 	}
 	if err := fs.WriteMeta(dir, meta); err != nil {
 		return Result{}, fmt.Errorf("write meta: %w", err)
 	}
 
-	// ── 11. Append to events.jsonl ────────────────────────────────────────
+	// ── 12. Append to events.jsonl ───────────────────────────────────────
 	appendEvent(cfg.EventsPath, store.Event{
 		TS:        time.Now().UTC(),
 		Type:      "ingest",

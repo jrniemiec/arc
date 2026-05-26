@@ -80,6 +80,7 @@ Examples:
 		fmt.Fprintf(cmd.OutOrStdout(), "  summary:   %s\n", cfg.Ingest.SummaryProfile)
 		fmt.Fprintf(cmd.OutOrStdout(), "  flash:     %s\n", cfg.Ingest.FlashProfile)
 		fmt.Fprintf(cmd.OutOrStdout(), "  flashcard: %s\n", cfg.Ingest.FlashcardProfile)
+		fmt.Fprintf(cmd.OutOrStdout(), "  embed:     %s\n", cfg.Ingest.EmbedProfile)
 		fmt.Fprintln(cmd.OutOrStdout())
 
 		tty := isTTY(os.Stdout)
@@ -136,6 +137,9 @@ func activeSteps(name string, cfg config.Config) []string {
 	}
 	if cfg.Ingest.FlashcardProfile == name {
 		steps = append(steps, "flashcard")
+	}
+	if cfg.Ingest.EmbedProfile == name {
+		steps = append(steps, "embed")
 	}
 	return steps
 }
