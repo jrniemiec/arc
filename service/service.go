@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -932,6 +933,7 @@ func (s *Service) BatchIngest(ctx context.Context, req BatchIngestRequest) (Batc
 				result.Skipped++
 				continue
 			}
+			slog.Error("batch ingest item failed", "input", input, "index", i+1, "total", len(inputs), "err", err)
 			progress(prefix + "error: " + err.Error())
 			result.Errors++
 			continue
@@ -985,6 +987,11 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 		Progress:       req.Progress,
 	})
 	if err != nil {
+		source := req.URL
+		if source == "" {
+			source = req.File
+		}
+		slog.Error("ingest pipeline failed", "source", source, "err", err)
 		return IngestResult{}, fmt.Errorf("ingest pipeline: %w", err)
 	}
 
@@ -994,6 +1001,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 
 	// Index the new article into SQLite
 	if err := s.lib.Reindex(ctx, nil); err != nil {
+		slog.Error("reindex after ingest failed", "err", err)
 		return IngestResult{}, fmt.Errorf("reindex after ingest: %w", err)
 	}
 

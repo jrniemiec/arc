@@ -243,6 +243,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		var err error
 		extracted, err = extractor.FromURLWithCookies(ctx, req.URL, cfg.CookieJars)
 		if err != nil {
+			slog.Error("extraction failed", "source", source, "type", "url", "err", err)
 			return Result{}, fmt.Errorf("extract url: %w", err)
 		}
 		sourceType = "url"
@@ -252,6 +253,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		var err error
 		extracted, err = extractor.FromPDF(ctx, req.File)
 		if err != nil {
+			slog.Error("extraction failed", "source", source, "type", "pdf", "err", err)
 			return Result{}, fmt.Errorf("extract pdf: %w", err)
 		}
 		sourceType = "pdf"
@@ -261,6 +263,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		var err error
 		extracted, err = extractor.FromFile(req.File)
 		if err != nil {
+			slog.Error("extraction failed", "source", source, "type", "file", "err", err)
 			return Result{}, fmt.Errorf("extract file: %w", err)
 		}
 		sourceType = "text"
@@ -466,6 +469,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	}
 	flashText, fu, err := generateFlash(ctx, flashProvider, summaryText, cfg.Ingest.FlashSystemPrompt, cfg.Ingest.FlashMaxTokens)
 	if err != nil {
+		slog.Error("flash generation failed", "slug", slug, "model", flashProf.Model, "err", err)
 		return Result{}, fmt.Errorf("flash: %w", err)
 	}
 	costRec.Flash.Model = flashProf.Model
@@ -483,14 +487,17 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		}
 		fj, cu, err := generateFlashcards(ctx, fcProvider, summaryText, flashcardStyle, cfg.FlashcardStylePrompt(flashcardStyle))
 		if err != nil {
-			return Result{}, fmt.Errorf("flashcards: %w", err)
-		}
-		flashcardsJSON = fj
-		costRec.Flashcards = store.CostEntry{
-			Model:        flashcardProf.Model,
-			InputTokens:  cu.InputTokens,
-			OutputTokens: cu.OutputTokens,
-			USD:          cfg.CalcCost(flashcardProf.Model, cu.InputTokens, cu.OutputTokens),
+			// Flashcard failure is non-fatal — log and continue without them.
+			slog.Warn("flashcards failed, continuing without them", "slug", slug, "err", err)
+			progress(fmt.Sprintf("flashcards skipped: %v", err))
+		} else {
+			flashcardsJSON = fj
+			costRec.Flashcards = store.CostEntry{
+				Model:        flashcardProf.Model,
+				InputTokens:  cu.InputTokens,
+				OutputTokens: cu.OutputTokens,
+				USD:          cfg.CalcCost(flashcardProf.Model, cu.InputTokens, cu.OutputTokens),
+			}
 		}
 	}
 
@@ -513,11 +520,16 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 							USD:    embedUSD,
 						}
 						progress(fmt.Sprintf("embedding done ($%.5f)", embedUSD))
+					} else {
+						slog.Error("vector upsert failed", "slug", slug, "model", embedProf.Model, "err", uErr)
+						progress(fmt.Sprintf("embedding skipped: %v", uErr))
 					}
 				} else {
+					slog.Error("embed API call failed", "slug", slug, "model", embedProf.Model, "err", err)
 					progress(fmt.Sprintf("embedding skipped: %v", err))
 				}
 			} else {
+				slog.Error("embed client init failed", "slug", slug, "profile", cfg.Ingest.EmbedProfile, "err", err)
 				progress(fmt.Sprintf("embedding skipped: %v", err))
 			}
 		}

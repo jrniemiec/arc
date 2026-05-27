@@ -6,11 +6,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,10 +119,30 @@ func cleanJinaMarkdown(md string) string {
 	return strings.TrimSpace(result)
 }
 
-// isBotCheckPage returns true if the extracted text looks like a bot-verification page.
-func isBotCheckPage(text string) bool {
+// userAgent mimics a real Chrome browser to reduce Cloudflare/CDN bot-scoring.
+const userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+
+// pageKind classifies a short or suspicious page response.
+type pageKind int
+
+const (
+	pageKindNormal  pageKind = iota
+	pageKindBotCheck         // Cloudflare / JS challenge
+	pageKindPaywall          // membership / subscription gate
+)
+
+// classifyPage returns the kind of page based on content signals.
+// Returns pageKindNormal when the page looks like real article content.
+func classifyPage(text string) pageKind {
 	lower := strings.ToLower(text)
-	triggers := []string{
+	words := len(strings.Fields(text))
+
+	// Only classify short responses — real articles are longer.
+	if words >= 200 {
+		return pageKindNormal
+	}
+
+	botTriggers := []string{
 		"security verification",
 		"verifying you are not a bot",
 		"please enable javascript",
@@ -128,14 +150,51 @@ func isBotCheckPage(text string) bool {
 		"ddos protection",
 		"just a moment",
 	}
-	count := 0
-	for _, t := range triggers {
+	botCount := 0
+	for _, t := range botTriggers {
 		if strings.Contains(lower, t) {
-			count++
+			botCount++
 		}
 	}
-	// Require at least 2 signals and short text (real articles are longer)
-	return count >= 2 && len(strings.Fields(text)) < 200
+	if botCount >= 2 {
+		return pageKindBotCheck
+	}
+
+	paywallTriggers := []string{
+		"become a member",
+		"member-only",
+		"members only",
+		"upgrade your membership",
+		"start your membership",
+		"get unlimited access",
+		"unlock this story",
+		"read the full story",
+		"this story is only",
+		"subscribe to read",
+		"subscription required",
+		"sign in to read",
+	}
+	for _, t := range paywallTriggers {
+		if strings.Contains(lower, t) {
+			return pageKindPaywall
+		}
+	}
+
+	return pageKindNormal
+}
+
+// logShortContent logs up to 500 chars of text at DEBUG when word count is low,
+// so we can see exactly what the page returned.
+func logShortContent(label, rawURL, text string) {
+	words := len(strings.Fields(text))
+	if words >= 300 {
+		return
+	}
+	preview := text
+	if len(preview) > 500 {
+		preview = preview[:500] + "…"
+	}
+	slog.Debug(label, "url", rawURL, "words", words, "preview", preview)
 }
 
 func formatBytes(n int) string {
@@ -164,7 +223,7 @@ func cookiesForURL(rawURL string, jars map[string]string) []*http.Cookie {
 	for domain, path := range jars {
 		domain = strings.ToLower(strings.TrimPrefix(domain, "."))
 		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return parseNetscapeCookies(path)
+			return parseNetscapeCookies(path, host)
 		}
 	}
 	return nil
@@ -173,7 +232,7 @@ func cookiesForURL(rawURL string, jars map[string]string) []*http.Cookie {
 // parseNetscapeCookies reads a Netscape/curl cookie jar file and returns HTTP cookies.
 // Lines starting with '#' are comments (except #HttpOnly_ prefixed domain lines).
 // Format: domain \t flag \t path \t secure \t expiry \t name \t value
-func parseNetscapeCookies(path string) []*http.Cookie {
+func parseNetscapeCookies(path, host string) []*http.Cookie {
 	// Expand ~ in path
 	if strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -182,9 +241,12 @@ func parseNetscapeCookies(path string) []*http.Cookie {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		slog.Error("cookie jar read failed", "path", path, "host", host, "err", err)
 		return nil
 	}
+	now := time.Now()
 	var cookies []*http.Cookie
+	var nExpired, nSession, nValid int
 	for _, line := range strings.Split(string(data), "\n") {
 		// Strip #HttpOnly_ prefix — these are valid cookies
 		line = strings.TrimPrefix(line, "#HttpOnly_")
@@ -195,11 +257,39 @@ func parseNetscapeCookies(path string) []*http.Cookie {
 		if len(fields) < 7 {
 			continue
 		}
+		name := fields[5]
+		expiry := int64(0)
+		if v, err := strconv.ParseInt(strings.TrimSpace(fields[4]), 10, 64); err == nil {
+			expiry = v
+		}
+		switch {
+		case expiry == 0:
+			nSession++
+			slog.Debug("cookie loaded (session)", "host", host, "name", name)
+		case time.Unix(expiry, 0).Before(now):
+			nExpired++
+			slog.Warn("cookie expired", "host", host, "name", name,
+				"expired_at", time.Unix(expiry, 0).Format(time.RFC3339),
+				"expired_ago", now.Sub(time.Unix(expiry, 0)).Round(time.Minute).String(),
+			)
+			continue // skip expired cookies
+		default:
+			nValid++
+			slog.Debug("cookie loaded (valid)", "host", host, "name", name,
+				"expires_at", time.Unix(expiry, 0).Format(time.RFC3339),
+				"expires_in", time.Until(time.Unix(expiry, 0)).Round(time.Minute).String(),
+			)
+		}
 		cookies = append(cookies, &http.Cookie{
-			Name:  fields[5],
+			Name:  name,
 			Value: fields[6],
 		})
 	}
+	slog.Info("cookie jar loaded", "host", host, "path", path,
+		"total", nValid+nSession+nExpired,
+		"valid", nValid, "session", nSession, "expired", nExpired,
+		"sending", len(cookies),
+	)
 	return cookies
 }
 
@@ -212,10 +302,20 @@ func fetchViaJina(ctx context.Context, client *http.Client, rawURL, userAgent st
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-Return-Format", "markdown")
+	slog.Debug("jina fetch start", "url", rawURL, "jina_url", jinaURL)
+	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		slog.Error("jina fetch failed", "url", rawURL, "elapsed", time.Since(start).Round(time.Millisecond), "err", err)
 		return nil, false, fmt.Errorf("fetch via jina %s: %w", rawURL, err)
 	}
+	slog.Debug("jina fetch response",
+		"url", rawURL,
+		"status", resp.StatusCode,
+		"content_type", resp.Header.Get("Content-Type"),
+		"content_length", resp.Header.Get("Content-Length"),
+		"elapsed", time.Since(start).Round(time.Millisecond),
+	)
 	return resp, true, nil
 }
 
@@ -235,12 +335,27 @@ func fromURL(ctx context.Context, rawURL string, cookieJars map[string]string) (
 		return Result{}, fmt.Errorf("parse url: %w", err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	var redirectCount int
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			redirectCount++
+			slog.Debug("http redirect",
+				"url", rawURL,
+				"redirect_to", req.URL.String(),
+				"hop", redirectCount,
+			)
+			if redirectCount > 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return Result{}, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("User-Agent", "arc/1.0 (+https://github.com/jrniemiec/arc)")
+	req.Header.Set("User-Agent", userAgent)
 
 	// Inject cookies from the matching jar, if any.
 	cookies := cookiesForURL(rawURL, cookieJars)
@@ -249,25 +364,56 @@ func fromURL(ctx context.Context, rawURL string, cookieJars map[string]string) (
 		req.AddCookie(c)
 	}
 
+	slog.Debug("http fetch start", "url", rawURL, "has_cookies", hasCookies, "cookie_count", len(cookies))
 	fetchStart := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		slog.Error("fetch failed", "url", rawURL, "elapsed", time.Since(fetchStart).Round(time.Millisecond), "err", err)
 		return Result{}, fmt.Errorf("fetch %s: %w", rawURL, err)
 	}
+	slog.Debug("http fetch response",
+		"url", rawURL,
+		"status", resp.StatusCode,
+		"content_type", resp.Header.Get("Content-Type"),
+		"content_length", resp.Header.Get("Content-Length"),
+		"server", resp.Header.Get("Server"),
+		"cf_ray", resp.Header.Get("CF-Ray"),
+		"x_cache", resp.Header.Get("X-Cache"),
+		"redirects", redirectCount,
+		"elapsed", time.Since(fetchStart).Round(time.Millisecond),
+	)
 
-	// On 403 with no cookies, retry via Jina.
-	// With cookies, a 403 means auth failed — Jina won't help.
+	// On 403, always retry via Jina — it can bypass both bot-checks and paywalls
+	// independently of whether we have cookies for the site.
 	viaJina := false
-	if resp.StatusCode == http.StatusForbidden && !hasCookies {
+	if resp.StatusCode == http.StatusForbidden {
+		slog.Warn("HTTP 403 received, retrying via Jina",
+			"url", rawURL,
+			"has_cookies", hasCookies,
+			"status", resp.StatusCode,
+			"server", resp.Header.Get("Server"),
+			"cf_ray", resp.Header.Get("CF-Ray"),
+			"x_cache", resp.Header.Get("X-Cache"),
+		)
 		resp.Body.Close()
 		resp, viaJina, err = fetchViaJina(ctx, client, rawURL, req.Header.Get("User-Agent"))
 		if err != nil {
+			slog.Error("jina fallback failed", "url", rawURL, "err", err)
 			return Result{}, err
 		}
+		slog.Info("jina fallback succeeded", "url", rawURL, "status", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
+		slog.Error("HTTP error",
+			"url", rawURL,
+			"status", resp.StatusCode,
+			"has_cookies", hasCookies,
+			"server", resp.Header.Get("Server"),
+			"content_type", resp.Header.Get("Content-Type"),
+			"cf_ray", resp.Header.Get("CF-Ray"),
+		)
 		return Result{}, fmt.Errorf("fetch %s: HTTP %d", rawURL, resp.StatusCode)
 	}
 
@@ -298,27 +444,47 @@ func fromURL(ctx context.Context, rawURL string, cookieJars map[string]string) (
 		language = article.Language()
 	}
 
-	// If direct fetch returned a bot-check page, retry via Jina regardless of cookies.
-	// Jina has its own rendering pipeline that often bypasses these interstitials.
-	if !viaJina && isBotCheckPage(text) {
-		resp.Body.Close()
-		jinaResp, _, err := fetchViaJina(ctx, client, rawURL, req.Header.Get("User-Agent"))
-		if err != nil {
-			return Result{}, fmt.Errorf("fetch %s: site requires JavaScript or bot verification — try downloading the page manually", rawURL)
+	// If direct fetch returned a bot/paywall page, retry via Jina.
+	if !viaJina {
+		if kind := classifyPage(text); kind != pageKindNormal {
+			slog.Warn("suspicious page detected, retrying via Jina",
+				"url", rawURL,
+				"kind", kind,
+				"has_cookies", hasCookies,
+				"extracted_words", len(strings.Fields(text)),
+			)
+			logShortContent("direct fetch short content", rawURL, text)
+			resp.Body.Close()
+			jinaResp, _, err := fetchViaJina(ctx, client, rawURL, userAgent)
+			if err != nil {
+				slog.Error("jina fallback failed", "url", rawURL, "kind", kind, "err", err)
+				return Result{}, fmt.Errorf("fetch %s: %w", rawURL, err)
+			}
+			defer jinaResp.Body.Close()
+			jinaBody, err := io.ReadAll(jinaResp.Body)
+			if err != nil {
+				slog.Error("read jina response failed", "url", rawURL, "err", err)
+				return Result{}, fmt.Errorf("read jina response: %w", err)
+			}
+			text = cleanJinaMarkdown(string(jinaBody))
+			title = extractJinaTitle(string(jinaBody))
+			body = jinaBody
+			viaJina = true
 		}
-		defer jinaResp.Body.Close()
-		jinaBody, err := io.ReadAll(jinaResp.Body)
-		if err != nil {
-			return Result{}, fmt.Errorf("read jina response: %w", err)
-		}
-		text = cleanJinaMarkdown(string(jinaBody))
-		title = extractJinaTitle(string(jinaBody))
-		body = jinaBody
 	}
 
-	// Final bot-check guard — if Jina also returned a bot-check page, give up.
-	if isBotCheckPage(text) {
+	// Final guard — classify what Jina returned.
+	switch kind := classifyPage(text); kind {
+	case pageKindBotCheck:
+		logShortContent("jina bot-check content", rawURL, text)
+		slog.Error("bot-check page persists after Jina fallback",
+			"url", rawURL, "has_cookies", hasCookies, "extracted_words", len(strings.Fields(text)))
 		return Result{}, fmt.Errorf("fetch %s: site requires JavaScript or bot verification — try downloading the page manually", rawURL)
+	case pageKindPaywall:
+		logShortContent("jina paywall content", rawURL, text)
+		slog.Error("paywall detected after Jina fallback",
+			"url", rawURL, "has_cookies", hasCookies, "extracted_words", len(strings.Fields(text)))
+		return Result{}, fmt.Errorf("fetch %s: paywalled content — refresh your cookie jar or download the page manually", rawURL)
 	}
 
 	return Result{
