@@ -197,6 +197,25 @@ func logShortContent(label, rawURL, text string) {
 	slog.Debug(label, "url", rawURL, "words", words, "preview", preview)
 }
 
+// collapseWhitespace normalizes runs of spaces and blank lines in PDF-extracted text.
+// pdftotext without -layout can still produce multiple spaces between words on some pages.
+func collapseWhitespace(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		// Collapse runs of 2+ spaces to a single space within each line.
+		for strings.Contains(line, "  ") {
+			line = strings.ReplaceAll(line, "  ", " ")
+		}
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	result := strings.Join(lines, "\n")
+	// Collapse runs of 3+ blank lines to 2.
+	for strings.Contains(result, "\n\n\n\n") {
+		result = strings.ReplaceAll(result, "\n\n\n\n", "\n\n\n")
+	}
+	return strings.TrimSpace(result)
+}
+
 func formatBytes(n int) string {
 	switch {
 	case n >= 1<<20:
@@ -423,6 +442,12 @@ func fromURL(ctx context.Context, rawURL string, cookieJars map[string]string) (
 	}
 	downloadDuration := time.Since(fetchStart)
 
+	// If the server returned a PDF, route through pdftotext instead of readability.
+	if !viaJina && isPDFContent(resp.Header.Get("Content-Type"), body) {
+		slog.Debug("pdf detected from url, extracting via pdftotext", "url", rawURL, "content_type", resp.Header.Get("Content-Type"))
+		return fromURLPDF(ctx, rawURL, body, downloadDuration)
+	}
+
 	var text, title, author, language string
 
 	if viaJina {
@@ -515,7 +540,10 @@ func FromPDF(ctx context.Context, path string) (Result, error) {
 }
 
 func fromPDFWithPoppler(ctx context.Context, path string) (Result, error) {
-	cmd := exec.CommandContext(ctx, "pdftotext", "-layout", path, "-")
+	// No -layout: plain flowing text without column-padding spaces.
+	// -layout inflates whitespace dramatically on multi-column PDFs (e.g. academic papers),
+	// causing token over-counting and 10x too many summarization chunks.
+	cmd := exec.CommandContext(ctx, "pdftotext", path, "-")
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
@@ -528,11 +556,57 @@ func fromPDFWithPoppler(ctx context.Context, path string) (Result, error) {
 	if text == "" {
 		return Result{}, fmt.Errorf("pdftotext produced no output for %s", path)
 	}
+	// Collapse runs of spaces (column-padding artifacts) and normalize blank lines.
+	text = collapseWhitespace(text)
 	var sourceBytes int
 	if info, err := os.Stat(path); err == nil {
 		sourceBytes = int(info.Size())
 	}
 	return Result{Text: text, SourceBytes: sourceBytes, ExtractedBytes: len(text)}, nil
+}
+
+// isPDFContent returns true if the Content-Type is application/pdf or the body
+// starts with the PDF magic bytes %PDF-.
+func isPDFContent(contentType string, body []byte) bool {
+	if strings.Contains(strings.ToLower(contentType), "application/pdf") {
+		return true
+	}
+	return len(body) >= 5 && string(body[:5]) == "%PDF-"
+}
+
+// fromURLPDF handles the case where a URL fetch returned PDF bytes.
+// Writes to a temp file, runs pdftotext, and returns a Result with download stats.
+func fromURLPDF(ctx context.Context, rawURL string, body []byte, downloadDuration time.Duration) (Result, error) {
+	if _, err := exec.LookPath("pdftotext"); err != nil {
+		return Result{}, fmt.Errorf(
+			"pdftotext not found — install with: brew install poppler\n" +
+				"(URL returned a PDF: %s)", rawURL)
+	}
+
+	tmp, err := os.CreateTemp("", "arc-pdf-*.pdf")
+	if err != nil {
+		return Result{}, fmt.Errorf("create temp file for pdf: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		return Result{}, fmt.Errorf("write temp pdf: %w", err)
+	}
+	tmp.Close()
+
+	slog.Debug("running pdftotext on url pdf", "url", rawURL, "tmp", tmpPath, "size", len(body))
+	result, err := fromPDFWithPoppler(ctx, tmpPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("pdf extraction from url: %w", err)
+	}
+
+	// Attach download stats (SourceBytes = PDF size, not text size).
+	result.DownloadBytes = len(body)
+	result.DownloadDuration = downloadDuration
+	result.SourceBytes = len(body)
+	return result, nil
 }
 
 // FromFile reads plain text (or stdin if path is "-").
