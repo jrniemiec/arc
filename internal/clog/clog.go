@@ -16,8 +16,9 @@ import (
 const maxSizeMB = 50
 
 var (
-	writer *lumberjack.Logger
-	isNew  bool // true when the log file was absent or empty at Init time
+	writer   *lumberjack.Logger
+	isNew    bool        // true when the log file was absent or empty at Init time
+	logLevel slog.Level  // level set by Init
 )
 
 // ParseLevel converts a string (debug|info|warn|error) to a slog.Level.
@@ -48,6 +49,7 @@ func Init(path string, level slog.Level) {
 		isNew = true
 	}
 
+	logLevel = level
 	writer = &lumberjack.Logger{
 		Filename:   path,
 		MaxSize:    maxSizeMB,
@@ -60,6 +62,9 @@ func Init(path string, level slog.Level) {
 
 // IsNew reports whether the log file was absent or empty when Init was called.
 func IsNew() bool { return isNew }
+
+// IsDebug reports whether the log level is DEBUG or lower.
+func IsDebug() bool { return logLevel <= slog.LevelDebug }
 
 // Raw writes text directly to the log file without slog quoting or escaping.
 // label appears as a header so the block is easy to find in the log.

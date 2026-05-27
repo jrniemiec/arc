@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,7 +51,10 @@ Examples:
 
 // Execute runs the root command.
 func Execute() {
+	rootCmd.SilenceErrors = true // we log and print errors ourselves
 	if err := rootCmd.Execute(); err != nil {
+		clog.Error("arc error", "err", err)
+		fmt.Fprintf(os.Stderr, "arc: %s\n", err)
 		os.Exit(1)
 	}
 }
@@ -75,6 +79,11 @@ func openLibrary(cmd *cobra.Command, _ []string) error {
 	logLevel, _ := clog.ParseLevel(cfg.LogLevel)
 	clog.Init(cfg.LogPath, logLevel)
 	clog.Info("arc start", "cmd", cmd.Name())
+	if clog.IsDebug() {
+		if b, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			clog.Raw("config", string(b))
+		}
+	}
 
 	lib, err := library.Open(cmd.Context(), cfg)
 	if err != nil {
