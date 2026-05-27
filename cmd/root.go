@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,12 +77,6 @@ func openLibrary(cmd *cobra.Command, _ []string) error {
 	// Initialise logging. clog.Init is idempotent — safe to call every command.
 	logLevel, _ := clog.ParseLevel(cfg.LogLevel)
 	clog.Init(cfg.LogPath, logLevel)
-	clog.Info("arc start", "cmd", cmd.Name())
-	if clog.IsDebug() {
-		if b, err := json.MarshalIndent(cfg, "", "  "); err == nil {
-			clog.Raw("config", string(b))
-		}
-	}
 
 	lib, err := library.Open(cmd.Context(), cfg)
 	if err != nil {

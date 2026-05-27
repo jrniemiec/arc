@@ -222,16 +222,21 @@ type Result struct {
 // Run executes the full ingest pipeline and returns the new article slug.
 // If req.DryRun is true it returns without writing anything.
 func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
-	progress := req.Progress
-	if progress == nil {
-		progress = func(string) {}
-	}
-
 	source := req.URL
 	if source == "" {
 		source = req.File
 	}
 	slog.Info("ingest start", "source", source)
+
+	// progress logs every step to the log file AND forwards to the caller's callback.
+	// This ensures background runs (batch, agents) are fully reconstructable from the log.
+	rawProgress := req.Progress
+	progress := func(msg string) {
+		slog.Info(msg, "source", source)
+		if rawProgress != nil {
+			rawProgress(msg)
+		}
+	}
 
 	// ── 1. Extract ────────────────────────────────────────────────────────
 	var extracted extractor.Result
