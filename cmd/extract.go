@@ -63,11 +63,8 @@ Examples:
 		case strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://"):
 			fmt.Fprintf(cmd.ErrOrStderr(), "fetching %s...\n", input)
 			result, err = extractor.FromURLWithCookies(ctx, input, cfg.CookieJars)
-		case strings.HasSuffix(strings.ToLower(input), ".pdf"):
-			fmt.Fprintf(cmd.ErrOrStderr(), "extracting PDF...\n")
-			result, err = extractor.FromPDF(ctx, input)
 		default:
-			result, err = extractor.FromFile(input)
+			result, err = extractor.FromFile(ctx, input)
 		}
 
 		if err != nil {

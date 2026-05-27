@@ -248,25 +248,15 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		}
 		sourceType = "url"
 
-	case strings.HasSuffix(strings.ToLower(req.File), ".pdf"):
-		progress("extracting PDF " + req.File)
-		var err error
-		extracted, err = extractor.FromPDF(ctx, req.File)
-		if err != nil {
-			slog.Error("extraction failed", "source", source, "type", "pdf", "err", err)
-			return Result{}, fmt.Errorf("extract pdf: %w", err)
-		}
-		sourceType = "pdf"
-
 	default:
 		progress("reading " + req.File)
 		var err error
-		extracted, err = extractor.FromFile(req.File)
+		extracted, err = extractor.FromFile(ctx, req.File)
 		if err != nil {
 			slog.Error("extraction failed", "source", source, "type", "file", "err", err)
 			return Result{}, fmt.Errorf("extract file: %w", err)
 		}
-		sourceType = "text"
+		sourceType = "file"
 	}
 
 	if strings.TrimSpace(extracted.Text) == "" {
@@ -284,6 +274,64 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	}
 	wordCount := len(strings.Fields(extracted.Text))
 	isTeaser := wordCount < minWords
+	if isTeaser && req.URL != "" {
+		// Step 1: resolve canonical URL from the fetched HTML — the original URL may be
+		// an alias (e.g. medium.com/publication/slug) that serves a teaser while the
+		// full article lives at a different domain (e.g. levelup.gitconnected.com/slug).
+		canonicalURL := extractor.CanonicalURL(extracted, req.URL)
+		if canonicalURL != "" {
+			slog.Info("teaser: canonical URL differs, retrying with canonical",
+				"source", source, "canonical", canonicalURL, "words", wordCount)
+			progress(fmt.Sprintf("teaser (%d words) — retrying with canonical URL %s...", wordCount, canonicalURL))
+			canonicalResult, err := extractor.FromURLWithCookies(ctx, canonicalURL, cfg.CookieJars)
+			if err != nil {
+				slog.Warn("canonical URL fetch failed", "source", source, "canonical", canonicalURL, "err", err)
+			} else if len(strings.Fields(canonicalResult.Text)) >= minWords {
+				slog.Info("canonical URL fetch succeeded", "source", source, "words", len(strings.Fields(canonicalResult.Text)))
+				progress(fmt.Sprintf("canonical URL returned full text (%d words)", len(strings.Fields(canonicalResult.Text))))
+				extracted = canonicalResult
+				wordCount = len(strings.Fields(extracted.Text))
+				isTeaser = false
+			} else {
+				slog.Info("canonical URL also teaser, trying Jina on canonical",
+					"source", source, "canonical", canonicalURL, "words", len(strings.Fields(canonicalResult.Text)))
+				progress(fmt.Sprintf("canonical also short (%d words) — retrying via Jina...", len(strings.Fields(canonicalResult.Text))))
+				jinaResult, err := extractor.FromURLViaJina(ctx, canonicalURL)
+				if err != nil {
+					slog.Warn("jina retry on canonical failed", "source", source, "err", err)
+				} else if len(strings.Fields(jinaResult.Text)) >= minWords {
+					slog.Info("jina on canonical succeeded", "source", source, "words", len(strings.Fields(jinaResult.Text)))
+					progress(fmt.Sprintf("jina returned full text (%d words)", len(strings.Fields(jinaResult.Text))))
+					extracted = jinaResult
+					wordCount = len(strings.Fields(extracted.Text))
+					isTeaser = false
+				} else {
+					slog.Warn("paywalled content, all strategies exhausted",
+						"source", source, "canonical", canonicalURL,
+						"canonical_host", canonicalURL,
+					)
+					progress(fmt.Sprintf("paywalled — full text at %s — add cookie jar for that host in config", canonicalURL))
+				}
+			}
+		} else {
+			// No canonical URL difference — try Jina on the original URL.
+			slog.Info("teaser detected, retrying via Jina", "source", source, "words", wordCount, "threshold", minWords)
+			progress(fmt.Sprintf("teaser (%d words) — retrying via Jina...", wordCount))
+			jinaResult, err := extractor.FromURLViaJina(ctx, req.URL)
+			if err != nil {
+				slog.Warn("jina teaser retry failed", "source", source, "err", err)
+			} else if len(strings.Fields(jinaResult.Text)) >= minWords {
+				slog.Info("jina teaser retry succeeded", "source", source, "words", len(strings.Fields(jinaResult.Text)))
+				progress(fmt.Sprintf("jina returned full text (%d words)", len(strings.Fields(jinaResult.Text))))
+				extracted = jinaResult
+				wordCount = len(strings.Fields(extracted.Text))
+				isTeaser = false
+			} else {
+				slog.Info("jina teaser retry also short", "source", source, "words", len(strings.Fields(jinaResult.Text)))
+				progress(fmt.Sprintf("jina also returned teaser (%d words) — paywall likely", len(strings.Fields(jinaResult.Text))))
+			}
+		}
+	}
 	if isTeaser {
 		slog.Info("teaser detected", "source", source, "words", wordCount, "threshold", minWords)
 		progress(fmt.Sprintf("teaser detected (%d words, threshold %d) — skipping LLM generation", wordCount, minWords))
