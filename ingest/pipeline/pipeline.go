@@ -428,8 +428,27 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	}
 	summaryText, su, err := summarizeText(ctx, summaryProvider, extracted.Text, title, req.URL, summaryStyle, summaryProf.Model, cfg.Ingest.ChunkTokens, cfg.Ingest.SummaryMaxTokens, cfg.StylePrompt(summaryStyle), progress)
 	if err != nil {
-		slog.Error("summarize failed", "slug", slug, "err", err)
-		return Result{}, fmt.Errorf("summarize: %w", err)
+		// Retry once with oai-mini fallback if primary model failed (e.g. timeout on reduce).
+		slog.Warn("summarize failed, retrying with oai-mini fallback", "slug", slug, "err", err)
+		progress(fmt.Sprintf("summarize failed (%v) — retrying with oai-mini...", err))
+		fallbackProf, ferr := lookupProfile(cfg, "oai-mini")
+		if ferr != nil {
+			slog.Error("summarize failed, no fallback available", "slug", slug, "err", err)
+			return Result{}, fmt.Errorf("summarize: %w", err)
+		}
+		fallbackProvider, ferr := newProvider(fallbackProf)
+		if ferr != nil {
+			slog.Error("summarize fallback provider failed", "slug", slug, "err", ferr)
+			return Result{}, fmt.Errorf("summarize: %w", err)
+		}
+		summaryText, su, err = summarizeText(ctx, fallbackProvider, extracted.Text, title, req.URL, summaryStyle, fallbackProf.Model, cfg.Ingest.ChunkTokens, cfg.Ingest.SummaryMaxTokens, cfg.StylePrompt(summaryStyle), progress)
+		if err != nil {
+			slog.Error("summarize fallback also failed", "slug", slug, "err", err)
+			return Result{}, fmt.Errorf("summarize: %w", err)
+		}
+		summaryProf = fallbackProf
+		slog.Info("summarize fallback succeeded", "slug", slug, "model", fallbackProf.Model)
+		progress(fmt.Sprintf("summarize fallback succeeded (model: %s)", fallbackProf.Model))
 	}
 	costRec.Summary = store.CostEntry{
 		Model:        summaryProf.Model,

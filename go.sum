@@ -22,6 +22,10 @@ github.com/jrniemiec/brief v0.7.0 h1:J40FEbZGmyyup1yaYKS7zEPhd8vtjn+BeaR66kVeV2o
 github.com/jrniemiec/brief v0.7.0/go.mod h1:jsFHaJPQJpH6Qo8Sx/d36WOJvHzmYiDpXJp8MDPzDrs=
 github.com/jrniemiec/llm v0.1.0 h1:xwzizktT9OTYN7A/XUU5j2jpcY8vjKewwEcXQ5ZQL4w=
 github.com/jrniemiec/llm v0.1.0/go.mod h1:HXhTOLv/Tg/ai9QYbOalOsoSVJa9+HDrKhvnW9VDAz8=
+github.com/jrniemiec/llm v0.1.1 h1:MgtaOP9Hgo06JKBudxdFPi77y6bpQ3FazsXvnPIai6g=
+github.com/jrniemiec/llm v0.1.1/go.mod h1:HXhTOLv/Tg/ai9QYbOalOsoSVJa9+HDrKhvnW9VDAz8=
+github.com/mark3labs/mcp-go v0.54.1 h1:Ap/ptEB9FtWzFKM8NDsTA7QDxerQOC06eZigrTldVj0=
+github.com/mark3labs/mcp-go v0.54.1/go.mod h1:+8WclSK1ZUweCP3hvktSji8n8ABG/95QaEkeVE/Uwas=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/mattn/go-runewidth v0.0.10/go.mod h1:RAqKPSqVFrSLVXbA8x7dzmKdmGzieGRCM46jaSJTDAk=
@@ -29,6 +33,7 @@ github.com/ncruces/go-strftime v0.1.9 h1:bY0MQC28UADQmHmaF5dgpLmImcShSi2kHU9XLdh
 github.com/ncruces/go-strftime v0.1.9/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/openai/openai-go/v3 v3.17.0 h1:CfTkmQoItolSyW+bHOUF190KuX5+1Zv6MC0Gb4wAwy8=
 github.com/openai/openai-go/v3 v3.17.0/go.mod h1:cdufnVK14cWcT9qA1rRtrXx4FTRsgbDPW7Ia7SS5cZo=
+github.com/openai/openai-go/v3 v3.18.0 h1:PpheJdvPgi8Ou77rJ1zsNmJTdmC7kvqDrGxbwAYq2nQ=
 github.com/openai/openai-go/v3 v3.18.0/go.mod h1:cdufnVK14cWcT9qA1rRtrXx4FTRsgbDPW7Ia7SS5cZo=
 github.com/philippgille/chromem-go v0.7.0 h1:4jfvfyKymjKNfGxBUhHUcj1kp7B17NL/I1P+vGh1RvY=
 github.com/philippgille/chromem-go v0.7.0/go.mod h1:hTd+wGEm/fFPQl7ilfCwQXkgEUxceYh86iIdoKMolPo=
