@@ -20,7 +20,7 @@ require (
 	github.com/icholy/digest v1.1.0 // indirect
 	github.com/imroc/req/v3 v3.57.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/jrniemiec/brief v0.7.0 // indirect
+	github.com/jrniemiec/brief v0.8.0 // indirect
 	github.com/jrniemiec/llm v0.1.1 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/mark3labs/mcp-go v0.54.1 // indirect
@@ -49,4 +49,3 @@ require (
 	modernc.org/sqlite v1.37.1 // indirect
 )
 
-replace github.com/jrniemiec/brief => /Users/janusz/dev/go/brief
