@@ -283,6 +283,49 @@ func (s *Store) UpsertCollection(ctx context.Context, c store.Collection) error 
 	})
 }
 
+// CollectionCounts returns a map of collection_id → article count.
+func (s *Store) CollectionCounts(ctx context.Context) (map[string]int, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+	result := make(map[string]int)
+	err = sqlitex.Execute(conn,
+		`SELECT collection_id, COUNT(*) FROM article_collections GROUP BY collection_id`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				result[stmt.ColumnText(0)] = int(stmt.ColumnInt64(1))
+				return nil
+			},
+		})
+	return result, err
+}
+
+// AddArticleToCollection inserts a row into article_collections.
+func (s *Store) AddArticleToCollection(ctx context.Context, articleID, collectionID string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	return sqlitex.Execute(conn,
+		`INSERT OR IGNORE INTO article_collections (article_id, collection_id) VALUES (?, ?)`,
+		&sqlitex.ExecOptions{Args: []any{articleID, collectionID}})
+}
+
+// RemoveArticleFromCollection deletes a row from article_collections.
+func (s *Store) RemoveArticleFromCollection(ctx context.Context, articleID, collectionID string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	return sqlitex.Execute(conn,
+		`DELETE FROM article_collections WHERE article_id = ? AND collection_id = ?`,
+		&sqlitex.ExecOptions{Args: []any{articleID, collectionID}})
+}
+
 // MarkRead sets read_at for an article.
 func (s *Store) MarkRead(ctx context.Context, id string, t time.Time) error {
 	conn, err := s.pool.Take(ctx)

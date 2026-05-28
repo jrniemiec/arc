@@ -596,13 +596,129 @@ func (s *Service) MarkPlayed(ctx context.Context, id string) error {
 	return s.lib.MarkPlayed(ctx, id, time.Now())
 }
 
-// Collections returns all defined collections.
-func (s *Service) Collections(ctx context.Context) ([]store.Collection, error) {
-	cols, err := fs.ReadCollections(s.cfg.ArticlesRoot)
-	if err != nil {
-		return nil, fmt.Errorf("read collections: %w", err)
+// CreateCollection creates a new collection directory and registers it in SQLite.
+func (s *Service) CreateCollection(ctx context.Context, slug string) error {
+	if err := fs.CreateCollection(s.cfg.DataRoot, slug); err != nil {
+		return fmt.Errorf("create collection: %w", err)
 	}
-	return cols, nil
+	return s.lib.UpsertCollection(ctx, store.Collection{
+		ID:        slug,
+		Name:      slug,
+		CreatedAt: time.Now(),
+	})
+}
+
+// ListCollections returns all collections with article counts.
+func (s *Service) ListCollections(ctx context.Context) ([]CollectionInfo, error) {
+	metas, err := fs.ListCollections(s.cfg.DataRoot)
+	if err != nil {
+		return nil, fmt.Errorf("list collections: %w", err)
+	}
+	// Get article counts from SQLite
+	counts, err := s.lib.CollectionCounts(ctx)
+	if err != nil {
+		counts = map[string]int{} // non-fatal
+	}
+	out := make([]CollectionInfo, 0, len(metas))
+	for _, m := range metas {
+		colDir := fs.CollectionDir(s.cfg.DataRoot, m.Slug)
+		hasSummary := false
+		entries, _ := os.ReadDir(colDir)
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), "meta-summary.") {
+				hasSummary = true
+				break
+			}
+		}
+		_, hasSystemErr := os.Stat(filepath.Join(colDir, "system.txt"))
+		out = append(out, CollectionInfo{
+			Slug:         m.Slug,
+			Name:         m.Name,
+			Description:  m.Description,
+			CreatedAt:    m.CreatedAt,
+			ArticleCount: counts[m.Slug],
+			HasSummary:   hasSummary,
+			HasSystem:    hasSystemErr == nil,
+		})
+	}
+	return out, nil
+}
+
+// GetCollection returns info for a single collection.
+func (s *Service) GetCollection(ctx context.Context, slug string) (CollectionInfo, error) {
+	m, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug)
+	if err != nil {
+		return CollectionInfo{}, err
+	}
+	counts, _ := s.lib.CollectionCounts(ctx)
+	colDir := fs.CollectionDir(s.cfg.DataRoot, slug)
+	hasSummary := false
+	entries, _ := os.ReadDir(colDir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "meta-summary.") {
+			hasSummary = true
+			break
+		}
+	}
+	_, hasSystemErr := os.Stat(filepath.Join(colDir, "system.txt"))
+	return CollectionInfo{
+		Slug:         m.Slug,
+		Name:         m.Name,
+		Description:  m.Description,
+		CreatedAt:    m.CreatedAt,
+		ArticleCount: counts[slug],
+		HasSummary:   hasSummary,
+		HasSystem:    hasSystemErr == nil,
+	}, nil
+}
+
+// AddToCollection links an article to a collection via symlink and updates SQLite.
+func (s *Service) AddToCollection(ctx context.Context, articleSlug, collectionSlug string) error {
+	// Verify article exists
+	articleDir := filepath.Join(s.cfg.ArticlesRoot, articleSlug)
+	if _, err := os.Stat(articleDir); os.IsNotExist(err) {
+		return fmt.Errorf("article %q not found", articleSlug)
+	}
+	// Verify collection exists
+	if _, err := fs.ReadCollectionMeta(s.cfg.DataRoot, collectionSlug); err != nil {
+		return fmt.Errorf("collection %q not found — create it first with: arc collections create %s", collectionSlug, collectionSlug)
+	}
+	if err := fs.AddArticleToCollection(s.cfg.DataRoot, s.cfg.ArticlesRoot, articleSlug, collectionSlug); err != nil {
+		return err // includes ErrAlreadyInCollection
+	}
+	return s.lib.AddArticleToCollection(ctx, articleSlug, collectionSlug)
+}
+
+// RemoveFromCollection removes an article's symlink from a collection and updates SQLite.
+func (s *Service) RemoveFromCollection(ctx context.Context, articleSlug, collectionSlug string) error {
+	if err := fs.RemoveArticleFromCollection(s.cfg.DataRoot, collectionSlug, articleSlug); err != nil {
+		return err
+	}
+	return s.lib.RemoveArticleFromCollection(ctx, articleSlug, collectionSlug)
+}
+
+// SetCollectionDescription writes a description to the collection's system.txt.
+func (s *Service) SetCollectionDescription(ctx context.Context, slug, text string) error {
+	if _, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug); err != nil {
+		return fmt.Errorf("collection %q not found", slug)
+	}
+	colDir := fs.CollectionDir(s.cfg.DataRoot, slug)
+	return os.WriteFile(filepath.Join(colDir, "system.txt"), []byte(text+"\n"), 0644)
+}
+
+// ListCollectionArticles returns article slugs linked in a collection.
+func (s *Service) ListCollectionArticles(ctx context.Context, slug string) ([]string, error) {
+	if _, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug); err != nil {
+		return nil, fmt.Errorf("collection %q not found", slug)
+	}
+	articles, broken, err := fs.ListCollectionArticles(s.cfg.DataRoot, slug)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range broken {
+		slog.Warn("broken collection symlink", "collection", slug, "article", b)
+	}
+	return articles, nil
 }
 
 // Relate creates a relation between two articles.
@@ -617,7 +733,7 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		return Stats{}, fmt.Errorf("list articles: %w", err)
 	}
 
-	cols, err := fs.ReadCollections(s.cfg.ArticlesRoot)
+	cols, err := fs.ListCollections(s.cfg.DataRoot)
 	if err != nil {
 		return Stats{}, fmt.Errorf("read collections: %w", err)
 	}

@@ -111,16 +111,27 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 		return fmt.Errorf("count articles: %w", err)
 	}
 
-	// Sync collections from filesystem to SQLite
-	cols, err := fs.ReadCollections(l.cfg.ArticlesRoot)
+	// Migrate old meta.json collections to symlinks (one-time, idempotent)
+	_ = fs.MigrateMetaCollections(l.cfg.DataRoot, l.cfg.ArticlesRoot)
+
+	// Sync collections from symlinks to SQLite
+	membership, err := fs.ScanCollectionMembership(l.cfg.DataRoot)
 	if err != nil {
-		return fmt.Errorf("read collections: %w", err)
+		return fmt.Errorf("scan collections: %w", err)
 	}
-	for _, c := range cols {
-		if err := l.db.UpsertCollection(ctx, c); err != nil {
-			return fmt.Errorf("upsert collection %s: %w", c.ID, err)
+	// Upsert all discovered collections
+	colMetas, _ := fs.ListCollections(l.cfg.DataRoot)
+	for _, m := range colMetas {
+		if err := l.db.UpsertCollection(ctx, store.Collection{
+			ID:        m.Slug,
+			Name:      m.Name,
+			CreatedAt: m.CreatedAt,
+		}); err != nil {
+			return fmt.Errorf("upsert collection %s: %w", m.Slug, err)
 		}
 	}
+	// membership is used below during article upsert
+	_ = membership
 
 	// Second pass: index each article
 	indexed := 0
@@ -131,6 +142,8 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 		}
 
 		a := meta.ToArticle(id, files)
+		// Override collections from symlinks (authoritative) rather than meta.json
+		a.Collections = membership[id]
 		l.resolveFiles(&a)
 
 		// Read summary text for FTS indexing
@@ -174,6 +187,26 @@ func (l *Library) MarkPlayed(ctx context.Context, id string, t time.Time) error 
 // Relate creates a directed relation between two articles.
 func (l *Library) Relate(ctx context.Context, fromID, toID string, t store.RelationType) error {
 	return l.db.UpsertRelation(ctx, fromID, toID, t)
+}
+
+// UpsertCollection upserts a collection definition in SQLite.
+func (l *Library) UpsertCollection(ctx context.Context, c store.Collection) error {
+	return l.db.UpsertCollection(ctx, c)
+}
+
+// CollectionCounts returns article counts per collection.
+func (l *Library) CollectionCounts(ctx context.Context) (map[string]int, error) {
+	return l.db.CollectionCounts(ctx)
+}
+
+// AddArticleToCollection inserts an article→collection membership in SQLite.
+func (l *Library) AddArticleToCollection(ctx context.Context, articleID, collectionID string) error {
+	return l.db.AddArticleToCollection(ctx, articleID, collectionID)
+}
+
+// RemoveArticleFromCollection removes an article→collection membership from SQLite.
+func (l *Library) RemoveArticleFromCollection(ctx context.Context, articleID, collectionID string) error {
+	return l.db.RemoveArticleFromCollection(ctx, articleID, collectionID)
 }
 
 // resolveFiles fills in the preferred file paths (summary, flash, flashcards)

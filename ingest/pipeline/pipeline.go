@@ -403,20 +403,15 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		}
 
 		now := time.Now().UTC().Format(time.RFC3339)
-		collections := []string{}
-		if req.Collection != "" {
-			collections = []string{req.Collection}
-		}
 		meta := fs.Meta{
-			ID:          slug,
-			Title:       title,
-			URL:         req.URL,
-			SourceType:  sourceType,
-			Author:      extracted.Author,
-			Language:    extracted.Language,
-			IngestedAt:  now,
-			Collections: collections,
-			Tags:        []fs.MetaTag{{Value: "teaser", Source: "auto"}},
+			ID:         slug,
+			Title:      title,
+			URL:        req.URL,
+			SourceType: sourceType,
+			Author:     extracted.Author,
+			Language:   extracted.Language,
+			IngestedAt: now,
+			Tags:       []fs.MetaTag{{Value: "teaser", Source: "auto"}},
 		}
 		if err := fs.WriteMeta(dir, meta); err != nil {
 			return Result{}, fmt.Errorf("write meta: %w", err)
@@ -440,6 +435,12 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 			_ = fs.WriteMeta(dir, meta)
 		}
 
+		if req.Collection != "" {
+			_ = fs.CreateCollection(cfg.DataRoot, req.Collection)
+			if err := fs.AddArticleToCollection(cfg.DataRoot, cfg.ArticlesRoot, slug, req.Collection); err != nil && err != fs.ErrAlreadyInCollection {
+				slog.Warn("could not link teaser to collection", "slug", slug, "collection", req.Collection, "err", err)
+			}
+		}
 		appendEvent(cfg.EventsPath, store.Event{
 			TS: time.Now().UTC(), Type: "ingest", ArticleID: slug,
 		})
@@ -632,10 +633,6 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 	// ── 11. meta.json ─────────────────────────────────────────────────────
 	now := time.Now().UTC().Format(time.RFC3339)
-	collections := []string{}
-	if req.Collection != "" {
-		collections = []string{req.Collection}
-	}
 	meta := fs.Meta{
 		ID:             slug,
 		Title:          title,
@@ -644,7 +641,6 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		Author:         extracted.Author,
 		Language:       extracted.Language,
 		IngestedAt:     now,
-		Collections:    collections,
 		SummaryModel:   summaryProf.Model,
 		SummaryStyle:   summaryStyle,
 		FlashModel:     flashProf.Model,
@@ -656,7 +652,15 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("write meta: %w", err)
 	}
 
-	// ── 12. Append to events.jsonl ───────────────────────────────────────
+	// ── 12. Collection symlink ────────────────────────────────────────────
+	if req.Collection != "" {
+		_ = fs.CreateCollection(cfg.DataRoot, req.Collection)
+		if err := fs.AddArticleToCollection(cfg.DataRoot, cfg.ArticlesRoot, slug, req.Collection); err != nil && err != fs.ErrAlreadyInCollection {
+			slog.Warn("could not link article to collection", "slug", slug, "collection", req.Collection, "err", err)
+		}
+	}
+
+	// ── 13. Append to events.jsonl ───────────────────────────────────────
 	appendEvent(cfg.EventsPath, store.Event{
 		TS:        time.Now().UTC(),
 		Type:      "ingest",

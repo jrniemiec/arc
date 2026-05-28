@@ -1,6 +1,8 @@
 package service
 
 import (
+	"time"
+
 	"github.com/jrniemiec/arc/store"
 )
 
@@ -166,6 +168,17 @@ type FlashcardsResult struct {
 	CostUSD   float64
 	Written   bool
 	WritePath string
+}
+
+// CollectionInfo describes a collection with article count.
+type CollectionInfo struct {
+	Slug         string
+	Name         string
+	Description  string
+	CreatedAt    time.Time
+	ArticleCount int
+	HasSummary   bool // meta-summary file exists
+	HasSystem    bool // system.txt exists
 }
 
 // Stats is a snapshot of the knowledge base.

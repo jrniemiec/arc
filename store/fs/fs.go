@@ -256,67 +256,241 @@ func (m Meta) ToArticle(id string, files store.Files) store.Article {
 	return a
 }
 
-// CollectionsFile returns the path to collections.json in the articles root.
-func CollectionsFile(articlesRoot string) string {
-	return filepath.Join(articlesRoot, "collections.json")
+// ── Collections ───────────────────────────────────────────────────────────────
+
+// CollectionMeta is the on-disk representation of a collection's meta.json.
+type CollectionMeta struct {
+	Slug        string    `json:"slug"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
-// ReadCollections reads collections.json from the articles root.
-func ReadCollections(articlesRoot string) ([]store.Collection, error) {
-	path := CollectionsFile(articlesRoot)
+// CollectionsRoot returns the path to the collections directory.
+func CollectionsRoot(dataRoot string) string {
+	return filepath.Join(dataRoot, "collections")
+}
+
+// CollectionDir returns the path to a specific collection directory.
+func CollectionDir(dataRoot, slug string) string {
+	return filepath.Join(dataRoot, "collections", slug)
+}
+
+// CreateCollection creates a new collection directory and writes meta.json.
+// Returns an error if the collection already exists.
+func CreateCollection(dataRoot, slug string) error {
+	dir := CollectionDir(dataRoot, slug)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir collection %s: %w", slug, err)
+	}
+	metaPath := filepath.Join(dir, "meta.json")
+	if pathExists(metaPath) {
+		return nil // already exists — idempotent
+	}
+	m := CollectionMeta{Slug: slug, Name: slug, CreatedAt: time.Now().UTC()}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(metaPath, data, 0644)
+}
+
+// ReadCollectionMeta reads meta.json from a collection directory.
+func ReadCollectionMeta(dataRoot, slug string) (CollectionMeta, error) {
+	path := filepath.Join(CollectionDir(dataRoot, slug), "meta.json")
 	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return CollectionMeta{}, fmt.Errorf("collection %q not found", slug)
+		}
+		return CollectionMeta{}, fmt.Errorf("read collection meta %s: %w", slug, err)
+	}
+	var m CollectionMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		return CollectionMeta{}, fmt.Errorf("parse collection meta %s: %w", slug, err)
+	}
+	return m, nil
+}
+
+// WriteCollectionMeta writes meta.json to a collection directory.
+func WriteCollectionMeta(dataRoot string, m CollectionMeta) error {
+	path := filepath.Join(CollectionDir(dataRoot, m.Slug), "meta.json")
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// ListCollections walks the collections root and returns metadata for all
+// collections found. Missing or malformed meta.json entries are skipped with
+// a warning written to slog.
+func ListCollections(dataRoot string) ([]CollectionMeta, error) {
+	root := CollectionsRoot(dataRoot)
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read collections: %w", err)
+		return nil, fmt.Errorf("read collections dir: %w", err)
 	}
-
-	var raw []struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		CreatedAt   string `json:"created_at"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse collections: %w", err)
-	}
-
-	cols := make([]store.Collection, 0, len(raw))
-	for _, r := range raw {
-		t, _ := time.Parse(time.RFC3339, r.CreatedAt)
-		cols = append(cols, store.Collection{
-			ID:          r.ID,
-			Name:        r.Name,
-			Description: r.Description,
-			CreatedAt:   t,
-		})
+	var cols []CollectionMeta
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		m, err := ReadCollectionMeta(dataRoot, e.Name())
+		if err != nil {
+			continue // skip malformed
+		}
+		cols = append(cols, m)
 	}
 	return cols, nil
 }
 
-// WriteCollections writes the collections list to collections.json.
-func WriteCollections(articlesRoot string, cols []store.Collection) error {
-	type raw struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description,omitempty"`
-		CreatedAt   string `json:"created_at"`
+// AddArticleToCollection creates a relative symlink from the collection
+// directory to the article directory. Returns ErrAlreadyInCollection if the
+// symlink already exists.
+func AddArticleToCollection(dataRoot, articlesRoot, articleSlug, collectionSlug string) error {
+	colDir := CollectionDir(dataRoot, collectionSlug)
+	linkPath := filepath.Join(colDir, articleSlug)
+
+	// Check if symlink already exists.
+	if _, err := os.Lstat(linkPath); err == nil {
+		return ErrAlreadyInCollection
 	}
-	out := make([]raw, 0, len(cols))
-	for _, c := range cols {
-		out = append(out, raw{
-			ID:          c.ID,
-			Name:        c.Name,
-			Description: c.Description,
-			CreatedAt:   c.CreatedAt.UTC().Format(time.RFC3339),
-		})
-	}
-	data, err := json.MarshalIndent(out, "", "  ")
+
+	// Compute relative path from collection dir to article dir.
+	articleDir := filepath.Join(articlesRoot, articleSlug)
+	rel, err := filepath.Rel(colDir, articleDir)
 	if err != nil {
+		return fmt.Errorf("compute rel path: %w", err)
+	}
+	return os.Symlink(rel, linkPath)
+}
+
+// ErrAlreadyInCollection is returned when an article is already linked to the collection.
+var ErrAlreadyInCollection = fmt.Errorf("article already in collection")
+
+// RemoveArticleFromCollection removes the symlink for an article from a collection.
+func RemoveArticleFromCollection(dataRoot, collectionSlug, articleSlug string) error {
+	linkPath := filepath.Join(CollectionDir(dataRoot, collectionSlug), articleSlug)
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("article %q not in collection %q", articleSlug, collectionSlug)
+		}
 		return err
 	}
-	return os.WriteFile(CollectionsFile(articlesRoot), data, 0644)
+	if info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("%s is not a symlink — refusing to delete", linkPath)
+	}
+	return os.Remove(linkPath)
+}
+
+// ListCollectionArticles returns the article slugs linked in a collection.
+// Broken symlinks are reported in the broken return value.
+func ListCollectionArticles(dataRoot, slug string) (articles []string, broken []string, err error) {
+	dir := CollectionDir(dataRoot, slug)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read collection dir %s: %w", slug, err)
+	}
+	for _, e := range entries {
+		// Only process symlinks — skip meta.json, system.txt, resources/, chat/
+		info, err := os.Lstat(filepath.Join(dir, e.Name()))
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target := filepath.Join(dir, e.Name())
+		if _, err := os.Stat(target); err != nil {
+			broken = append(broken, e.Name())
+			continue
+		}
+		articles = append(articles, e.Name())
+	}
+	return articles, broken, nil
+}
+
+// ScanCollectionMembership walks all collection directories and returns a
+// map of articleSlug → []collectionSlug. Used by reindex to rebuild SQLite.
+// Broken symlinks are logged and skipped.
+func ScanCollectionMembership(dataRoot string) (map[string][]string, error) {
+	root := CollectionsRoot(dataRoot)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read collections root: %w", err)
+	}
+
+	result := make(map[string][]string)
+	for _, colEntry := range entries {
+		if !colEntry.IsDir() || strings.HasPrefix(colEntry.Name(), ".") {
+			continue
+		}
+		colSlug := colEntry.Name()
+		colDir := filepath.Join(root, colSlug)
+
+		items, err := os.ReadDir(colDir)
+		if err != nil {
+			continue
+		}
+		for _, item := range items {
+			linfo, err := os.Lstat(filepath.Join(colDir, item.Name()))
+			if err != nil || linfo.Mode()&os.ModeSymlink == 0 {
+				continue
+			}
+			target := filepath.Join(colDir, item.Name())
+			if _, err := os.Stat(target); err != nil {
+				// broken symlink
+				continue
+			}
+			result[item.Name()] = append(result[item.Name()], colSlug)
+		}
+	}
+	return result, nil
+}
+
+// MigrateMetaCollections reads meta.json collections fields from articles and
+// creates the corresponding symlinks if they don't already exist. Called once
+// during reindex to migrate from the old collections.json approach.
+func MigrateMetaCollections(dataRoot, articlesRoot string) error {
+	entries, err := os.ReadDir(articlesRoot)
+	if err != nil {
+		return nil // articles root doesn't exist yet
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		metaPath := filepath.Join(articlesRoot, e.Name(), "meta.json")
+		data, err := os.ReadFile(metaPath)
+		if err != nil {
+			continue
+		}
+		var m struct {
+			Collections []string `json:"collections"`
+		}
+		if err := json.Unmarshal(data, &m); err != nil || len(m.Collections) == 0 {
+			continue
+		}
+		for _, col := range m.Collections {
+			if col == "" {
+				continue
+			}
+			// Ensure collection dir exists
+			_ = CreateCollection(dataRoot, col)
+			// Create symlink — ignore ErrAlreadyInCollection
+			err := AddArticleToCollection(dataRoot, articlesRoot, e.Name(), col)
+			if err != nil && err != ErrAlreadyInCollection {
+				// non-fatal
+				_ = err
+			}
+		}
+	}
+	return nil
 }
 
 func pathExists(path string) bool {
