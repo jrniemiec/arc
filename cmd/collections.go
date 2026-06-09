@@ -22,6 +22,10 @@ func init() {
 	collectionsCmd.AddCommand(collectionsDescribeCmd)
 	collectionsCmd.AddCommand(collectionsSuggestCmd)
 	collectionsCmd.AddCommand(collectionsReadCmd)
+	collectionsCmd.AddCommand(collectionsDeleteCmd)
+
+	collectionsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
+	collectionsDeleteCmd.Flags().Bool("purge", false, "also delete articles that belong only to this collection")
 
 	collectionsSuggestCmd.Flags().String("profile", "", "LLM profile override")
 	collectionsSuggestCmd.Flags().Bool("apply", false, "interactively create collections and link articles")
@@ -386,6 +390,80 @@ Examples:
 				fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
+		}
+		return nil
+	},
+}
+
+var collectionsDeleteCmd = &cobra.Command{
+	Use:   "delete <slug>",
+	Short: "Delete a collection",
+	Long: `Delete a collection directory and remove all article symlinks inside it.
+Article directories are never touched unless --purge is specified.
+
+--purge: for each article in the collection, if it belongs to NO other collection,
+         delete its article directory too. Articles shared with other collections
+         are always left untouched.
+
+Example with --purge:
+  Collection "ml" contains article-a, article-b, article-c.
+  Collection "transformers" also contains article-b.
+
+  arc collections delete ml --purge
+    → article-a deleted  (only in "ml")
+    → article-b kept     (also in "transformers")
+    → article-c deleted  (only in "ml")
+    → collection "ml" deleted
+
+Examples:
+  arc collections delete old-collection
+  arc collections delete old-collection --force
+  arc collections delete old-collection --purge`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		slug, err := resolveCollectionSlug(cmd, args[0])
+		if err != nil {
+			return err
+		}
+
+		force, _ := cmd.Flags().GetBool("force")
+		purge, _ := cmd.Flags().GetBool("purge")
+		tty := isTTY(os.Stdout)
+
+		if !force {
+			svc := svcFrom(cmd)
+			info, err := svc.GetCollection(cmd.Context(), slug)
+			if err != nil {
+				return err
+			}
+			prompt := fmt.Sprintf("Delete collection %q (%d articles)? [y/N] ", slug, info.ArticleCount)
+			if purge {
+				prompt = fmt.Sprintf("Delete collection %q and purge exclusively-owned articles? [y/N] ", slug)
+			}
+			fmt.Fprint(cmd.OutOrStdout(), bold(prompt, tty))
+			scanner := bufio.NewScanner(os.Stdin)
+			if !scanner.Scan() {
+				return fmt.Errorf("aborted")
+			}
+			ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+			if ans != "y" && ans != "yes" {
+				fmt.Fprintln(cmd.OutOrStdout(), "aborted")
+				return nil
+			}
+		}
+
+		svc := svcFrom(cmd)
+		purged, err := svc.DeleteCollection(cmd.Context(), slug, purge)
+		if err != nil {
+			return fmt.Errorf("delete collection: %w", err)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "deleted collection: %s\n", slug)
+		if len(purged) > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "purged %d articles:\n", len(purged))
+			for _, a := range purged {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", a)
+			}
 		}
 		return nil
 	},

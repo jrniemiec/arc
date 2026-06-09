@@ -388,6 +388,16 @@ func RemoveArticleFromCollection(dataRoot, collectionSlug, articleSlug string) e
 	return os.Remove(linkPath)
 }
 
+// DeleteCollection removes the collection directory and all symlinks inside it.
+// Article directories are never touched.
+func DeleteCollection(dataRoot, slug string) error {
+	dir := CollectionDir(dataRoot, slug)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("collection %q not found", slug)
+	}
+	return os.RemoveAll(dir)
+}
+
 // ListCollectionArticles returns the article slugs linked in a collection.
 // Broken symlinks are reported in the broken return value.
 func ListCollectionArticles(dataRoot, slug string) (articles []string, broken []string, err error) {

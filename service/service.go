@@ -791,6 +791,41 @@ func (s *Service) ListCollectionArticles(ctx context.Context, slug string) ([]st
 	return articles, nil
 }
 
+// DeleteCollection removes a collection and optionally purges exclusively-owned articles.
+// If purge is true, articles that belong only to this collection are also deleted from disk.
+func (s *Service) DeleteCollection(ctx context.Context, slug string, purge bool) (purged []string, err error) {
+	if _, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug); err != nil {
+		return nil, fmt.Errorf("collection %q not found", slug)
+	}
+
+	if purge {
+		// Find articles exclusively in this collection.
+		membership, err := fs.ScanCollectionMembership(s.cfg.DataRoot)
+		if err != nil {
+			return nil, fmt.Errorf("scan membership: %w", err)
+		}
+		articles, _, err := fs.ListCollectionArticles(s.cfg.DataRoot, slug)
+		if err != nil {
+			return nil, fmt.Errorf("list collection articles: %w", err)
+		}
+		for _, articleSlug := range articles {
+			cols := membership[articleSlug]
+			if len(cols) == 1 && cols[0] == slug {
+				articleDir := filepath.Join(s.cfg.ArticlesRoot, articleSlug)
+				if err := os.RemoveAll(articleDir); err != nil {
+					return purged, fmt.Errorf("delete article %s: %w", articleSlug, err)
+				}
+				purged = append(purged, articleSlug)
+			}
+		}
+	}
+
+	if err := fs.DeleteCollection(s.cfg.DataRoot, slug); err != nil {
+		return purged, err
+	}
+	return purged, s.lib.DeleteCollection(ctx, slug)
+}
+
 // ResolveCollectionSlug resolves a user-supplied query to a collection slug.
 // Tries exact match first, then substring match on slug.
 func (s *Service) ResolveCollectionSlug(ctx context.Context, query string) (string, error) {

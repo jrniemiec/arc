@@ -201,6 +201,11 @@ func (l *Library) RemoveArticleFromCollection(ctx context.Context, articleID, co
 	return l.db.RemoveArticleFromCollection(ctx, articleID, collectionID)
 }
 
+// DeleteCollection removes a collection and all its membership rows from SQLite.
+func (l *Library) DeleteCollection(ctx context.Context, id string) error {
+	return l.db.DeleteCollection(ctx, id)
+}
+
 // resolveFiles fills in the preferred file paths (summary, flash, flashcards)
 // based on config preferences. root_path must already be set in a.Files.Root.
 func (l *Library) resolveFiles(a *store.Article) {

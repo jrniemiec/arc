@@ -45,7 +45,10 @@ Examples:
   arc extract https://example.com/article | arc summarize --style bullets
   arc summarize --style technical --write 20260522-my-article
   arc read --summary 20260522-my-article
-  arc search "attention mechanism"`,
+  arc search "attention mechanism"
+  arc collections list
+  arc collections read ml
+  arc collections suggest --apply`,
 }
 
 // Execute runs the root command.

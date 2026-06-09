@@ -325,6 +325,28 @@ func (s *Store) RemoveArticleFromCollection(ctx context.Context, articleID, coll
 		&sqlitex.ExecOptions{Args: []any{articleID, collectionID}})
 }
 
+// DeleteCollection removes a collection and all its article membership rows.
+func (s *Store) DeleteCollection(ctx context.Context, id string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	endFn := sqlitex.Transaction(conn)
+	err = func() error {
+		if err := sqlitex.Execute(conn,
+			`DELETE FROM article_collections WHERE collection_id = ?`,
+			&sqlitex.ExecOptions{Args: []any{id}}); err != nil {
+			return err
+		}
+		return sqlitex.Execute(conn,
+			`DELETE FROM collections WHERE id = ?`,
+			&sqlitex.ExecOptions{Args: []any{id}})
+	}()
+	endFn(&err)
+	return err
+}
+
 // MarkRead sets read_at for an article.
 func (s *Store) MarkRead(ctx context.Context, id string, t time.Time) error {
 	conn, err := s.pool.Take(ctx)
