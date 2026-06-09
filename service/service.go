@@ -147,6 +147,17 @@ func (s *Service) Reprocess(ctx context.Context, req ReprocessRequest) (Reproces
 		articleReq := req
 		articleReq.Progress = func(msg string) { progress(prefix + msg) }
 
+		if req.Missing {
+			needsSummary := !req.NoSummary && a.Files.Summary == ""
+			needsFlash := !req.NoFlash && a.Files.Flash == ""
+			needsFlashcards := !req.NoFlashcards && a.Files.Flashcards == ""
+			needsEmbed := !req.NoEmbed && a.EmbedModel == ""
+			if !needsSummary && !needsFlash && !needsFlashcards && !needsEmbed {
+				result.Skipped++
+				continue
+			}
+		}
+
 		cost, err := s.reprocessOne(ctx, a, articleReq)
 		result.CostUSD += cost
 		if err != nil {

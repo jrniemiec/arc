@@ -19,6 +19,7 @@ var (
 	reprocessNoFlash      bool
 	reprocessNoFlashcards bool
 	reprocessNoEmbed      bool
+	reprocessMissing      bool
 )
 
 func init() {
@@ -31,6 +32,7 @@ func init() {
 	reprocessCmd.Flags().BoolVar(&reprocessNoFlash, "no-flash", false, "skip flash generation")
 	reprocessCmd.Flags().BoolVar(&reprocessNoFlashcards, "no-flashcards", false, "skip flashcard generation")
 	reprocessCmd.Flags().BoolVar(&reprocessNoEmbed, "no-embed", false, "skip embedding")
+	reprocessCmd.Flags().BoolVar(&reprocessMissing, "missing", false, "skip articles that already have all requested variants")
 	rootCmd.AddCommand(reprocessCmd)
 }
 
@@ -75,6 +77,8 @@ Examples:
   arc reprocess --collection software-architecture
   arc reprocess --collection software-architecture --no-summary --no-flashcards
   arc reprocess --all --no-embed
+  arc reprocess --all --missing                      # only articles missing a variant
+  arc reprocess --collection ml --missing --no-embed # fill gaps in a collection
   cat new-body.txt | arc reprocess my-article --body -`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -109,6 +113,7 @@ Examples:
 			NoFlash:      reprocessNoFlash,
 			NoFlashcards: reprocessNoFlashcards,
 			NoEmbed:      reprocessNoEmbed,
+			Missing:      reprocessMissing,
 		}
 		if len(args) > 0 {
 			req.Slug = args[0]

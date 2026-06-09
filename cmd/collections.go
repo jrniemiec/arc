@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jrniemiec/arc/service"
+	"github.com/jrniemiec/arc/store"
 	"github.com/jrniemiec/arc/store/fs"
 )
 
@@ -113,7 +114,7 @@ var collectionsShowCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "collection: %s  (%d articles)\n\n",
 			bold(info.Slug, tty), info.ArticleCount)
 
-		articles, err := svc.ListCollectionArticles(cmd.Context(), slug)
+		articles, err := svc.List(cmd.Context(), store.Filter{Collection: slug})
 		if err != nil {
 			return err
 		}
@@ -122,7 +123,7 @@ var collectionsShowCmd = &cobra.Command{
 			return nil
 		}
 		for _, a := range articles {
-			fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", a)
+			fmt.Fprintf(cmd.OutOrStdout(), "  %-45s  |  %s\n", a.ID, a.Title)
 		}
 		return nil
 	},

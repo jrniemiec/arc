@@ -223,6 +223,7 @@ type ReprocessRequest struct {
 	NoFlash      bool
 	NoFlashcards bool
 	NoEmbed      bool
+	Missing      bool // skip articles that already have all requested variants
 	Progress     func(msg string)
 }
 
