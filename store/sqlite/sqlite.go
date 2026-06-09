@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -50,7 +49,7 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 // Upsert inserts or replaces an article and its tags, collections, and FTS entry.
-func (s *Store) Upsert(ctx context.Context, a store.Article, summaryText, flashcardQuestions string) error {
+func (s *Store) Upsert(ctx context.Context, a store.Article, summaryText string) error {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return err
@@ -58,12 +57,12 @@ func (s *Store) Upsert(ctx context.Context, a store.Article, summaryText, flashc
 	defer s.pool.Put(conn)
 
 	endFn := sqlitex.Transaction(conn)
-	err = s.upsertTx(conn, a, summaryText, flashcardQuestions)
+	err = s.upsertTx(conn, a, summaryText)
 	endFn(&err)
 	return err
 }
 
-func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText, flashcardQuestions string) error {
+func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string) error {
 	// Upsert article row
 	err := sqlitex.Execute(conn, `
 		INSERT INTO articles (
@@ -140,8 +139,8 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText, flashc
 		_ = err // best-effort: row may not exist yet
 	}
 	if err := sqlitex.Execute(conn,
-		`INSERT INTO articles_fts (article_id, title, summary, flashcard_questions) VALUES (?, ?, ?, ?)`,
-		&sqlitex.ExecOptions{Args: []any{a.ID, a.Title, summaryText, flashcardQuestions}}); err != nil {
+		`INSERT INTO articles_fts (article_id, title, summary) VALUES (?, ?, ?)`,
+		&sqlitex.ExecOptions{Args: []any{a.ID, a.Title, summaryText}}); err != nil {
 		return fmt.Errorf("fts insert: %w", err)
 	}
 
@@ -493,25 +492,3 @@ func (s *Store) UpsertRelation(ctx context.Context, fromID, toID string, t store
 	})
 }
 
-// ExtractFlashcardQuestions pulls question text from a flashcards JSON blob
-// for FTS5 indexing.
-func ExtractFlashcardQuestions(data []byte) string {
-	if len(data) == 0 {
-		return ""
-	}
-	var fc struct {
-		Cards []struct {
-			Q string `json:"q"`
-		} `json:"cards"`
-	}
-	if err := json.Unmarshal(data, &fc); err != nil {
-		return ""
-	}
-	qs := make([]string, 0, len(fc.Cards))
-	for _, c := range fc.Cards {
-		if c.Q != "" {
-			qs = append(qs, c.Q)
-		}
-	}
-	return strings.Join(qs, " ")
-}

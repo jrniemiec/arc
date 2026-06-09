@@ -94,6 +94,11 @@ type IngestConfig struct {
 
 	// Teaser detection
 	MinWords int `json:"min_words"` // articles below this word count are tagged "teaser" and skip LLM steps; default 300
+
+	// Collection suggestion
+	CollectionSuggestProfile  string `json:"collection_suggest_profile"`  // profile for arc collections suggest; default: flash_profile
+	CollectionSuggestPrompt   string `json:"collection_suggest_prompt"`   // system prompt override for collection suggestion
+	AutoSuggestCollections    bool   `json:"auto_suggest_collections"`    // automatically suggest collections after ingest; default: false
 }
 
 // FlashcardStyleConfig holds the system prompt for one flashcard style.
@@ -129,6 +134,70 @@ Rules:
 - No generic openers ("This article discusses...")
 - Preserve specific numbers, names, and facts where they add meaning
 - Use only information from the provided text`
+
+// DefaultCollectionSuggestPrompt is the built-in system prompt for library-wide
+// collection suggestion. Given a list of article titles, the LLM proposes a set
+// of collection slugs with descriptions and article assignments.
+const DefaultCollectionSuggestPrompt = `You are organizing a personal knowledge base into collections.
+
+Given a list of articles (slug + title), suggest 5-10 collection slugs that would
+meaningfully group them. A collection should represent a coherent topic or theme.
+
+Rules:
+- Collection slugs: lowercase, hyphens only, no spaces (e.g. "machine-learning", "go-performance")
+- Each collection should have 2+ articles — do not create single-article collections
+- An article can belong to multiple collections
+- Prefer specific over generic (e.g. "transformer-architectures" over "ai")
+- Do not suggest collections that already exist (listed under "Existing collections")
+- Return JSON only, no prose
+
+Return a JSON array:
+[
+  {
+    "slug": "machine-learning",
+    "description": "ML papers, architectures, and research",
+    "articles": ["slug-1", "slug-2"]
+  }
+]`
+
+// DefaultCollectionArticleSuggestPrompt is the built-in system prompt for
+// per-article collection suggestion. Given an article and existing collections,
+// the LLM ranks which collections the article fits.
+const DefaultCollectionArticleSuggestPrompt = `You are organizing a personal knowledge base.
+
+Given an article (title + flash summary) and a list of existing collections
+(slug + description), suggest which collections this article belongs to.
+
+Rules:
+- Only suggest collections that are a genuine fit — do not force matches
+- Rank by confidence (highest first)
+- Return JSON only, no prose
+
+Return a JSON array:
+[
+  {
+    "slug": "machine-learning",
+    "reason": "transformer architecture paper — direct match"
+  }
+]`
+
+// CollectionSuggestPrompt returns the effective system prompt for library-wide
+// collection suggestion, preferring user config over built-in default.
+func (c *Config) CollectionSuggestPrompt() string {
+	if c.Ingest.CollectionSuggestPrompt != "" {
+		return c.Ingest.CollectionSuggestPrompt
+	}
+	return DefaultCollectionSuggestPrompt
+}
+
+// CollectionSuggestProfileName returns the effective profile name for collection
+// suggestion, falling back to flash_profile if not explicitly set.
+func (c *Config) CollectionSuggestProfileName() string {
+	if c.Ingest.CollectionSuggestProfile != "" {
+		return c.Ingest.CollectionSuggestProfile
+	}
+	return c.Ingest.FlashProfile
+}
 
 // builtinSummaryStyles are the default system prompts for each summary style.
 // Merged with user-defined styles from config (user overrides win).
@@ -386,6 +455,15 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Ingest.MinWords != 0 {
 		cfg.Ingest.MinWords = overlay.Ingest.MinWords
+	}
+	if overlay.Ingest.CollectionSuggestProfile != "" {
+		cfg.Ingest.CollectionSuggestProfile = overlay.Ingest.CollectionSuggestProfile
+	}
+	if overlay.Ingest.CollectionSuggestPrompt != "" {
+		cfg.Ingest.CollectionSuggestPrompt = overlay.Ingest.CollectionSuggestPrompt
+	}
+	if overlay.Ingest.AutoSuggestCollections {
+		cfg.Ingest.AutoSuggestCollections = true
 	}
 	for k, v := range overlay.Ingest.FlashcardStyles {
 		cfg.Ingest.FlashcardStyles[k] = v

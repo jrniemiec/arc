@@ -45,6 +45,8 @@ for this read only.
 The slug argument accepts a full article ID or a partial slug/title — arc
 will error if the partial match is ambiguous.
 
+To read a collection, use: arc collections read <slug>
+
 Examples:
   arc read 20260522-my-article
   arc read --summary 20260522-my-article

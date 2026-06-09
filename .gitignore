@@ -10,7 +10,6 @@ bin/
 # Go workspace
 go.work
 go.work.sum
-
 #c2 sym link
 c2
 

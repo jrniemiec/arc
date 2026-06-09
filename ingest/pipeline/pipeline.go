@@ -839,6 +839,239 @@ func resolveAPIKey(provider string) string {
 	return ""
 }
 
+// ── Collection suggestion ─────────────────────────────────────────────────────
+
+// CollectionSuggestRequest describes a library-wide collection suggestion call.
+type CollectionSuggestRequest struct {
+	Articles    []CollectionSuggestArticle
+	Existing    []CollectionSuggestCollection // already-created collections to avoid duplicating
+	Profile     string                        // profile name override; falls back to CollectionSuggestProfileName
+	Progress    func(string)
+}
+
+// CollectionSuggestArticle is one article entry for the suggestion prompt.
+type CollectionSuggestArticle struct {
+	Slug  string
+	Title string
+}
+
+// CollectionSuggestResult is one proposed collection from library-wide analysis.
+type CollectionSuggestResult struct {
+	Slug        string
+	Description string
+	Articles    []string
+}
+
+// CollectionSuggest calls the LLM to suggest collections for the whole library.
+func CollectionSuggest(ctx context.Context, cfg config.Config, req CollectionSuggestRequest) ([]CollectionSuggestResult, error) {
+	profileName := req.Profile
+	if profileName == "" {
+		profileName = cfg.CollectionSuggestProfileName()
+	}
+	prof, err := lookupProfile(cfg, profileName)
+	if err != nil {
+		return nil, fmt.Errorf("profile: %w", err)
+	}
+	p, err := llm.New(llm.ProviderConfig{
+		Provider: prof.Provider,
+		Model:    prof.Model,
+		Host:     prof.Host,
+		APIKey:   resolveAPIKey(prof.Provider),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("llm provider: %w", err)
+	}
+
+	// Build prompt input
+	var sb strings.Builder
+	sb.WriteString("Articles:\n")
+	for _, a := range req.Articles {
+		sb.WriteString(fmt.Sprintf("- slug: %s | title: %s\n", a.Slug, a.Title))
+	}
+	if len(req.Existing) > 0 {
+		sb.WriteString("\nExisting collections (do not suggest these):\n")
+		for _, c := range req.Existing {
+			if c.Description != "" {
+				sb.WriteString(fmt.Sprintf("- %s: %s\n", c.Slug, c.Description))
+			} else {
+				sb.WriteString(fmt.Sprintf("- %s\n", c.Slug))
+			}
+		}
+	}
+
+	userMsg := sb.String()
+	systemPrompt := cfg.CollectionSuggestPrompt()
+
+	slog.Info("collection suggest request",
+		"profile", profileName,
+		"model", prof.Model,
+		"articles", len(req.Articles),
+		"existing_collections", len(req.Existing),
+		"system_prompt", systemPrompt,
+		"user_message", userMsg,
+	)
+	if req.Progress != nil {
+		req.Progress(fmt.Sprintf("suggesting collections for %d articles (model: %s)...", len(req.Articles), prof.Model))
+		req.Progress("--- system prompt ---\n" + systemPrompt)
+		req.Progress("--- user message ---\n" + userMsg)
+	}
+
+	resp, _, err := p.Chat(ctx, systemPrompt, []llm.Message{
+		{Role: llm.RoleUser, Content: userMsg},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("llm: %w", err)
+	}
+
+	return parseCollectionSuggestions(resp)
+}
+
+// CollectionArticleSuggestRequest describes a per-article collection suggestion call.
+type CollectionArticleSuggestRequest struct {
+	ArticleSlug  string
+	ArticleTitle string
+	ArticleFlash string // flash summary for context; may be empty
+	Collections  []CollectionSuggestCollection
+	Profile      string
+	Progress     func(string)
+}
+
+// CollectionSuggestCollection is one existing collection passed to the LLM.
+type CollectionSuggestCollection struct {
+	Slug        string
+	Description string
+}
+
+// CollectionArticleMatchResult is one ranked collection match for an article.
+type CollectionArticleMatchResult struct {
+	Slug   string
+	Reason string
+}
+
+// CollectionArticleSuggest calls the LLM to suggest which existing collections
+// a specific article fits.
+func CollectionArticleSuggest(ctx context.Context, cfg config.Config, req CollectionArticleSuggestRequest) ([]CollectionArticleMatchResult, error) {
+	profileName := req.Profile
+	if profileName == "" {
+		profileName = cfg.CollectionSuggestProfileName()
+	}
+	prof, err := lookupProfile(cfg, profileName)
+	if err != nil {
+		return nil, fmt.Errorf("profile: %w", err)
+	}
+	p, err := llm.New(llm.ProviderConfig{
+		Provider: prof.Provider,
+		Model:    prof.Model,
+		Host:     prof.Host,
+		APIKey:   resolveAPIKey(prof.Provider),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("llm provider: %w", err)
+	}
+
+	// Build prompt input
+	var articleDesc strings.Builder
+	articleDesc.WriteString(fmt.Sprintf("Title: %s\n", req.ArticleTitle))
+	if req.ArticleFlash != "" {
+		articleDesc.WriteString("Flash summary: " + req.ArticleFlash + "\n")
+	}
+
+	var colList strings.Builder
+	for _, c := range req.Collections {
+		desc := c.Description
+		if desc == "" {
+			desc = "no description"
+		}
+		colList.WriteString(fmt.Sprintf("- %s: %s\n", c.Slug, desc))
+	}
+
+	userMsg := "Article:\n" + articleDesc.String() + "\nExisting collections:\n" + colList.String()
+	systemPrompt := config.DefaultCollectionArticleSuggestPrompt
+
+	slog.Info("collection article suggest request",
+		"profile", profileName,
+		"model", prof.Model,
+		"article", req.ArticleSlug,
+		"collections", len(req.Collections),
+		"system_prompt", systemPrompt,
+		"user_message", userMsg,
+	)
+	if req.Progress != nil {
+		req.Progress(fmt.Sprintf("suggesting collections for %s (model: %s)...", req.ArticleSlug, prof.Model))
+		req.Progress("--- system prompt ---\n" + systemPrompt)
+		req.Progress("--- user message ---\n" + userMsg)
+	}
+
+	resp, _, err := p.Chat(ctx, systemPrompt, []llm.Message{
+		{Role: llm.RoleUser, Content: userMsg},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("llm: %w", err)
+	}
+
+	return parseCollectionMatches(resp)
+}
+
+// parseCollectionSuggestions parses the LLM JSON response for library-wide suggestions.
+func parseCollectionSuggestions(resp string) ([]CollectionSuggestResult, error) {
+	// Strip markdown code fences if present
+	resp = strings.TrimSpace(resp)
+	if i := strings.Index(resp, "["); i > 0 {
+		resp = resp[i:]
+	}
+	if i := strings.LastIndex(resp, "]"); i >= 0 {
+		resp = resp[:i+1]
+	}
+
+	var raw []struct {
+		Slug        string   `json:"slug"`
+		Description string   `json:"description"`
+		Articles    []string `json:"articles"`
+	}
+	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
+		return nil, fmt.Errorf("parse collection suggestions: %w\nresponse: %s", err, resp)
+	}
+	out := make([]CollectionSuggestResult, 0, len(raw))
+	for _, r := range raw {
+		if r.Slug == "" {
+			continue
+		}
+		out = append(out, CollectionSuggestResult{
+			Slug:        r.Slug,
+			Description: r.Description,
+			Articles:    r.Articles,
+		})
+	}
+	return out, nil
+}
+
+// parseCollectionMatches parses the LLM JSON response for per-article matches.
+func parseCollectionMatches(resp string) ([]CollectionArticleMatchResult, error) {
+	resp = strings.TrimSpace(resp)
+	if i := strings.Index(resp, "["); i > 0 {
+		resp = resp[i:]
+	}
+	if i := strings.LastIndex(resp, "]"); i >= 0 {
+		resp = resp[:i+1]
+	}
+
+	var raw []struct {
+		Slug   string `json:"slug"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
+		return nil, fmt.Errorf("parse collection matches: %w\nresponse: %s", err, resp)
+	}
+	out := make([]CollectionArticleMatchResult, 0, len(raw))
+	for _, r := range raw {
+		if r.Slug == "" {
+			continue
+		}
+		out = append(out, CollectionArticleMatchResult{Slug: r.Slug, Reason: r.Reason})
+	}
+	return out, nil
+}
+
 func appendEvent(path string, ev store.Event) {
 	data, err := json.Marshal(ev)
 	if err != nil {

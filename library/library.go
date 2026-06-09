@@ -154,15 +154,7 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 			}
 		}
 
-		// Read flashcard questions for FTS indexing
-		flashcardQuestions := ""
-		if a.Files.Flashcards != "" {
-			if data, err := l.fs.ReadFlashcards(a); err == nil {
-				flashcardQuestions = sqlite.ExtractFlashcardQuestions(data)
-			}
-		}
-
-		if err := l.db.Upsert(ctx, a, summaryText, flashcardQuestions); err != nil {
+		if err := l.db.Upsert(ctx, a, summaryText); err != nil {
 			return fmt.Errorf("upsert %s: %w", id, err)
 		}
 

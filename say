@@ -1,0 +1,106 @@
+# Claude Code Best Practices: 12 Patterns Agentic Engineers Use
+
+**Source**: https://levelup.gitconnected.com/claude-code-best-practices-12-patterns-agentic-engineers-use-65264e3eb919
+**Repo**: `shanraisshan/claude-code-best-practice` — hit **GitHub Trending Day #1 in March 2026**; contains **69 actionable tips across 11 categories**
+
+---
+
+## Key Concepts
+
+### CLAUDE.md Optimization
+- **Optimal length**: ~60 lines; hard ceiling is **200 lines** before rules get quietly deprioritized (not explicitly ignored)
+- **Author's original file**: ~500 lines — discovered to be counterproductive
+- **Conditional rules syntax**: `<important if="language=go">` — blocks only activate when relevant context matches
+- **Hierarchical structure**: Root `CLAUDE.md` (~30 universal rules) + subdirectory-specific `CLAUDE.md` files per layer (e.g., `api/`, `internal/`, `cmd/`)
+
+### .claude/ Directory as Orchestration System
+- **Three config types**:
+  - `commands/` — reusable workflow shortcuts (slash commands)
+  - `agents/` — subagents with explicitly restricted tool access
+  - `skills/` — portable knowledge modules across projects
+- **Constraint enforcement via config, not prompts**: A `reviewer.md` agent in `.claude/agents/` with read-only access *physically cannot* modify files — no need to repeat "don't modify" in every prompt
+
+### Skills and Context Isolation
+- Skills share the main agent's context by default
+- **`context: fork`** frontmatter runs a skill as an isolated subagent; main agent only receives output, intermediate context is discarded automatically
+- **Context bloat risk**: A skill that reads 40 files pollutes all subsequent tasks in the session — silent and cumulative, hard to diagnose
+
+### Hooks (PreToolUse / PostToolUse / Stop)
+- Execute *outside* Claude's main reasoning loop — consume **no tokens**, cause no task interruption
+- Operate as side-channel automation attached to Claude's actions
+- **`/careful` pattern**: activates a `PreToolUse` hook intercepting irreversible actions (file deletion, overwrite, force-push); requires explicit confirmation; auto-deactivates on task completion
+- **Stop Hook**: fires when Claude signals task completion; wire it to a verification script (test suite, file existence check, API endpoint validation); if verification fails → task rolls back → Claude continues until it passes
+  - Example failure without it: empty Go error handlers (`err != nil` followed by nothing) passed as "complete"
+
+### Sandbox Mode (`/sandbox`)
+- Runs shell commands in an isolated environment
+- Reduces permission prompts by **84%**; tradeoff is limited system access
+
+### Parallel Agents
+- **`claude -w`** launches Claude inside a git worktree (isolated branch + directory)
+- Combined with **tmux**: multiple fully independent Claude instances running simultaneously
+- Boris Cherny (Claude Code's builder at Anthropic) describes his own workflow as *"dozens of Claudes running at all times"*
+- Moving from sequential single-agent replies to parallel agents is the clearest dividing line between "vibe coding" and agentic engineering
+
+### `ultrathink` Keyword
+- Natural language trigger for extended/higher-effort reasoning mode
+- No config change required — include the word in the prompt
+- In a service-split design task, it surfaced unconsidered constraints (cross-service transaction boundaries, monitoring onboarding cost) and produced a *completely different* final recommendation vs. normal mode
+
+### `/loop` Command
+- Runs a workflow on a timed interval
+- **Limits**: intervals up to **1 hour**, duration up to **3 days**
+- Operates on live working state during development — something CI/CD cannot do (CI only sees post-merge diffs; loops retain session context including prior questions, constraints, and working history)
+- Example use: leave running over a weekend to continuously flag issues and draft PR summaries autonomously
+
+### `/btw` Command
+- Queues a side question without interrupting an active long-running task
+- Claude notes the question, finishes current work to a natural pause, addresses it, then resumes — context preserved throughout
+
+### Gotchas Section (in Skill Documentation)
+- Highest-signal part of any skill doc (per contributor **Thariq**)
+- Captures **real failure modes** from actual use — not anticipated edge cases
+- Recommended approach: build it first, update it every time Claude fails; compounds over time
+
+### `--bare` Flag (Agent SDK)
+- Skips Claude's context discovery startup routine (locating CLAUDE.md files, loading config, checking environment)
+- Only relevant in **programmatic/batch use**, not interactive CLI
+- **Performance benchmark**: 300-file daily code analysis pipeline, 1 agent per file in parallel
+  - Without `--bare`: ~40 minutes
+  - With `--bare`: ~18 minutes (same infrastructure) — up to **10x** per-invocation startup reduction
+
+### Vibe Coding vs. Agentic Engineering
+- **Vibe coding**: reactive loop — describe → attempt → correct → repeat; quality depends on prompt wording; constraints re-added to prompts every session
+- **Agentic engineering**: constraints in files, workflows on schedules, hard permission limits, automatic context cleanup; consistency is structural, not prompt-dependent
+- The gap is **not different tools** — it's the same native tools used systematically
+
+---
+
+## Insights
+
+- **The problem is usually setup, not the model**: The inciting example (Claude deleting the wrong branch) was caused by lack of structure, not model failure
+- **Long CLAUDE.md files silently fail**: Rules don't get explicitly ignored — they get deprioritized in ways that are unreliable enough to break workflows
+- **Hooks are architecturally distinct**: Because they run outside the reasoning loop, they enable zero-cost automation (e.g., auto-formatting, guarding destructive ops) without Claude "deciding" to do them
+- **Claude saying "done" is not reliable**: Stop hooks are essential for unattended/overnight workflows
+- **Most users never discover** agents, skills, hooks, worktrees, or loops despite them shipping natively with Claude Code
+- **Documenting failures when they happen** has higher recall value than explanatory prose — specificity is preserved
+
+---
+
+## Key Facts
+
+| Item | Value |
+|------|-------|
+| Repo trending | GitHub Trending Day #1, March 2026 |
+| Total tips in repo | 69 across 11 categories |
+| Key contributor (Anthropic) | **Boris Cherny** — built Claude Code |
+| Key contributor (skills/gotchas) | **Thariq** |
+| Optimal CLAUDE.md length | 60 lines (ceiling: 200) |
+| Author's original CLAUDE.md | ~500 lines |
+| `/sandbox` permission prompt reduction | 84% |
+| `context: fork` | Single frontmatter line for skill context isolation |
+| Skill bloat example | Reading 40 files degraded all subsequent session responses |
+| Hook types | `PreToolUse`, `PostToolUse`, `Stop` |
+| `/loop` max interval | 1 hour |
+| `/loop` max duration | 3 days |
+| `--bare` speedup | ~10x per-invocation; 40 min → 18 min on 300-file pipeline |

@@ -60,7 +60,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
     article_id,
     title,
     summary,
-    flashcard_questions,
     tokenize = 'porter unicode61'
 );
 

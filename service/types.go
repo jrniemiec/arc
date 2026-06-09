@@ -170,6 +170,19 @@ type FlashcardsResult struct {
 	WritePath string
 }
 
+// CollectionSuggestion is a proposed new collection from library-wide analysis.
+type CollectionSuggestion struct {
+	Slug        string
+	Description string
+	Articles    []string // article slugs
+}
+
+// CollectionMatch is a ranked suggestion for which collection an article fits.
+type CollectionMatch struct {
+	Slug   string
+	Reason string
+}
+
 // CollectionInfo describes a collection with article count.
 type CollectionInfo struct {
 	Slug         string
@@ -200,8 +213,9 @@ type Stats struct {
 
 // ReprocessRequest describes which articles to reprocess and how.
 type ReprocessRequest struct {
-	Slug         string // article ID or fuzzy slug; ignored when All=true
+	Slug         string // article ID or fuzzy slug; ignored when All=true or Collection is set
 	All          bool   // process all articles
+	Collection   string // process all articles in this collection slug
 	Clean        bool   // delete existing variant files before regenerating
 	Refetch      bool   // re-fetch body from source URL or PDF
 	BodyFile     string // replace body.txt from this file ("-" = stdin)

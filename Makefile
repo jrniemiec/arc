@@ -11,7 +11,7 @@ build:
 	$(GO) build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) .
 
 install: build
-	cp bin/$(BINARY) $(INSTALL)
+	ln -sf $(CURDIR)/bin/$(BINARY) $(INSTALL)
 	@echo "Installed: $(INSTALL)"
 
 run: build

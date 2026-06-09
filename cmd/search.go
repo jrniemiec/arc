@@ -132,7 +132,7 @@ Examples:
 
 			// Line 3: excerpt with highlighted terms
 			if r.Excerpt != "" {
-				excerpt := strings.TrimSpace(r.Excerpt)
+				excerpt := strings.Join(strings.Fields(r.Excerpt), " ")
 				fmt.Fprintf(w, "    %s\n", highlightSnippet(excerpt, tty))
 			}
 

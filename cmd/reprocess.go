@@ -11,6 +11,7 @@ import (
 
 var (
 	reprocessAll          bool
+	reprocessCollection   string
 	reprocessClean        bool
 	reprocessRefetch      bool
 	reprocessBody         string
@@ -22,6 +23,7 @@ var (
 
 func init() {
 	reprocessCmd.Flags().BoolVar(&reprocessAll, "all", false, "process all articles")
+	reprocessCmd.Flags().StringVar(&reprocessCollection, "collection", "", "process all articles in this collection")
 	reprocessCmd.Flags().BoolVar(&reprocessClean, "clean", false, "delete existing variant files before regenerating")
 	reprocessCmd.Flags().BoolVar(&reprocessRefetch, "refetch", false, "re-fetch body from source URL or PDF")
 	reprocessCmd.Flags().StringVar(&reprocessBody, "body", "", "replace body.txt from file or stdin (\"-\")")
@@ -70,21 +72,36 @@ Examples:
   arc reprocess my-article --clean
   arc reprocess my-article --refetch --clean
   arc reprocess my-article --no-flash --no-flashcards
+  arc reprocess --collection software-architecture
+  arc reprocess --collection software-architecture --no-summary --no-flashcards
   arc reprocess --all --no-embed
   cat new-body.txt | arc reprocess my-article --body -`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 && !reprocessAll {
-			return fmt.Errorf("specify a slug or use --all")
+		if len(args) == 0 && !reprocessAll && reprocessCollection == "" {
+			return fmt.Errorf("specify a slug, --collection <slug>, or --all")
 		}
-		if len(args) > 0 && reprocessAll {
-			return fmt.Errorf("cannot specify a slug and --all together")
+		if len(args) > 0 && (reprocessAll || reprocessCollection != "") {
+			return fmt.Errorf("cannot specify a slug together with --all or --collection")
+		}
+		if reprocessAll && reprocessCollection != "" {
+			return fmt.Errorf("cannot use --all and --collection together")
 		}
 
 		svc := svcFrom(cmd)
 
+		collection := ""
+		if reprocessCollection != "" {
+			var err error
+			collection, err = resolveCollectionSlug(cmd, reprocessCollection)
+			if err != nil {
+				return fmt.Errorf("collection not found: %w", err)
+			}
+		}
+
 		req := service.ReprocessRequest{
 			All:          reprocessAll,
+			Collection:   collection,
 			Clean:        reprocessClean,
 			Refetch:      reprocessRefetch,
 			BodyFile:     reprocessBody,

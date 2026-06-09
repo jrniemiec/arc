@@ -112,6 +112,18 @@ func (s *Service) Reprocess(ctx context.Context, req ReprocessRequest) (Reproces
 		if err != nil {
 			return ReprocessResult{}, fmt.Errorf("list articles: %w", err)
 		}
+	} else if req.Collection != "" {
+		slugs, err := s.ListCollectionArticles(ctx, req.Collection)
+		if err != nil {
+			return ReprocessResult{}, fmt.Errorf("collection %q: %w", req.Collection, err)
+		}
+		for _, slug := range slugs {
+			a, err := s.lib.Get(ctx, slug)
+			if err != nil {
+				continue
+			}
+			articles = append(articles, a)
+		}
 	} else {
 		id, err := s.ResolveSlug(ctx, req.Slug)
 		if err != nil {
@@ -576,6 +588,64 @@ func (s *Service) Read(ctx context.Context, req ReadRequest) (string, error) {
 	}
 }
 
+// ReadCollection concatenates the requested part across all articles in a collection.
+// Only PartSummary and PartFlash are supported; others return an error.
+func (s *Service) ReadCollection(ctx context.Context, slug string, req ReadRequest) (string, error) {
+	if req.Part == PartBody || req.Part == PartFlashcards {
+		return "", fmt.Errorf("--body and --flashcards are not supported for collections; use --summary or --flash")
+	}
+
+	articles, err := s.ListCollectionArticles(ctx, slug)
+	if err != nil {
+		return "", err
+	}
+	if len(articles) == 0 {
+		return "", fmt.Errorf("collection %q has no articles", slug)
+	}
+
+	cfg := s.cfg
+	if req.Model != "" {
+		cfg.PreferredModels = append([]string{req.Model}, cfg.PreferredModels...)
+	}
+	if req.Style != "" {
+		cfg.PreferredStyles = append([]string{req.Style}, cfg.PreferredStyles...)
+	}
+
+	var sb strings.Builder
+	skipped := 0
+	for _, articleSlug := range articles {
+		a, err := s.lib.Get(ctx, articleSlug)
+		if err != nil {
+			skipped++
+			continue
+		}
+
+		var text string
+		switch req.Part {
+		case PartSummary:
+			text, err = s.lib.ReadSummary(a)
+		case PartFlash:
+			text, err = s.lib.ReadFlash(a)
+		}
+		if err != nil || strings.TrimSpace(text) == "" {
+			skipped++
+			continue
+		}
+
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n---\n\n")
+		}
+		sb.WriteString("## " + a.Title + "\n\n")
+		sb.WriteString(strings.TrimSpace(text))
+		sb.WriteString("\n")
+	}
+
+	if sb.Len() == 0 {
+		return "", fmt.Errorf("no readable content in collection %q (skipped %d articles)", slug, skipped)
+	}
+	return sb.String(), nil
+}
+
 // GetArticle returns a single article by ID with Files populated from disk.
 func (s *Service) GetArticle(ctx context.Context, id string) (store.Article, error) {
 	a, err := s.lib.Get(ctx, id)
@@ -719,6 +789,144 @@ func (s *Service) ListCollectionArticles(ctx context.Context, slug string) ([]st
 		slog.Warn("broken collection symlink", "collection", slug, "article", b)
 	}
 	return articles, nil
+}
+
+// ResolveCollectionSlug resolves a user-supplied query to a collection slug.
+// Tries exact match first, then substring match on slug.
+func (s *Service) ResolveCollectionSlug(ctx context.Context, query string) (string, error) {
+	cols, err := fs.ListCollections(s.cfg.DataRoot)
+	if err != nil {
+		return "", fmt.Errorf("list collections: %w", err)
+	}
+
+	// Exact match first.
+	for _, c := range cols {
+		if c.Slug == query {
+			return c.Slug, nil
+		}
+	}
+
+	// Substring match.
+	q := strings.ToLower(query)
+	var matches []string
+	for _, c := range cols {
+		if strings.Contains(strings.ToLower(c.Slug), q) {
+			matches = append(matches, c.Slug)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no collection matching %q", query)
+	case 1:
+		return matches[0], nil
+	default:
+		msg := fmt.Sprintf("%q matches multiple collections — be more specific:\n", query)
+		for _, m := range matches {
+			msg += fmt.Sprintf("  %s\n", m)
+		}
+		return "", fmt.Errorf("%s", strings.TrimRight(msg, "\n"))
+	}
+}
+
+// SuggestCollections calls the LLM to propose a set of collections for the whole library.
+func (s *Service) SuggestCollections(ctx context.Context, profile string, progress func(string)) ([]CollectionSuggestion, error) {
+	articles, err := s.lib.List(ctx, store.Filter{})
+	if err != nil {
+		return nil, fmt.Errorf("list articles: %w", err)
+	}
+
+	pipeArticles := make([]pipeline.CollectionSuggestArticle, 0, len(articles))
+	for _, a := range articles {
+		pipeArticles = append(pipeArticles, pipeline.CollectionSuggestArticle{
+			Slug:  a.ID,
+			Title: a.Title,
+		})
+	}
+
+	existing, err := s.ListCollections(ctx)
+	if err != nil {
+		existing = nil // non-fatal
+	}
+	pipeExisting := make([]pipeline.CollectionSuggestCollection, 0, len(existing))
+	for _, c := range existing {
+		pipeExisting = append(pipeExisting, pipeline.CollectionSuggestCollection{
+			Slug:        c.Slug,
+			Description: c.Description,
+		})
+	}
+
+	results, err := pipeline.CollectionSuggest(ctx, s.cfg, pipeline.CollectionSuggestRequest{
+		Articles: pipeArticles,
+		Existing: pipeExisting,
+		Profile:  profile,
+		Progress: progress,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]CollectionSuggestion, 0, len(results))
+	for _, r := range results {
+		out = append(out, CollectionSuggestion{
+			Slug:        r.Slug,
+			Description: r.Description,
+			Articles:    r.Articles,
+		})
+	}
+	return out, nil
+}
+
+// SuggestCollectionsForArticle calls the LLM to suggest which existing collections
+// the given article fits.
+func (s *Service) SuggestCollectionsForArticle(ctx context.Context, articleSlug, profile string, progress func(string)) ([]CollectionMatch, error) {
+	a, err := s.lib.Get(ctx, articleSlug)
+	if err != nil {
+		return nil, fmt.Errorf("get article %s: %w", articleSlug, err)
+	}
+
+	// Try to read flash summary for richer context; non-fatal if missing.
+	flashText := ""
+	if flashData, err := s.lib.ReadFlash(a); err == nil {
+		flashText = flashData
+	}
+
+	cols, err := s.ListCollections(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list collections: %w", err)
+	}
+	if len(cols) == 0 {
+		return nil, nil
+	}
+
+	pipeCols := make([]pipeline.CollectionSuggestCollection, 0, len(cols))
+	for _, c := range cols {
+		pipeCols = append(pipeCols, pipeline.CollectionSuggestCollection{
+			Slug:        c.Slug,
+			Description: c.Description,
+		})
+	}
+
+	results, err := pipeline.CollectionArticleSuggest(ctx, s.cfg, pipeline.CollectionArticleSuggestRequest{
+		ArticleSlug:  a.ID,
+		ArticleTitle: a.Title,
+		ArticleFlash: flashText,
+		Collections:  pipeCols,
+		Profile:      profile,
+		Progress:     progress,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]CollectionMatch, 0, len(results))
+	for _, r := range results {
+		out = append(out, CollectionMatch{
+			Slug:   r.Slug,
+			Reason: r.Reason,
+		})
+	}
+	return out, nil
 }
 
 // Relate creates a relation between two articles.

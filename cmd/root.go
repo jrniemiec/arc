@@ -68,7 +68,17 @@ func init() {
 	rootCmd.PersistentPostRunE = closeLibrary
 }
 
-func openLibrary(cmd *cobra.Command, _ []string) error {
+func openLibrary(cmd *cobra.Command, args []string) error {
+	// Skip library init for help requests — opening the library for --help is wasteful
+	// and can cause issues if the data directory doesn't exist yet.
+	for _, a := range os.Args[1:] {
+		if a == "-h" || a == "--help" {
+			return nil
+		}
+	}
+	if cmd.Name() == "help" {
+		return nil
+	}
 	cfg, err := loadConfig()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -135,6 +145,12 @@ func svcFrom(cmd *cobra.Command) *service.Service {
 	return cmd.Context().Value(keyService).(*service.Service)
 }
 
+// cfgFrom extracts the Config from a command's context.
+func cfgFrom(cmd *cobra.Command) config.Config {
+	v, _ := cmd.Context().Value(keyConfig).(config.Config)
+	return v
+}
+
 // isJSON returns true if --json was set.
 func isJSON(cmd *cobra.Command) bool {
 	v, _ := cmd.Context().Value(keyJSON).(bool)
@@ -144,6 +160,11 @@ func isJSON(cmd *cobra.Command) bool {
 // resolveSlug resolves a user query to an article slug via the service.
 func resolveSlug(cmd *cobra.Command, query string) (string, error) {
 	return svcFrom(cmd).ResolveSlug(cmd.Context(), query)
+}
+
+// resolveCollectionSlug resolves a user query to a collection slug via the service.
+func resolveCollectionSlug(cmd *cobra.Command, query string) (string, error) {
+	return svcFrom(cmd).ResolveCollectionSlug(cmd.Context(), query)
 }
 
 // exitErr prints an error and exits with code 1.

@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -20,6 +21,7 @@ var (
 	ingestDryRun       bool
 	ingestForce        bool
 	ingestFile         string
+	ingestNoSuggest    bool
 )
 
 func init() {
@@ -32,6 +34,7 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestDryRun, "dry-run", false, "extract only, do not write files or call LLM")
 	ingestCmd.Flags().BoolVar(&ingestForce, "force", false, "ingest even if URL was already ingested")
 	ingestCmd.Flags().StringVar(&ingestFile, "file", "", "batch mode: file with one URL/file per line (\"-\" for stdin)")
+	ingestCmd.Flags().BoolVar(&ingestNoSuggest, "no-suggest", false, "skip auto-suggest collections after ingest")
 	rootCmd.AddCommand(ingestCmd)
 }
 
@@ -188,6 +191,32 @@ Batch mode (--file):
 		if result.Cost.TotalUSD > 0 {
 			fmt.Fprintf(cmd.ErrOrStderr(), "cost: $%.4f\n", result.Cost.TotalUSD)
 		}
+
+		// Auto-suggest collections if configured and not suppressed.
+		cfg := cfgFrom(cmd)
+		if !ingestNoSuggest && !result.Teaser && cfg.Ingest.AutoSuggestCollections {
+			autoSuggestCollections(cmd, svc, result.Slug)
+		}
+
 		return nil
 	},
+}
+
+// autoSuggestCollections prints per-article collection suggestions after ingest.
+// Errors are non-fatal — printed to stderr only. Never applies automatically.
+func autoSuggestCollections(cmd *cobra.Command, svc *service.Service, slug string) {
+	tty := isTTY(os.Stdout)
+	matches, err := svc.SuggestCollectionsForArticle(cmd.Context(), slug, "", nil)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "suggest collections: %v\n", err)
+		return
+	}
+	if len(matches) == 0 {
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "\ncollection suggestions for %s:\n", slug)
+	for _, m := range matches {
+		fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s\n", bold(m.Slug, tty), dim(m.Reason, tty))
+		fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", slug, m.Slug)
+	}
 }
