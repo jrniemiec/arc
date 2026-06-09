@@ -206,6 +206,11 @@ func (l *Library) DeleteCollection(ctx context.Context, id string) error {
 	return l.db.DeleteCollection(ctx, id)
 }
 
+// RenameCollection updates the collection ID in SQLite.
+func (l *Library) RenameCollection(ctx context.Context, oldID, newID string) error {
+	return l.db.RenameCollection(ctx, oldID, newID)
+}
+
 // resolveFiles fills in the preferred file paths (summary, flash, flashcards)
 // based on config preferences. root_path must already be set in a.Files.Root.
 func (l *Library) resolveFiles(a *store.Article) {

@@ -325,6 +325,28 @@ func (s *Store) RemoveArticleFromCollection(ctx context.Context, articleID, coll
 		&sqlitex.ExecOptions{Args: []any{articleID, collectionID}})
 }
 
+// RenameCollection updates the collection ID and name in SQLite.
+func (s *Store) RenameCollection(ctx context.Context, oldID, newID string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	endFn := sqlitex.Transaction(conn)
+	err = func() error {
+		if err := sqlitex.Execute(conn,
+			`UPDATE article_collections SET collection_id = ? WHERE collection_id = ?`,
+			&sqlitex.ExecOptions{Args: []any{newID, oldID}}); err != nil {
+			return err
+		}
+		return sqlitex.Execute(conn,
+			`UPDATE collections SET id = ?, name = ? WHERE id = ?`,
+			&sqlitex.ExecOptions{Args: []any{newID, newID, oldID}})
+	}()
+	endFn(&err)
+	return err
+}
+
 // DeleteCollection removes a collection and all its article membership rows.
 func (s *Store) DeleteCollection(ctx context.Context, id string) error {
 	conn, err := s.pool.Take(ctx)

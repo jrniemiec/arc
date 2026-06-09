@@ -791,6 +791,14 @@ func (s *Service) ListCollectionArticles(ctx context.Context, slug string) ([]st
 	return articles, nil
 }
 
+// RenameCollection renames a collection slug on disk and in SQLite.
+func (s *Service) RenameCollection(ctx context.Context, oldSlug, newSlug string) error {
+	if err := fs.RenameCollection(s.cfg.DataRoot, oldSlug, newSlug); err != nil {
+		return err
+	}
+	return s.lib.RenameCollection(ctx, oldSlug, newSlug)
+}
+
 // DeleteCollection removes a collection and optionally purges exclusively-owned articles.
 // If purge is true, articles that belong only to this collection are also deleted from disk.
 func (s *Service) DeleteCollection(ctx context.Context, slug string, purge bool) (purged []string, err error) {

@@ -23,6 +23,7 @@ func init() {
 	collectionsCmd.AddCommand(collectionsSuggestCmd)
 	collectionsCmd.AddCommand(collectionsReadCmd)
 	collectionsCmd.AddCommand(collectionsDeleteCmd)
+	collectionsCmd.AddCommand(collectionsRenameCmd)
 
 	collectionsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
 	collectionsDeleteCmd.Flags().Bool("purge", false, "also delete articles that belong only to this collection")
@@ -465,6 +466,40 @@ Examples:
 				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", a)
 			}
 		}
+		return nil
+	},
+}
+
+var collectionsRenameCmd = &cobra.Command{
+	Use:   "rename <old-slug> <new-slug>",
+	Short: "Rename a collection",
+	Long: `Rename a collection by moving its directory to a new slug.
+
+The old slug accepts fuzzy matching (partial name is enough).
+The new slug must be an exact valid identifier: lowercase letters,
+numbers, and hyphens only — no spaces or special characters.
+
+All article symlinks inside the collection remain valid after the rename.
+SQLite is updated atomically.
+
+Examples:
+  arc collections rename ml machine-learning
+  arc collections rename software software-architecture`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		oldSlug, err := resolveCollectionSlug(cmd, args[0])
+		if err != nil {
+			return err
+		}
+		newSlug := args[1]
+		if err := validateSlug(newSlug); err != nil {
+			return err
+		}
+		svc := svcFrom(cmd)
+		if err := svc.RenameCollection(cmd.Context(), oldSlug, newSlug); err != nil {
+			return fmt.Errorf("rename collection: %w", err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "renamed: %s → %s\n", oldSlug, newSlug)
 		return nil
 	},
 }

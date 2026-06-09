@@ -388,6 +388,33 @@ func RemoveArticleFromCollection(dataRoot, collectionSlug, articleSlug string) e
 	return os.Remove(linkPath)
 }
 
+// RenameCollection moves a collection directory to a new slug and updates meta.json.
+// Symlinks inside the directory are relative and remain valid after the move.
+func RenameCollection(dataRoot, oldSlug, newSlug string) error {
+	oldDir := CollectionDir(dataRoot, oldSlug)
+	newDir := CollectionDir(dataRoot, newSlug)
+
+	if _, err := os.Stat(oldDir); os.IsNotExist(err) {
+		return fmt.Errorf("collection %q not found", oldSlug)
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return fmt.Errorf("collection %q already exists", newSlug)
+	}
+
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("rename collection dir: %w", err)
+	}
+
+	// Update meta.json with new slug and name.
+	m, err := ReadCollectionMeta(dataRoot, newSlug)
+	if err != nil {
+		return fmt.Errorf("read meta after rename: %w", err)
+	}
+	m.Slug = newSlug
+	m.Name = newSlug
+	return WriteCollectionMeta(dataRoot, m)
+}
+
 // DeleteCollection removes the collection directory and all symlinks inside it.
 // Article directories are never touched.
 func DeleteCollection(dataRoot, slug string) error {
