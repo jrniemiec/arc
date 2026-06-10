@@ -130,16 +130,20 @@ var collectionsShowCmd = &cobra.Command{
 }
 
 var collectionsCreateCmd = &cobra.Command{
-	Use:   "create <slug>",
+	Use:   "create <slug> [description]",
 	Short: "Create a new collection",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		slug := args[0]
 		if err := validateSlug(slug); err != nil {
 			return err
 		}
+		description := ""
+		if len(args) == 2 {
+			description = args[1]
+		}
 		svc := svcFrom(cmd)
-		if err := svc.CreateCollection(cmd.Context(), slug); err != nil {
+		if err := svc.CreateCollection(cmd.Context(), slug, description); err != nil {
 			return fmt.Errorf("create collection: %w", err)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "created collection: %s\n", slug)
@@ -334,7 +338,7 @@ Examples:
 				}
 
 				if acceptAll || promptYN(cmd, fmt.Sprintf("Create %q and add %d articles? [Y/n] ", s.Slug, len(s.Articles))) {
-					if err := svc.CreateCollection(cmd.Context(), s.Slug); err != nil {
+					if err := svc.CreateCollection(cmd.Context(), s.Slug, s.Description); err != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "  skip (create): %v\n", err)
 						continue
 					}
@@ -374,22 +378,49 @@ Examples:
 		}
 		fmt.Fprintln(cmd.OutOrStdout())
 		for _, m := range matches {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s  %s\n", bold(m.Slug, tty), dim(m.Reason, tty))
-			fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", articleSlug, m.Slug)
-			fmt.Fprintln(cmd.OutOrStdout())
+			if m.NewSlug != "" {
+				// LLM proposes a new collection
+				fmt.Fprintf(cmd.OutOrStdout(), "%s  %s\n", bold("(new) "+m.NewSlug, tty), dim(m.Reason, tty))
+				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections create %s %q\n", m.NewSlug, m.NewDescription)
+				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", articleSlug, m.NewSlug)
+				fmt.Fprintln(cmd.OutOrStdout())
 
-			if !apply {
-				continue
-			}
+				if !apply {
+					continue
+				}
 
-			if acceptAll || promptYN(cmd, fmt.Sprintf("Add %q to collection %q? [Y/n] ", articleSlug, m.Slug)) {
-				if err := svc.AddToCollection(cmd.Context(), articleSlug, m.Slug); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  skip: %v\n", err)
+				if acceptAll || promptYN(cmd, fmt.Sprintf("Create collection %q and add %q? [Y/n] ", m.NewSlug, articleSlug)) {
+					if err := svc.CreateCollection(cmd.Context(), m.NewSlug, m.NewDescription); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "  skip (create): %v\n", err)
+						continue
+					}
+					if err := svc.AddToCollection(cmd.Context(), articleSlug, m.NewSlug); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "  skip (add): %v\n", err)
+					} else {
+						fmt.Fprintf(cmd.OutOrStdout(), "  created %s and added %s\n", m.NewSlug, articleSlug)
+					}
 				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "  added %s → %s\n", articleSlug, m.Slug)
+					fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
 				}
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
+				// Existing collection match
+				fmt.Fprintf(cmd.OutOrStdout(), "%s  %s\n", bold(m.Slug, tty), dim(m.Reason, tty))
+				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", articleSlug, m.Slug)
+				fmt.Fprintln(cmd.OutOrStdout())
+
+				if !apply {
+					continue
+				}
+
+				if acceptAll || promptYN(cmd, fmt.Sprintf("Add %q to collection %q? [Y/n] ", articleSlug, m.Slug)) {
+					if err := svc.AddToCollection(cmd.Context(), articleSlug, m.Slug); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "  skip: %v\n", err)
+					} else {
+						fmt.Fprintf(cmd.OutOrStdout(), "  added %s → %s\n", articleSlug, m.Slug)
+					}
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
+				}
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
 		}

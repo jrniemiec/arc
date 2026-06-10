@@ -436,7 +436,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		}
 
 		if req.Collection != "" {
-			_ = fs.CreateCollection(cfg.DataRoot, req.Collection)
+			_ = fs.CreateCollection(cfg.DataRoot, req.Collection, "")
 			if err := fs.AddArticleToCollection(cfg.DataRoot, cfg.ArticlesRoot, slug, req.Collection); err != nil && err != fs.ErrAlreadyInCollection {
 				slog.Warn("could not link teaser to collection", "slug", slug, "collection", req.Collection, "err", err)
 			}
@@ -654,7 +654,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 	// ── 12. Collection symlink ────────────────────────────────────────────
 	if req.Collection != "" {
-		_ = fs.CreateCollection(cfg.DataRoot, req.Collection)
+		_ = fs.CreateCollection(cfg.DataRoot, req.Collection, "")
 		if err := fs.AddArticleToCollection(cfg.DataRoot, cfg.ArticlesRoot, slug, req.Collection); err != nil && err != fs.ErrAlreadyInCollection {
 			slog.Warn("could not link article to collection", "slug", slug, "collection", req.Collection, "err", err)
 		}
@@ -943,9 +943,12 @@ type CollectionSuggestCollection struct {
 }
 
 // CollectionArticleMatchResult is one ranked collection match for an article.
+// If Slug is empty, NewSlug/NewDescription propose a new collection to create.
 type CollectionArticleMatchResult struct {
-	Slug   string
-	Reason string
+	Slug           string
+	Reason         string
+	NewSlug        string // set when LLM proposes a new collection
+	NewDescription string // description for the proposed new collection
 }
 
 // CollectionArticleSuggest calls the LLM to suggest which existing collections
@@ -1056,18 +1059,27 @@ func parseCollectionMatches(resp string) ([]CollectionArticleMatchResult, error)
 	}
 
 	var raw []struct {
-		Slug   string `json:"slug"`
-		Reason string `json:"reason"`
+		Slug          *string `json:"slug"`
+		Reason        string  `json:"reason"`
+		NewCollection *struct {
+			Slug        string `json:"slug"`
+			Description string `json:"description"`
+		} `json:"new_collection"`
 	}
 	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
 		return nil, fmt.Errorf("parse collection matches: %w\nresponse: %s", err, resp)
 	}
 	out := make([]CollectionArticleMatchResult, 0, len(raw))
 	for _, r := range raw {
-		if r.Slug == "" {
-			continue
+		if r.Slug != nil && *r.Slug != "" {
+			out = append(out, CollectionArticleMatchResult{Slug: *r.Slug, Reason: r.Reason})
+		} else if r.NewCollection != nil && r.NewCollection.Slug != "" {
+			out = append(out, CollectionArticleMatchResult{
+				NewSlug:        r.NewCollection.Slug,
+				NewDescription: r.NewCollection.Description,
+				Reason:         r.Reason,
+			})
 		}
-		out = append(out, CollectionArticleMatchResult{Slug: r.Slug, Reason: r.Reason})
 	}
 	return out, nil
 }

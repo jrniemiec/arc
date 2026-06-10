@@ -73,7 +73,7 @@ Examples:
   arc search "diffusion" --tag ml
   arc search "gpt" --no-semantic
   arc search "gpt" --json`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 
@@ -88,7 +88,7 @@ Examples:
 		}
 
 		req := service.SearchRequest{
-			Query:      args[0],
+			Query:      strings.Join(args, " "),
 			Collection: searchCollection,
 			Tags:       tags,
 			Mode:       mode,

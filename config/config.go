@@ -167,10 +167,13 @@ const DefaultCollectionArticleSuggestPrompt = `You are organizing a personal kno
 
 Given an article (title + flash summary) and a list of existing collections
 (slug + description), suggest which collections this article belongs to.
+If no existing collection is a good fit, propose a new one instead.
 
 Rules:
-- Only suggest collections that are a genuine fit — do not force matches
+- Only suggest existing collections that are a genuine fit — do not force matches
 - Rank by confidence (highest first)
+- If none of the existing collections fit well, include one entry with "slug": null
+  and a "new_collection" object proposing a new collection slug and description
 - Return JSON only, no prose
 
 Return a JSON array:
@@ -178,6 +181,14 @@ Return a JSON array:
   {
     "slug": "machine-learning",
     "reason": "transformer architecture paper — direct match"
+  },
+  {
+    "slug": null,
+    "new_collection": {
+      "slug": "ai-model-releases",
+      "description": "Announcements and analysis of new AI model releases"
+    },
+    "reason": "no existing collection covers model release announcements"
   }
 ]`
 

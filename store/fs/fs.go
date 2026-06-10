@@ -278,7 +278,7 @@ func CollectionDir(dataRoot, slug string) string {
 
 // CreateCollection creates a new collection directory and writes meta.json.
 // Returns an error if the collection already exists.
-func CreateCollection(dataRoot, slug string) error {
+func CreateCollection(dataRoot, slug, description string) error {
 	dir := CollectionDir(dataRoot, slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdir collection %s: %w", slug, err)
@@ -287,7 +287,7 @@ func CreateCollection(dataRoot, slug string) error {
 	if pathExists(metaPath) {
 		return nil // already exists — idempotent
 	}
-	m := CollectionMeta{Slug: slug, Name: slug, CreatedAt: time.Now().UTC()}
+	m := CollectionMeta{Slug: slug, Name: slug, Description: description, CreatedAt: time.Now().UTC()}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -518,7 +518,7 @@ func MigrateMetaCollections(dataRoot, articlesRoot string) error {
 				continue
 			}
 			// Ensure collection dir exists
-			_ = CreateCollection(dataRoot, col)
+			_ = CreateCollection(dataRoot, col, "")
 			// Create symlink — ignore ErrAlreadyInCollection
 			err := AddArticleToCollection(dataRoot, articlesRoot, e.Name(), col)
 			if err != nil && err != ErrAlreadyInCollection {

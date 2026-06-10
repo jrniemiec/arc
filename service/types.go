@@ -178,9 +178,12 @@ type CollectionSuggestion struct {
 }
 
 // CollectionMatch is a ranked suggestion for which collection an article fits.
+// If Slug is empty, NewSlug/NewDescription propose a new collection to create.
 type CollectionMatch struct {
-	Slug   string
-	Reason string
+	Slug           string
+	Reason         string
+	NewSlug        string // set when LLM proposes a new collection
+	NewDescription string // description for the proposed new collection
 }
 
 // CollectionInfo describes a collection with article count.
@@ -206,9 +209,11 @@ type Stats struct {
 	CostTotal        float64
 
 	// Breakdowns
-	CostByModel      map[string]float64 // total USD spent per model (all operations)
-	ArticlesByModel  map[string]int     // article count by summary model
-	ArticlesByStyle  map[string]int     // article count by summary style
+	CostByModel           map[string]float64 // total USD spent per model (all operations)
+	ArticlesByModel       map[string]int     // article count by summary model
+	ArticlesByStyle       map[string]int     // article count by summary style
+	ArticlesByCollection  map[string]int     // article count by collection (+ "(uncollected)")
+	EmbedByCollection     map[string]int     // embedded article count by collection
 }
 
 // ReprocessRequest describes which articles to reprocess and how.

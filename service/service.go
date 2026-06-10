@@ -678,14 +678,15 @@ func (s *Service) MarkPlayed(ctx context.Context, id string) error {
 }
 
 // CreateCollection creates a new collection directory and registers it in SQLite.
-func (s *Service) CreateCollection(ctx context.Context, slug string) error {
-	if err := fs.CreateCollection(s.cfg.DataRoot, slug); err != nil {
+func (s *Service) CreateCollection(ctx context.Context, slug, description string) error {
+	if err := fs.CreateCollection(s.cfg.DataRoot, slug, description); err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
 	return s.lib.UpsertCollection(ctx, store.Collection{
-		ID:        slug,
-		Name:      slug,
-		CreatedAt: time.Now(),
+		ID:          slug,
+		Name:        slug,
+		Description: description,
+		CreatedAt:   time.Now(),
 	})
 }
 
@@ -976,8 +977,10 @@ func (s *Service) SuggestCollectionsForArticle(ctx context.Context, articleSlug,
 	out := make([]CollectionMatch, 0, len(results))
 	for _, r := range results {
 		out = append(out, CollectionMatch{
-			Slug:   r.Slug,
-			Reason: r.Reason,
+			Slug:           r.Slug,
+			Reason:         r.Reason,
+			NewSlug:        r.NewSlug,
+			NewDescription: r.NewDescription,
 		})
 	}
 	return out, nil
@@ -1004,6 +1007,8 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 	tagSet := make(map[string]struct{})
 	byModel := make(map[string]int)
 	byStyle := make(map[string]int)
+	byCollection := make(map[string]int)
+	embedByCollection := make(map[string]int)
 	var unread, unplayed, embedCoverage int
 	for _, a := range articles {
 		for _, t := range a.Tags {
@@ -1024,23 +1029,38 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		if a.EmbedModel != "" {
 			embedCoverage++
 		}
+		if len(a.Collections) == 0 {
+			byCollection["(uncollected)"]++
+			if a.EmbedModel != "" {
+				embedByCollection["(uncollected)"]++
+			}
+		} else {
+			for _, c := range a.Collections {
+				byCollection[c]++
+				if a.EmbedModel != "" {
+					embedByCollection[c]++
+				}
+			}
+		}
 	}
 
 	// Cost from events.jsonl
 	costTotal, costMonth, costByModel := s.aggregateCosts()
 
 	return Stats{
-		TotalArticles:    len(articles),
-		TotalCollections: len(cols),
-		TotalTags:        len(tagSet),
-		Unread:           unread,
-		Unplayed:         unplayed,
-		EmbedCoverage:    embedCoverage,
-		CostThisMonth:    costMonth,
-		CostTotal:        costTotal,
-		CostByModel:      costByModel,
-		ArticlesByModel:  byModel,
-		ArticlesByStyle:  byStyle,
+		TotalArticles:        len(articles),
+		TotalCollections:     len(cols),
+		TotalTags:            len(tagSet),
+		Unread:               unread,
+		Unplayed:             unplayed,
+		EmbedCoverage:        embedCoverage,
+		CostThisMonth:        costMonth,
+		CostTotal:            costTotal,
+		CostByModel:          costByModel,
+		ArticlesByModel:      byModel,
+		ArticlesByStyle:      byStyle,
+		ArticlesByCollection: byCollection,
+		EmbedByCollection:    embedByCollection,
 	}, nil
 }
 

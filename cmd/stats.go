@@ -24,7 +24,7 @@ Data is read from SQLite (article counts, models, styles) and events.jsonl
 (cost totals). Does not read the filesystem or call any LLM.
 
 Output:
-  Articles      total count with unread, unplayed, and embed coverage
+  Articles      total count with embed coverage
   Collections   number of defined collections
   Tags          number of unique tags
   By model      article count per summary model (colored by cost tier)
@@ -59,11 +59,43 @@ Examples:
 		if stats.TotalArticles > 0 {
 			embedPct = stats.EmbedCoverage * 100 / stats.TotalArticles
 		}
-		fmt.Fprintf(w, "Articles:    %d  (unread: %d, unplayed: %d, embedded: %d/%d %d%%)\n",
-			stats.TotalArticles, stats.Unread, stats.Unplayed,
-			stats.EmbedCoverage, stats.TotalArticles, embedPct)
+		fmt.Fprintf(w, "Articles:    %d  (embedded: %d/%d %d%%)\n",
+			stats.TotalArticles, stats.EmbedCoverage, stats.TotalArticles, embedPct)
 		fmt.Fprintf(w, "Collections: %d\n", stats.TotalCollections)
 		fmt.Fprintf(w, "Tags:        %d\n", stats.TotalTags)
+
+		// Articles by collection
+		if len(stats.ArticlesByCollection) > 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "Articles by collection:\n")
+			type colRow struct {
+				name  string
+				count int
+				embed int
+			}
+			var rows []colRow
+			var uncollected *colRow
+			for name, count := range stats.ArticlesByCollection {
+				row := colRow{name, count, stats.EmbedByCollection[name]}
+				if name == "(uncollected)" {
+					uncollected = &colRow{name, count, stats.EmbedByCollection[name]}
+				} else {
+					rows = append(rows, row)
+				}
+			}
+			sort.Slice(rows, func(i, j int) bool { return rows[i].count > rows[j].count })
+			if uncollected != nil {
+				rows = append(rows, *uncollected)
+			}
+			for _, r := range rows {
+				pct := 0
+				if r.count > 0 {
+					pct = r.embed * 100 / r.count
+				}
+				fmt.Fprintf(w, "  %-35s  %3d  (embedded: %d/%d %d%%)\n",
+					r.name, r.count, r.embed, r.count, pct)
+			}
+		}
 
 		// Articles by summary model
 		if len(stats.ArticlesByModel) > 0 {
