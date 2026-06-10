@@ -21,7 +21,9 @@ var (
 	ingestDryRun       bool
 	ingestForce        bool
 	ingestFile         string
-	ingestNoSuggest    bool
+	ingestShowFlash    bool
+	ingestShowSummary  bool
+	ingestQuiet        bool
 )
 
 func init() {
@@ -34,7 +36,9 @@ func init() {
 	ingestCmd.Flags().BoolVar(&ingestDryRun, "dry-run", false, "extract only, do not write files or call LLM")
 	ingestCmd.Flags().BoolVar(&ingestForce, "force", false, "ingest even if URL was already ingested")
 	ingestCmd.Flags().StringVar(&ingestFile, "file", "", "batch mode: file with one URL/file per line (\"-\" for stdin)")
-	ingestCmd.Flags().BoolVar(&ingestNoSuggest, "no-suggest", false, "skip auto-suggest collections after ingest")
+	ingestCmd.Flags().BoolVar(&ingestShowFlash, "show-flash", false, "print flash summary to stdout after ingest")
+	ingestCmd.Flags().BoolVar(&ingestShowSummary, "show-summary", false, "print full summary to stdout after ingest")
+	ingestCmd.Flags().BoolVarP(&ingestQuiet, "quiet", "q", false, "suppress progress output; print slug only")
 	rootCmd.AddCommand(ingestCmd)
 }
 
@@ -71,6 +75,8 @@ Examples:
   arc ingest paper.pdf --no-flashcards
   arc ingest notes.txt --title "My Notes" --collection my-collection
   arc ingest https://example.com/article --dry-run
+  arc ingest https://example.com/article --show-flash
+  arc ingest https://example.com/article --show-summary
   cat article.txt | arc ingest -
 
 Batch mode (--file):
@@ -107,7 +113,7 @@ Batch mode (--file):
 				DryRun:           ingestDryRun,
 				Force:            ingestForce,
 			}
-			if !isJSON(cmd) {
+			if !isJSON(cmd) && !ingestQuiet {
 				req.Progress = func(msg string) {
 					fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
 				}
@@ -125,20 +131,22 @@ Batch mode (--file):
 			for _, slug := range result.Slugs {
 				fmt.Fprintln(cmd.OutOrStdout(), slug)
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "ingested %d", result.Ingested)
-			if result.Teasers > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), " (%d teasers)", result.Teasers)
+			if !ingestQuiet {
+				fmt.Fprintf(cmd.ErrOrStderr(), "ingested %d", result.Ingested)
+				if result.Teasers > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), " (%d teasers)", result.Teasers)
+				}
+				if result.Skipped > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), ", skipped %d (duplicates)", result.Skipped)
+				}
+				if result.Errors > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), ", errors %d", result.Errors)
+				}
+				if result.CostUSD > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  ($%.4f)", result.CostUSD)
+				}
+				fmt.Fprintln(cmd.ErrOrStderr())
 			}
-			if result.Skipped > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), ", skipped %d (duplicates)", result.Skipped)
-			}
-			if result.Errors > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), ", errors %d", result.Errors)
-			}
-			if result.CostUSD > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "  ($%.4f)", result.CostUSD)
-			}
-			fmt.Fprintln(cmd.ErrOrStderr())
 			return nil
 		}
 
@@ -163,7 +171,7 @@ Batch mode (--file):
 			req.File = input
 		}
 
-		if !isJSON(cmd) {
+		if !isJSON(cmd) && !ingestQuiet {
 			req.Progress = func(msg string) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
 			}
@@ -183,40 +191,37 @@ Batch mode (--file):
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 		}
 
-		if result.Teaser {
+		if result.Teaser && !ingestQuiet {
 			fmt.Fprintf(cmd.OutOrStdout(), "%s  [teaser]\n", result.Slug)
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(), result.Slug)
 		}
-		if result.Cost.TotalUSD > 0 {
+		if result.Cost.TotalUSD > 0 && !ingestQuiet {
 			fmt.Fprintf(cmd.ErrOrStderr(), "cost: $%.4f\n", result.Cost.TotalUSD)
 		}
 
-		// Auto-suggest collections if configured and not suppressed.
-		cfg := cfgFrom(cmd)
-		if !ingestNoSuggest && !result.Teaser && cfg.Ingest.AutoSuggestCollections {
-			autoSuggestCollections(cmd, svc, result.Slug)
+		if !result.Teaser && !ingestQuiet {
+			tty := isTTY(os.Stdout)
+			if ingestShowFlash {
+				if flash, err := svc.Read(cmd.Context(), service.ReadRequest{
+					ID:   result.Slug,
+					Part: service.PartFlash,
+				}); err == nil && flash != "" {
+					fmt.Fprintln(cmd.OutOrStdout())
+					fmt.Fprintln(cmd.OutOrStdout(), renderMarkdown(flash, "", tty))
+				}
+			}
+			if ingestShowSummary {
+				if summary, err := svc.Read(cmd.Context(), service.ReadRequest{
+					ID:   result.Slug,
+					Part: service.PartSummary,
+				}); err == nil && summary != "" {
+					fmt.Fprintln(cmd.OutOrStdout())
+					fmt.Fprintln(cmd.OutOrStdout(), renderMarkdown(summary, "", tty))
+				}
+			}
 		}
 
 		return nil
 	},
-}
-
-// autoSuggestCollections prints per-article collection suggestions after ingest.
-// Errors are non-fatal — printed to stderr only. Never applies automatically.
-func autoSuggestCollections(cmd *cobra.Command, svc *service.Service, slug string) {
-	tty := isTTY(os.Stdout)
-	matches, err := svc.SuggestCollectionsForArticle(cmd.Context(), slug, "", nil)
-	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "suggest collections: %v\n", err)
-		return
-	}
-	if len(matches) == 0 {
-		return
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "\ncollection suggestions for %s:\n", slug)
-	for _, m := range matches {
-		fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s\n", bold(m.Slug, tty), dim(m.Reason, tty))
-		fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", slug, m.Slug)
-	}
 }

@@ -26,12 +26,14 @@ func init() {
 	collectionsCmd.AddCommand(collectionsDeleteCmd)
 	collectionsCmd.AddCommand(collectionsRenameCmd)
 
+	collectionsShowCmd.Flags().StringVar(&collectionsShowArticle, "article", "", "show collections that contain this article slug")
 	collectionsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
 	collectionsDeleteCmd.Flags().Bool("purge", false, "also delete articles that belong only to this collection")
 
 	collectionsSuggestCmd.Flags().String("profile", "", "LLM profile override")
 	collectionsSuggestCmd.Flags().Bool("apply", false, "interactively create collections and link articles")
 	collectionsSuggestCmd.Flags().Bool("all", false, "with --apply: accept all without prompting")
+	collectionsSuggestCmd.Flags().Bool("uncollected", false, "suggest collections for all uncollected articles")
 
 	collectionsReadCmd.Flags().Bool("flash", false, "read flash summaries (default)")
 	collectionsReadCmd.Flags().Bool("summary", false, "read full summaries")
@@ -94,12 +96,41 @@ var collectionsListCmd = &cobra.Command{
 	},
 }
 
+var collectionsShowArticle string
+
 var collectionsShowCmd = &cobra.Command{
 	Use:   "show <slug>",
-	Short: "List articles in a collection",
-	Args:  cobra.ExactArgs(1),
+	Short: "List articles in a collection, or collections for an article",
+	Args:  cobra.RangeArgs(0, 1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
+
+		// --article mode: show which collections contain a given article
+		if collectionsShowArticle != "" {
+			articleSlug, err := resolveSlug(cmd, collectionsShowArticle)
+			if err != nil {
+				return fmt.Errorf("article not found: %w", err)
+			}
+			a, err := svc.GetArticle(cmd.Context(), articleSlug)
+			if err != nil {
+				return err
+			}
+			tty := isTTY(os.Stdout)
+			fmt.Fprintf(cmd.OutOrStdout(), "article: %s\n\n", bold(a.ID, tty))
+			if len(a.Collections) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "  (uncollected)")
+				return nil
+			}
+			for _, c := range a.Collections {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", c)
+			}
+			return nil
+		}
+
+		if len(args) == 0 {
+			return fmt.Errorf("specify a collection slug or use --article <slug>")
+		}
+
 		slug, err := resolveCollectionSlug(cmd, args[0])
 		if err != nil {
 			return err
@@ -286,6 +317,8 @@ var collectionsSuggestCmd = &cobra.Command{
 	Short: "Suggest collections using AI (read-only by default)",
 	Long: `Without an argument: suggest a set of new collections for the whole library.
 With an article slug: suggest which existing collections the article fits.
+With --uncollected: iterate all articles that don't belong to any collection
+and suggest where each one should go (one LLM call per article).
 
 By default only prints suggestions and equivalent arc commands — nothing is created.
 Use --apply to interactively create collections and link articles.
@@ -294,17 +327,49 @@ Examples:
   arc collections suggest                         # library-wide suggestions (print only)
   arc collections suggest 20260115-attention      # per-article suggestions (print only)
   arc collections suggest --apply                 # interactive: accept/skip each suggestion
-  arc collections suggest --apply --all           # apply all without prompting`,
+  arc collections suggest --apply --all           # apply all without prompting
+  arc collections suggest --uncollected           # suggest for all uncollected articles
+  arc collections suggest --uncollected --apply   # interactive batch organize`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 		profile, _ := cmd.Flags().GetString("profile")
 		apply, _ := cmd.Flags().GetBool("apply")
 		acceptAll, _ := cmd.Flags().GetBool("all")
+		uncollected, _ := cmd.Flags().GetBool("uncollected")
 		tty := isTTY(os.Stdout)
 
 		progress := func(msg string) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
+		}
+
+		// --uncollected mode: iterate all articles with no collections
+		if uncollected {
+			if len(args) > 0 {
+				return fmt.Errorf("cannot specify a slug together with --uncollected")
+			}
+			articles, err := svc.List(cmd.Context(), store.Filter{})
+			if err != nil {
+				return err
+			}
+			var pending []store.Article
+			for _, a := range articles {
+				if len(a.Collections) == 0 {
+					pending = append(pending, a)
+				}
+			}
+			if len(pending) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no uncollected articles")
+				return nil
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "%d uncollected articles\n\n", len(pending))
+			for i, a := range pending {
+				prefix := fmt.Sprintf("[%d/%d] %s", i+1, len(pending), a.ID)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\n", bold(prefix, tty))
+				suggestForArticle(cmd, svc, a.ID, profile, apply, acceptAll, tty, progress)
+				fmt.Fprintln(cmd.OutOrStdout())
+			}
+			return nil
 		}
 
 		if len(args) == 0 {
@@ -367,65 +432,64 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("article not found: %w", err)
 		}
+		return suggestForArticle(cmd, svc, articleSlug, profile, apply, acceptAll, tty, progress)
+	},
+}
 
-		matches, err := svc.SuggestCollectionsForArticle(cmd.Context(), articleSlug, profile, progress)
-		if err != nil {
-			return fmt.Errorf("suggest collections for article: %w", err)
-		}
-		if len(matches) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "no matching collections found")
-			return nil
-		}
-		fmt.Fprintln(cmd.OutOrStdout())
-		for _, m := range matches {
-			if m.NewSlug != "" {
-				// LLM proposes a new collection
-				fmt.Fprintf(cmd.OutOrStdout(), "%s  %s\n", bold("(new) "+m.NewSlug, tty), dim(m.Reason, tty))
-				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections create %s %q\n", m.NewSlug, m.NewDescription)
-				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", articleSlug, m.NewSlug)
-				fmt.Fprintln(cmd.OutOrStdout())
+// suggestForArticle runs per-article collection suggestion and optionally applies results.
+func suggestForArticle(cmd *cobra.Command, svc *service.Service, articleSlug, profile string, apply, acceptAll, tty bool, progress func(string)) error {
+	matches, err := svc.SuggestCollectionsForArticle(cmd.Context(), articleSlug, profile, progress)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "  error: %v\n", err)
+		return nil // non-fatal in batch mode
+	}
+	if len(matches) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "  no matching collections found")
+		return nil
+	}
+	for _, m := range matches {
+		if m.NewSlug != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s\n", bold("(new) "+m.NewSlug, tty), dim(m.Reason, tty))
+			fmt.Fprintf(cmd.OutOrStdout(), "    arc collections create %s %q\n", m.NewSlug, m.NewDescription)
+			fmt.Fprintf(cmd.OutOrStdout(), "    arc collections add %s %s\n", articleSlug, m.NewSlug)
 
-				if !apply {
+			if !apply {
+				continue
+			}
+
+			if acceptAll || promptYN(cmd, fmt.Sprintf("  Create collection %q and add %q? [Y/n] ", m.NewSlug, articleSlug)) {
+				if err := svc.CreateCollection(cmd.Context(), m.NewSlug, m.NewDescription); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    skip (create): %v\n", err)
 					continue
 				}
-
-				if acceptAll || promptYN(cmd, fmt.Sprintf("Create collection %q and add %q? [Y/n] ", m.NewSlug, articleSlug)) {
-					if err := svc.CreateCollection(cmd.Context(), m.NewSlug, m.NewDescription); err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "  skip (create): %v\n", err)
-						continue
-					}
-					if err := svc.AddToCollection(cmd.Context(), articleSlug, m.NewSlug); err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "  skip (add): %v\n", err)
-					} else {
-						fmt.Fprintf(cmd.OutOrStdout(), "  created %s and added %s\n", m.NewSlug, articleSlug)
-					}
+				if err := svc.AddToCollection(cmd.Context(), articleSlug, m.NewSlug); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    skip (add): %v\n", err)
 				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
+					fmt.Fprintf(cmd.OutOrStdout(), "    created %s and added %s\n", m.NewSlug, articleSlug)
 				}
 			} else {
-				// Existing collection match
-				fmt.Fprintf(cmd.OutOrStdout(), "%s  %s\n", bold(m.Slug, tty), dim(m.Reason, tty))
-				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", articleSlug, m.Slug)
-				fmt.Fprintln(cmd.OutOrStdout())
-
-				if !apply {
-					continue
-				}
-
-				if acceptAll || promptYN(cmd, fmt.Sprintf("Add %q to collection %q? [Y/n] ", articleSlug, m.Slug)) {
-					if err := svc.AddToCollection(cmd.Context(), articleSlug, m.Slug); err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "  skip: %v\n", err)
-					} else {
-						fmt.Fprintf(cmd.OutOrStdout(), "  added %s → %s\n", articleSlug, m.Slug)
-					}
-				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
-				}
+				fmt.Fprintln(cmd.OutOrStdout(), "    skipped")
 			}
-			fmt.Fprintln(cmd.OutOrStdout())
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s  %s\n", bold(m.Slug, tty), dim(m.Reason, tty))
+			fmt.Fprintf(cmd.OutOrStdout(), "    arc collections add %s %s\n", articleSlug, m.Slug)
+
+			if !apply {
+				continue
+			}
+
+			if acceptAll || promptYN(cmd, fmt.Sprintf("  Add %q to collection %q? [Y/n] ", articleSlug, m.Slug)) {
+				if err := svc.AddToCollection(cmd.Context(), articleSlug, m.Slug); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    skip: %v\n", err)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "    added %s → %s\n", articleSlug, m.Slug)
+				}
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "    skipped")
+			}
 		}
-		return nil
-	},
+	}
+	return nil
 }
 
 var collectionsDeleteCmd = &cobra.Command{

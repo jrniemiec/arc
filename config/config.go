@@ -98,7 +98,6 @@ type IngestConfig struct {
 	// Collection suggestion
 	CollectionSuggestProfile  string `json:"collection_suggest_profile"`  // profile for arc collections suggest; default: flash_profile
 	CollectionSuggestPrompt   string `json:"collection_suggest_prompt"`   // system prompt override for collection suggestion
-	AutoSuggestCollections    bool   `json:"auto_suggest_collections"`    // automatically suggest collections after ingest; default: false
 }
 
 // FlashcardStyleConfig holds the system prompt for one flashcard style.
@@ -472,9 +471,6 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Ingest.CollectionSuggestPrompt != "" {
 		cfg.Ingest.CollectionSuggestPrompt = overlay.Ingest.CollectionSuggestPrompt
-	}
-	if overlay.Ingest.AutoSuggestCollections {
-		cfg.Ingest.AutoSuggestCollections = true
 	}
 	for k, v := range overlay.Ingest.FlashcardStyles {
 		cfg.Ingest.FlashcardStyles[k] = v

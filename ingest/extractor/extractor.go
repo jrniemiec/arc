@@ -119,18 +119,29 @@ func extractCanonicalURL(body []byte) string {
 	s := string(body)
 	// <link rel="canonical" href="...">
 	if i := strings.Index(s, `rel="canonical"`); i != -1 {
-		chunk := s[max(0, i-200) : min(len(s), i+200)]
+		// Search forward within the same tag (up to 200 chars after rel=)
+		chunk := s[i : min(len(s), i+200)]
 		if j := strings.Index(chunk, `href="`); j != -1 {
 			rest := chunk[j+6:]
 			if k := strings.Index(rest, `"`); k != -1 {
-				return rest[:k]
+				u := rest[:k]
+				if !isStaticAsset(u) {
+					return u
+				}
 			}
 		}
-		// also handle href before rel
-		if j := strings.LastIndex(s[:i], `href="`); j != -1 && i-j < 300 {
-			rest := s[j+6:]
-			if k := strings.Index(rest, `"`); k != -1 {
-				return rest[:k]
+		// href appears before rel= — search backwards within the same tag only
+		// Find the opening < of this tag to bound the search
+		tagStart := strings.LastIndex(s[:i], "<")
+		if tagStart != -1 {
+			if j := strings.LastIndex(s[tagStart:i], `href="`); j != -1 {
+				rest := s[tagStart+j+6:]
+				if k := strings.Index(rest, `"`); k != -1 {
+					u := rest[:k]
+					if !isStaticAsset(u) {
+						return u
+					}
+				}
 			}
 		}
 	}
@@ -145,6 +156,17 @@ func extractCanonicalURL(body []byte) string {
 		}
 	}
 	return ""
+}
+
+// isStaticAsset returns true if the URL looks like a CSS, JS, image, or font file.
+func isStaticAsset(u string) bool {
+	lower := strings.ToLower(u)
+	for _, ext := range []string{".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".ico"} {
+		if strings.HasSuffix(lower, ext) || strings.Contains(lower, ext+"?") {
+			return true
+		}
+	}
+	return false
 }
 
 func max(a, b int) int {
