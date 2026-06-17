@@ -40,6 +40,11 @@ func New(lib *library.Library, cfg config.Config) *Service {
 	return svc
 }
 
+// Library returns the underlying library for callers that need direct access.
+func (s *Service) Library() *library.Library {
+	return s.lib
+}
+
 // Reindex rebuilds the SQLite index from the filesystem.
 // progress is called with (indexed, total) after each article; may be nil.
 func (s *Service) Reindex(ctx context.Context, progress func(indexed, total int)) error {
@@ -150,7 +155,7 @@ func (s *Service) Reprocess(ctx context.Context, req ReprocessRequest) (Reproces
 		if req.Missing {
 			needsSummary := !req.NoSummary && a.Files.Summary == ""
 			needsFlash := !req.NoFlash && a.Files.Flash == ""
-			needsFlashcards := !req.NoFlashcards && a.Files.Flashcards == ""
+			needsFlashcards := (s.cfg.Ingest.Flashcards || req.Flashcards) && !req.NoFlashcards && a.Files.Flashcards == ""
 			needsEmbed := !req.NoEmbed && a.EmbedModel == ""
 			if !needsSummary && !needsFlash && !needsFlashcards && !needsEmbed {
 				result.Skipped++
@@ -278,7 +283,7 @@ func (s *Service) reprocessOne(ctx context.Context, a store.Article, req Reproce
 	}
 
 	// 6. Flashcards.
-	if !req.NoFlashcards {
+	if (s.cfg.Ingest.Flashcards || req.Flashcards) && !req.NoFlashcards {
 		progress("flashcards...")
 		r, err := s.Flashcards(ctx, FlashcardsRequest{Slug: a.ID, Write: true})
 		if err != nil {
@@ -1308,6 +1313,7 @@ func (s *Service) BatchIngest(ctx context.Context, req BatchIngestRequest) (Batc
 			SummaryProfile:   req.SummaryProfile,
 			FlashProfile:     req.FlashProfile,
 			FlashcardProfile: req.FlashcardProfile,
+			Flashcards:       req.Flashcards,
 			NoFlashcards:     req.NoFlashcards,
 			NoEmbed:          req.NoEmbed,
 			DryRun:           req.DryRun,
@@ -1378,6 +1384,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 		FlashModel:     req.FlashProfile,
 		FlashcardModel: req.FlashcardProfile,
 		FlashcardStyle: req.FlashcardStyle,
+		Flashcards:     req.Flashcards,
 		NoFlashcards:   req.NoFlashcards,
 		NoEmbed:        req.NoEmbed,
 		VectorStore:    s.vec,

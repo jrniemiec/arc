@@ -4,7 +4,7 @@ LDFLAGS ?= -X main.version=$(VERSION)
 BINARY  := arc
 INSTALL := $(HOME)/dev/bin/$(BINARY)
 
-.PHONY: build install run test fmt vet clean
+.PHONY: build install run test fmt vet clean feedprobe
 
 build:
 	@mkdir -p bin
@@ -25,6 +25,10 @@ fmt:
 
 vet:
 	$(GO) vet ./...
+
+feedprobe:
+	@mkdir -p bin
+	$(GO) build -o bin/feedprobe ./cmd/feedprobe
 
 clean:
 	rm -rf bin/

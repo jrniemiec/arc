@@ -17,6 +17,7 @@ var (
 	reprocessBody         string
 	reprocessNoSummary    bool
 	reprocessNoFlash      bool
+	reprocessFlashcards   bool
 	reprocessNoFlashcards bool
 	reprocessNoEmbed      bool
 	reprocessMissing      bool
@@ -30,7 +31,8 @@ func init() {
 	reprocessCmd.Flags().StringVar(&reprocessBody, "body", "", "replace body.txt from file or stdin (\"-\")")
 	reprocessCmd.Flags().BoolVar(&reprocessNoSummary, "no-summary", false, "skip summary generation")
 	reprocessCmd.Flags().BoolVar(&reprocessNoFlash, "no-flash", false, "skip flash generation")
-	reprocessCmd.Flags().BoolVar(&reprocessNoFlashcards, "no-flashcards", false, "skip flashcard generation")
+	reprocessCmd.Flags().BoolVar(&reprocessFlashcards, "flashcards", false, "generate flashcards (overrides config default)")
+	reprocessCmd.Flags().BoolVar(&reprocessNoFlashcards, "no-flashcards", false, "skip flashcard generation (overrides config default)")
 	reprocessCmd.Flags().BoolVar(&reprocessNoEmbed, "no-embed", false, "skip embedding")
 	reprocessCmd.Flags().BoolVar(&reprocessMissing, "missing", false, "skip articles that already have all requested variants")
 	rootCmd.AddCommand(reprocessCmd)
@@ -111,6 +113,7 @@ Examples:
 			BodyFile:     reprocessBody,
 			NoSummary:    reprocessNoSummary,
 			NoFlash:      reprocessNoFlash,
+			Flashcards:   reprocessFlashcards,
 			NoFlashcards: reprocessNoFlashcards,
 			NoEmbed:      reprocessNoEmbed,
 			Missing:      reprocessMissing,

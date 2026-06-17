@@ -82,7 +82,21 @@ Examples:
 			return fmt.Errorf("read: %w", err)
 		}
 
+		if part == service.PartFlash || part == service.PartSummary {
+			if a, err := svc.GetArticle(cmd.Context(), slug); err == nil && a.Title != "" {
+				fmt.Println(a.Title)
+				fmt.Println()
+			}
+		}
+
 		fmt.Println(text)
+
+		// Mark as read when consuming body or summary (not flash/flashcards —
+		// those are supplementary and don't indicate the article was fully read).
+		if part == service.PartBody || part == service.PartSummary {
+			_ = svc.MarkRead(cmd.Context(), slug)
+		}
+
 		return nil
 	},
 }

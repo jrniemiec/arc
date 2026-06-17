@@ -26,6 +26,11 @@ type Article struct {
 	QualityScore   float64
 	Relations      []Relation
 	Files          Files
+
+	// Agent provenance — set only when ingested by the feed agent.
+	AgentRunID   string // run ID that ingested this article
+	AgentVerdict string // "ingest" | "maybe"
+	AgentReason  string // LLM's one-sentence justification
 }
 
 // Files resolves which physical files back this article.
@@ -90,6 +95,8 @@ type Filter struct {
 	Before     *time.Time
 	Unread     bool
 	Unplayed   bool
+	AgentOnly  bool   // only articles ingested by the feed agent (agent_run_id IS NOT NULL)
+	AgentRunID string // only articles from this specific agent run
 	Limit      int
 	Offset     int
 }

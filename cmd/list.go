@@ -17,6 +17,9 @@ var (
 	listTag        string
 	listUnread     bool
 	listUnplayed   bool
+	listAgent      bool
+	listAgentRun   string
+	listSlugs      bool
 	listLimit      int
 )
 
@@ -25,6 +28,9 @@ func init() {
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().BoolVar(&listUnread, "unread", false, "show only unread articles")
 	listCmd.Flags().BoolVar(&listUnplayed, "unplayed", false, "show only unplayed articles")
+	listCmd.Flags().BoolVar(&listSlugs, "slugs", false, "print one slug per line (for scripting)")
+	listCmd.Flags().BoolVar(&listAgent, "agent", false, "show only articles ingested by the feed agent")
+	listCmd.Flags().StringVar(&listAgentRun, "agent-run", "", "show only articles from a specific agent run ID")
 	listCmd.Flags().IntVar(&listLimit, "limit", 50, "maximum number of results")
 	rootCmd.AddCommand(listCmd)
 }
@@ -67,12 +73,21 @@ Examples:
 			Tags:       tags,
 			Unread:     listUnread,
 			Unplayed:   listUnplayed,
+			AgentOnly:  listAgent,
+			AgentRunID: listAgentRun,
 			Limit:      listLimit,
 		}
 
 		articles, err := svc.List(cmd.Context(), f)
 		if err != nil {
 			return fmt.Errorf("list: %w", err)
+		}
+
+		if listSlugs {
+			for _, a := range articles {
+				fmt.Fprintln(cmd.OutOrStdout(), a.ID)
+			}
+			return nil
 		}
 
 		if isJSON(cmd) {

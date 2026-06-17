@@ -197,10 +197,20 @@ type Request struct {
 	FlashcardModel string
 	FlashcardStyle string
 
+	// AllowedLanguages, if non-empty, skips the article if its detected language
+	// is not in the list. Uses ISO 639-1 codes (e.g. "en", "de").
+	AllowedLanguages []string
+
 	// Flags
-	NoFlashcards bool
+	Flashcards   bool // force-enable flashcard generation regardless of config default
+	NoFlashcards bool // force-disable flashcard generation regardless of config default
 	NoEmbed      bool
 	DryRun       bool
+
+	// Agent provenance — set only when ingested by the feed agent.
+	AgentRunID   string // run ID, e.g. "agent-20260609-120000"
+	AgentVerdict string // "ingest" | "maybe"
+	AgentReason  string // LLM's one-sentence justification
 
 	// VectorStore, if non-nil, receives the article embedding after generation.
 	// If nil or NoEmbed is true, the embed step is skipped.
@@ -217,6 +227,8 @@ type Result struct {
 	Cost            store.CostRecord
 	ExtractionStats string // human-readable extraction stats line
 	Teaser          bool   // true if article was below min_words threshold
+	Skipped         bool   // true if article was skipped (e.g. language filter)
+	SkipReason      string // human-readable reason for skip
 }
 
 // Run executes the full ingest pipeline and returns the new article slug.
@@ -271,6 +283,23 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 	stats := extracted.Stats()
 	progress(stats)
+
+	// ── Language filter ───────────────────────────────────────────────────
+	if len(req.AllowedLanguages) > 0 && extracted.Language != "" {
+		allowed := false
+		for _, lang := range req.AllowedLanguages {
+			if strings.EqualFold(extracted.Language, lang) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			reason := fmt.Sprintf("language %q not in allowed list %v", extracted.Language, req.AllowedLanguages)
+			slog.Info("skipping article: language filter", "source", source, "language", extracted.Language)
+			progress("skipped: " + reason)
+			return Result{ExtractionStats: stats, Skipped: true, SkipReason: reason}, nil
+		}
+	}
 
 	// ── Teaser detection ──────────────────────────────────────────────────
 	minWords := cfg.Ingest.MinWords
@@ -404,14 +433,17 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 		now := time.Now().UTC().Format(time.RFC3339)
 		meta := fs.Meta{
-			ID:         slug,
-			Title:      title,
-			URL:        req.URL,
-			SourceType: sourceType,
-			Author:     extracted.Author,
-			Language:   extracted.Language,
-			IngestedAt: now,
-			Tags:       []fs.MetaTag{{Value: "teaser", Source: "auto"}},
+			ID:           slug,
+			Title:        title,
+			URL:          req.URL,
+			SourceType:   sourceType,
+			Author:       extracted.Author,
+			Language:     extracted.Language,
+			IngestedAt:   now,
+			Tags:         []fs.MetaTag{{Value: "teaser", Source: "auto"}},
+			AgentRunID:   req.AgentRunID,
+			AgentVerdict: req.AgentVerdict,
+			AgentReason:  req.AgentReason,
 		}
 		if err := fs.WriteMeta(dir, meta); err != nil {
 			return Result{}, fmt.Errorf("write meta: %w", err)
@@ -533,7 +565,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 	// ── 8. Flashcards ─────────────────────────────────────────────────────
 	var flashcardsJSON []byte
-	if !req.NoFlashcards {
+	if (cfg.Ingest.Flashcards || req.Flashcards) && !req.NoFlashcards {
 		progress(fmt.Sprintf("generating flashcards (model: %s)...", flashcardProf.Model))
 		fcProvider, err := newProvider(flashcardProf)
 		if err != nil {
@@ -644,9 +676,22 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		SummaryModel:   summaryProf.Model,
 		SummaryStyle:   summaryStyle,
 		FlashModel:     flashProf.Model,
-		FlashcardModel: flashcardProf.Model,
-		FlashcardStyle: flashcardStyle,
+		FlashcardModel: func() string {
+			if len(flashcardsJSON) > 0 {
+				return flashcardProf.Model
+			}
+			return ""
+		}(),
+		FlashcardStyle: func() string {
+			if len(flashcardsJSON) > 0 {
+				return flashcardStyle
+			}
+			return ""
+		}(),
 		EmbedModel:     embedModel,
+		AgentRunID:     req.AgentRunID,
+		AgentVerdict:   req.AgentVerdict,
+		AgentReason:    req.AgentReason,
 	}
 	if err := fs.WriteMeta(dir, meta); err != nil {
 		return Result{}, fmt.Errorf("write meta: %w", err)

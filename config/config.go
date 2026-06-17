@@ -35,6 +35,9 @@ type Config struct {
 	// Used automatically when fetching URLs whose host matches a key.
 	CookieJars map[string]string `json:"cookie_jars,omitempty"`
 
+	// Agent
+	AgentPath string `json:"agent_path,omitempty"` // default: <DataRoot>/agent
+
 	// Logging
 	LogPath  string `json:"log_path,omitempty"`  // default: <DataRoot>/arc.log
 	LogLevel string `json:"log_level,omitempty"` // debug|info|warn|error; default: info
@@ -92,6 +95,11 @@ type IngestConfig struct {
 	FlashcardMaxTokens int                              `json:"flashcard_max_tokens"` // max output tokens; default 2048
 	FlashcardStyles    map[string]FlashcardStyleConfig  `json:"flashcard_styles"`     // per-style system prompts
 
+	// Flashcard generation.
+	// When false (the default), flashcards are skipped unless --flashcards is passed explicitly.
+	// Set to true to generate flashcards for every ingest by default.
+	Flashcards bool `json:"flashcards"`
+
 	// Teaser detection
 	MinWords int `json:"min_words"` // articles below this word count are tagged "teaser" and skip LLM steps; default 300
 
@@ -126,11 +134,14 @@ func (c *Config) FlashcardStylePrompt(style string) string {
 // Optimised for TTS: natural sentences, no markdown, spoken-word rhythm.
 const DefaultFlashSystemPrompt = `You are generating a flash summary for audio playback.
 
-Goal: 3–5 spoken sentences that capture the essence of the article. Listeners should understand the main point, the key mechanism or finding, and why it matters — in under 30 seconds.
+Goal: 4-5 sentences, each 20 words or fewer. Capture what the article is about, the key finding or mechanism, and why it matters.
 
 Rules:
-- Natural speech rhythm, no bullet points, no markdown
-- No generic openers ("This article discusses...")
+- Each sentence on its own line, separated by a blank line
+- Concrete nouns, active verbs — write for the ear, not the page
+- No markdown of any kind: no #, no **, no *, no -
+- No title, no header, no preamble, no closing remark
+- No generic openers ("This article discusses...", "The author explores...")
 - Preserve specific numbers, names, and facts where they add meaning
 - Use only information from the provided text`
 
@@ -369,6 +380,7 @@ func Default() Config {
 			"gpt-4.1", "gpt-4o-mini",
 		},
 		PreferredStyles: []string{"study-notes", "bullets", "technical"},
+		AgentPath:       filepath.Join(dataRoot, "agent"),
 		LogPath:         filepath.Join(dataRoot, "arc.log"),
 		LogLevel:        "info",
 	}
@@ -395,6 +407,7 @@ func Load(path string) (Config, error) {
 		DBPath          string             `json:"db_path"`
 		VectorPath      string             `json:"vector_path"`
 		EventsPath      string             `json:"events_path"`
+		AgentPath       string             `json:"agent_path"`
 		Profiles        map[string]Profile `json:"profiles"`
 		Ingest          IngestConfig       `json:"ingest"`
 		PreferredModels []string           `json:"preferred_models"`
@@ -421,6 +434,9 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.EventsPath != "" {
 		cfg.EventsPath = overlay.EventsPath
+	}
+	if overlay.AgentPath != "" {
+		cfg.AgentPath = overlay.AgentPath
 	}
 	// Merge user profiles on top of builtins
 	for k, v := range overlay.Profiles {

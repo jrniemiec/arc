@@ -16,6 +16,7 @@ var (
 	ingestCollection   string
 	ingestSummaryStyle string
 	ingestProfile      string
+	ingestFlashcards   bool
 	ingestNoFlashcards bool
 	ingestNoEmbed      bool
 	ingestDryRun       bool
@@ -31,7 +32,8 @@ func init() {
 	ingestCmd.Flags().StringVar(&ingestCollection, "collection", "", "add to this collection ID")
 	ingestCmd.Flags().StringVar(&ingestSummaryStyle, "summary-style", "", "summary style: study-notes|bullets|technical|executive (default: config)")
 	ingestCmd.Flags().StringVar(&ingestProfile, "profile", "", "override profile for all generation steps (e.g. oai-mini, opus)")
-	ingestCmd.Flags().BoolVar(&ingestNoFlashcards, "no-flashcards", false, "skip flashcard generation")
+	ingestCmd.Flags().BoolVar(&ingestFlashcards, "flashcards", false, "generate flashcards (overrides config default)")
+	ingestCmd.Flags().BoolVar(&ingestNoFlashcards, "no-flashcards", false, "skip flashcard generation (overrides config default)")
 	ingestCmd.Flags().BoolVar(&ingestNoEmbed, "no-embed", false, "skip vector embedding generation")
 	ingestCmd.Flags().BoolVar(&ingestDryRun, "dry-run", false, "extract only, do not write files or call LLM")
 	ingestCmd.Flags().BoolVar(&ingestForce, "force", false, "ingest even if URL was already ingested")
@@ -108,6 +110,7 @@ Batch mode (--file):
 				SummaryProfile:   ingestProfile,
 				FlashProfile:     ingestProfile,
 				FlashcardProfile: ingestProfile,
+				Flashcards:       ingestFlashcards,
 				NoFlashcards:     ingestNoFlashcards,
 				NoEmbed:          ingestNoEmbed,
 				DryRun:           ingestDryRun,
@@ -159,6 +162,7 @@ Batch mode (--file):
 			SummaryProfile:   ingestProfile,
 			FlashProfile:     ingestProfile,
 			FlashcardProfile: ingestProfile,
+			Flashcards:       ingestFlashcards,
 			NoFlashcards:     ingestNoFlashcards,
 			NoEmbed:          ingestNoEmbed,
 			DryRun:           ingestDryRun,

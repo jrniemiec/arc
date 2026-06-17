@@ -193,6 +193,11 @@ type Meta struct {
 	EmbedModel     string     `json:"embed_model,omitempty"`
 	QualityScore   float64    `json:"quality_score,omitempty"`
 	Relations      []MetaRelation `json:"relations,omitempty"`
+
+	// Agent provenance — set only when ingested by the feed agent.
+	AgentRunID  string `json:"agent_run_id,omitempty"`
+	AgentVerdict string `json:"agent_verdict,omitempty"`
+	AgentReason  string `json:"agent_reason,omitempty"`
 }
 
 type MetaTag struct {
@@ -228,6 +233,9 @@ func (m Meta) ToArticle(id string, files store.Files) store.Article {
 		EmbedModel:     m.EmbedModel,
 		QualityScore:   m.QualityScore,
 		Files:          files,
+		AgentRunID:     m.AgentRunID,
+		AgentVerdict:   m.AgentVerdict,
+		AgentReason:    m.AgentReason,
 	}
 
 	if t, err := time.Parse(time.RFC3339, m.IngestedAt); err == nil {

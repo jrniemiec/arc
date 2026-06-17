@@ -45,7 +45,28 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	defer s.pool.Put(conn)
-	return sqlitex.ExecuteScript(conn, schema, nil)
+
+	if err := sqlitex.ExecuteScript(conn, schema, nil); err != nil {
+		return err
+	}
+
+	// Apply additive migrations (ALTER TABLE ADD COLUMN).
+	// Each statement is run individually; "duplicate column name" is ignored
+	// so this is safe to re-run against existing databases.
+	for _, stmt := range strings.Split(migrations, ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if err := sqlitex.Execute(conn, stmt, nil); err != nil {
+			e := err.Error()
+			if !strings.Contains(e, "duplicate column name") &&
+				!strings.Contains(e, "already exists") {
+				return fmt.Errorf("migration %q: %w", stmt, err)
+			}
+		}
+	}
+	return nil
 }
 
 // Upsert inserts or replaces an article and its tags, collections, and FTS entry.
@@ -69,11 +90,13 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 			id, title, url, source_type, feed, author, published_at, language,
 			ingested_at, read_at, played_at,
 			summary_model, summary_style, flash_model, flashcard_model, flashcard_style,
-			embed_model, quality_score, root_path
+			embed_model, quality_score, root_path,
+			agent_run_id, agent_verdict, agent_reason
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?,
 			?, ?, ?, ?, ?,
+			?, ?, ?,
 			?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
@@ -92,7 +115,10 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 			flashcard_style = excluded.flashcard_style,
 			embed_model     = excluded.embed_model,
 			quality_score   = excluded.quality_score,
-			root_path       = excluded.root_path
+			root_path       = excluded.root_path,
+			agent_run_id    = excluded.agent_run_id,
+			agent_verdict   = excluded.agent_verdict,
+			agent_reason    = excluded.agent_reason
 	`, &sqlitex.ExecOptions{
 		Args: []any{
 			a.ID, a.Title, a.URL, a.SourceType, a.Feed, a.Author, a.PublishedAt, a.Language,
@@ -100,6 +126,7 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 			timePtr(a.ReadAt), timePtr(a.PlayedAt),
 			a.SummaryModel, a.SummaryStyle, a.FlashModel, a.FlashcardModel, a.FlashcardStyle,
 			a.EmbedModel, a.QualityScore, a.Files.Root,
+			nullStr(a.AgentRunID), nullStr(a.AgentVerdict), nullStr(a.AgentReason),
 		},
 	})
 	if err != nil {
@@ -396,16 +423,18 @@ func (s *Store) MarkPlayed(ctx context.Context, id string, t time.Time) error {
 const articleColumns = `id, title, url, source_type, feed, author, published_at, language,
 	ingested_at, read_at, played_at,
 	summary_model, summary_style, flash_model, flashcard_model, flashcard_style,
-	embed_model, quality_score, root_path`
+	embed_model, quality_score, root_path,
+	agent_run_id, agent_verdict, agent_reason`
 
 // articleColumnsQualified is used in JOINs to avoid ambiguous column names.
 const articleColumnsQualified = `a.id, a.title, a.url, a.source_type, a.feed, a.author, a.published_at, a.language,
 	a.ingested_at, a.read_at, a.played_at,
 	a.summary_model, a.summary_style, a.flash_model, a.flashcard_model, a.flashcard_style,
-	a.embed_model, a.quality_score, a.root_path`
+	a.embed_model, a.quality_score, a.root_path,
+	a.agent_run_id, a.agent_verdict, a.agent_reason`
 
 // columnCount is the number of columns in articleColumns (for offset calculations in Search).
-const columnCount = 19
+const columnCount = 22
 
 func scanArticle(stmt *sqlite.Stmt) store.Article {
 	a := store.Article{}
@@ -439,8 +468,18 @@ func scanArticle(stmt *sqlite.Stmt) store.Article {
 	a.EmbedModel = stmt.ColumnText(16)
 	a.QualityScore = stmt.ColumnFloat(17)
 	a.Files.Root = stmt.ColumnText(18)
+	a.AgentRunID = stmt.ColumnText(19)
+	a.AgentVerdict = stmt.ColumnText(20)
+	a.AgentReason = stmt.ColumnText(21)
 
 	return a
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (s *Store) loadTags(conn *sqlite.Conn, a *store.Article) error {
@@ -498,6 +537,12 @@ func buildListQuery(f store.Filter) (string, []any) {
 	if f.Unplayed {
 		where = append(where, `played_at IS NULL`)
 	}
+	if f.AgentRunID != "" {
+		where = append(where, `agent_run_id = ?`)
+		args = append(args, f.AgentRunID)
+	} else if f.AgentOnly {
+		where = append(where, `agent_run_id IS NOT NULL`)
+	}
 
 	q := `SELECT ` + articleColumns + ` FROM articles`
 	if len(where) > 0 {
@@ -518,6 +563,47 @@ func timePtr(t *time.Time) any {
 		return nil
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// ExistsByURL reports whether any article with the given URL is already in the store.
+func (s *Store) ExistsByURL(ctx context.Context, url string) (bool, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer s.pool.Put(conn)
+
+	var found bool
+	err = sqlitex.Execute(conn, `SELECT 1 FROM articles WHERE url = ? LIMIT 1`,
+		&sqlitex.ExecOptions{
+			Args: []any{url},
+			ResultFunc: func(_ *sqlite.Stmt) error {
+				found = true
+				return nil
+			},
+		})
+	return found, err
+}
+
+// TopTags returns the N most frequent tags in the library, sorted by count descending.
+func (s *Store) TopTags(ctx context.Context, n int) ([]string, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	var tags []string
+	err = sqlitex.Execute(conn,
+		`SELECT tag FROM tags GROUP BY tag ORDER BY COUNT(*) DESC LIMIT ?`,
+		&sqlitex.ExecOptions{
+			Args: []any{n},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				tags = append(tags, stmt.ColumnText(0))
+				return nil
+			},
+		})
+	return tags, err
 }
 
 // UpsertRelation inserts or replaces a relation between two articles.

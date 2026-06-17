@@ -45,6 +45,12 @@ func (l *Library) Close() error {
 	return l.db.Close()
 }
 
+// DB returns the underlying SQLite store for callers that need direct access
+// (e.g. the agent package for ExistsByURL and TopTags queries).
+func (l *Library) DB() *sqlite.Store {
+	return l.db
+}
+
 // Get returns an article by ID with file paths resolved per config preferences.
 func (l *Library) Get(ctx context.Context, id string) (store.Article, error) {
 	a, err := l.db.Get(ctx, id)

@@ -63,9 +63,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
     tokenize = 'porter unicode61'
 );
 
-CREATE INDEX IF NOT EXISTS idx_articles_ingested_at ON articles(ingested_at);
+CREATE INDEX IF NOT EXISTS idx_articles_ingested_at  ON articles(ingested_at);
 CREATE INDEX IF NOT EXISTS idx_articles_source_type  ON articles(source_type);
 CREATE INDEX IF NOT EXISTS idx_tags_tag              ON tags(tag);
 CREATE INDEX IF NOT EXISTS idx_relations_from        ON relations(from_id);
 CREATE INDEX IF NOT EXISTS idx_relations_to          ON relations(to_id);
+`
+
+// migrations are ALTER TABLE statements applied after the schema.
+// Each is attempted once; "duplicate column name" and "already exists" errors
+// are silently ignored so the list is safe to re-run on existing databases.
+const migrations = `
+ALTER TABLE articles ADD COLUMN agent_run_id   TEXT;
+ALTER TABLE articles ADD COLUMN agent_verdict  TEXT;
+ALTER TABLE articles ADD COLUMN agent_reason   TEXT;
+CREATE INDEX IF NOT EXISTS idx_articles_agent_run ON articles(agent_run_id);
 `

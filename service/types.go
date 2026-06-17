@@ -52,7 +52,8 @@ type BatchIngestRequest struct {
 	SummaryProfile   string
 	FlashProfile     string
 	FlashcardProfile string
-	NoFlashcards     bool
+	Flashcards       bool // force-enable flashcards regardless of config default
+	NoFlashcards     bool // force-disable flashcards regardless of config default
 	NoEmbed          bool
 	DryRun           bool
 	Force            bool
@@ -88,7 +89,8 @@ type IngestRequest struct {
 	FlashcardStyle   string // overrides config ingest.flashcard_style
 
 	// Flags
-	NoFlashcards bool
+	Flashcards   bool // force-enable flashcards regardless of config default
+	NoFlashcards bool // force-disable flashcards regardless of config default
 	NoEmbed      bool
 	DryRun       bool
 	Force        bool // skip URL duplicate check
@@ -226,7 +228,8 @@ type ReprocessRequest struct {
 	BodyFile     string // replace body.txt from this file ("-" = stdin)
 	NoSummary    bool
 	NoFlash      bool
-	NoFlashcards bool
+	Flashcards   bool // force-enable flashcards regardless of config default
+	NoFlashcards bool // force-disable flashcards regardless of config default
 	NoEmbed      bool
 	Missing      bool // skip articles that already have all requested variants
 	Progress     func(msg string)
