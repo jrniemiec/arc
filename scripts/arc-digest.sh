@@ -5,9 +5,6 @@ set -euo pipefail
 PROG="${0##*/}"
 
 ARC="${ARC:-arc}"
-ARC_RECIPIENT="${ARC_RECIPIENT:-}"
-ARC_FROM="${ARC_FROM:-}"
-ARC_AGENT_DIR="${ARC_AGENT_DIR:-$HOME/.arc/agent}"
 
 DEBUG=false
 DRY_RUN=false
@@ -27,15 +24,13 @@ usage() {
   cat <<EOF
 Usage: $PROG [options]
 
-Run the arc feed agent and email the briefing if articles were ingested.
-Intended to be called by launchd or cron at 6am.
+Run the arc feed agent. Intended to be called by launchd or cron at 6am.
+To also send the digest email, chain with arc-digest-email:
+  arc-digest && arc-digest-email
 
 Environment variables:
-  ARC_RECIPIENT          Email recipient address (required)
-  ARC_FROM               Email sender address (required)
   ARC_ANTHROPIC_API_KEY  Anthropic API key (falls back to macOS Keychain)
   ARC                    Path to arc binary (default: arc)
-  ARC_AGENT_DIR          Arc agent directory (default: ~/.arc/agent)
 
 Options:
   -n, --dry-run    Print what would run, don't execute
@@ -44,7 +39,7 @@ Options:
   -h, --help       Show this help
 
 Examples:
-  ARC_RECIPIENT=you@gmail.com ARC_FROM=you@gmail.com arc-digest
+  arc-digest
   arc-digest --dry-run
 EOF
 }
@@ -65,18 +60,6 @@ parse_args() {
   done
 }
 
-# ---- send email --------------------------------------------------------------
-send_email() {
-  local to="$1" from="$2" subject="$3" body="$4"
-  if $DRY_RUN; then
-    log "[dry-run] would send: $subject -> $to"
-    return 0
-  fi
-  printf 'To: %s\nFrom: %s\nSubject: %s\nContent-Type: text/plain; charset=utf-8\n\n%s\n' \
-    "$to" "$from" "$subject" "$body" \
-    | msmtp "$to"
-}
-
 # ---- cleanup / traps ---------------------------------------------------------
 cleanup() { :; }
 on_err() { die "command failed (line $1): $2"; }
@@ -92,9 +75,6 @@ main() {
     set -x
   fi
 
-  [[ -n "$ARC_RECIPIENT" ]] || die "ARC_RECIPIENT is not set (try --help)"
-  [[ -n "$ARC_FROM" ]]      || die "ARC_FROM is not set (try --help)"
-
   # Load API key from Keychain if not set in environment.
   if [[ -z "${ARC_ANTHROPIC_API_KEY:-}" ]]; then
     ARC_ANTHROPIC_API_KEY=$(security find-generic-password -a anthropic -s arc -w 2>/dev/null) \
@@ -109,23 +89,6 @@ main() {
     log "[dry-run] would run: $ARC agent run"
   fi
   log "arc agent run done."
-
-  log "generating briefing..."
-  BRIEFING=$("$ARC" agent digest)
-  BRIEFING_TTS=$("$ARC" agent digest --tts)
-
-  if [[ -z "$BRIEFING" ]]; then
-    log "nothing ingested — skipping email."
-    exit 0
-  fi
-
-  COUNT=$(printf '%s\n' "$BRIEFING_TTS" | grep -c '^[0-9]\+\.' || true)
-  SUBJECT="arc digest — $(date '+%a %b %e' | tr -s ' ') (${COUNT} articles)"
-
-  log "sending: $SUBJECT"
-  send_email "$ARC_RECIPIENT" "$ARC_FROM" "$SUBJECT" "$BRIEFING"
-  send_email "$ARC_RECIPIENT" "$ARC_FROM" "$SUBJECT [tts]" "$BRIEFING_TTS"
-  log "emails sent."
 }
 
 # ---- entrypoint --------------------------------------------------------------

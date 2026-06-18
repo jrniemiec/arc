@@ -5,8 +5,6 @@ set -euo pipefail
 PROG="${0##*/}"
 
 ARC="${ARC:-arc}"
-ARC_RECIPIENT="${ARC_RECIPIENT:-}"
-ARC_FROM="${ARC_FROM:-}"
 ARC_AGENT_DIR="${ARC_AGENT_DIR:-$HOME/.arc/agent}"
 
 RUN_ID=""
@@ -26,19 +24,19 @@ die() { printf "${RED}ERROR:${RESET} %s\n" "$*" >&2; exit 1; }
 # ---- usage -------------------------------------------------------------------
 usage() {
   cat <<EOF
-Usage: $PROG [options] <run-id>
+Usage: $PROG [options] [run-id]
 
-Process the decisions file for a given run ID and email the briefing.
+Process the decisions file for a given run ID.
 Edit the decisions file first — change action:"-" to action:"+" on items
 you want to force-ingest, then run this script.
+To also send a combined digest email, pass all relevant run IDs to arc-digest-email:
+  arc-digest-email <daily-id> <rerun-id>
 
 Arguments:
-  <run-id>               Run ID to process (e.g. agent-20260617-181418)
+  [run-id]               Run ID to process (e.g. agent-20260617-181418)
                          Omit to use the last run.
 
 Environment variables:
-  ARC_RECIPIENT          Email recipient address (required)
-  ARC_FROM               Email sender address (required)
   ARC_ANTHROPIC_API_KEY  Anthropic API key (falls back to macOS Keychain)
   ARC                    Path to arc binary (default: arc)
   ARC_AGENT_DIR          Arc agent directory (default: ~/.arc/agent)
@@ -50,7 +48,7 @@ Options:
   -h, --help       Show this help
 
 Examples:
-  ARC_RECIPIENT=you@gmail.com ARC_FROM=you@gmail.com arc-digest-rerun agent-20260617-181418
+  arc-digest-rerun agent-20260617-181418
   arc-digest-rerun                          # uses last run ID
   arc-digest-rerun --dry-run agent-20260617-181418
 EOF
@@ -72,18 +70,6 @@ parse_args() {
   done
 }
 
-# ---- send email --------------------------------------------------------------
-send_email() {
-  local to="$1" from="$2" subject="$3" body="$4"
-  if $DRY_RUN; then
-    log "[dry-run] would send: $subject -> $to"
-    return 0
-  fi
-  printf 'To: %s\nFrom: %s\nSubject: %s\nContent-Type: text/plain; charset=utf-8\n\n%s\n' \
-    "$to" "$from" "$subject" "$body" \
-    | msmtp "$to"
-}
-
 # ---- cleanup / traps ---------------------------------------------------------
 cleanup() { :; }
 on_err() { die "command failed (line $1): $2"; }
@@ -98,9 +84,6 @@ main() {
     PS4='+ ${BASH_SOURCE}:${LINENO}: '
     set -x
   fi
-
-  [[ -n "$ARC_RECIPIENT" ]] || die "ARC_RECIPIENT is not set (try --help)"
-  [[ -n "$ARC_FROM" ]]      || die "ARC_FROM is not set (try --help)"
 
   # Resolve run ID — default to last run.
   if [[ -z "$RUN_ID" ]]; then
@@ -126,23 +109,6 @@ main() {
     log "[dry-run] would run: $ARC agent run --decisions $DECISIONS_FILE"
   fi
   log "decisions run done."
-
-  log "generating briefing for run $RUN_ID..."
-  BRIEFING=$("$ARC" agent digest --run "$RUN_ID")
-  BRIEFING_TTS=$("$ARC" agent digest --tts --run "$RUN_ID")
-
-  if [[ -z "$BRIEFING" ]]; then
-    log "nothing to brief for run $RUN_ID — skipping email."
-    exit 0
-  fi
-
-  COUNT=$(printf '%s\n' "$BRIEFING_TTS" | grep -c '^[0-9]\+\.' || true)
-  SUBJECT="arc digest — $(date '+%a %b %e' | tr -s ' ') (${COUNT} articles)"
-
-  log "sending: $SUBJECT"
-  send_email "$ARC_RECIPIENT" "$ARC_FROM" "$SUBJECT" "$BRIEFING"
-  send_email "$ARC_RECIPIENT" "$ARC_FROM" "$SUBJECT [tts]" "$BRIEFING_TTS"
-  log "emails sent."
 }
 
 # ---- entrypoint --------------------------------------------------------------
