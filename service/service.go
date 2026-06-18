@@ -672,6 +672,15 @@ func (s *Service) GetArticle(ctx context.Context, id string) (store.Article, err
 	return a, nil
 }
 
+// DeleteArticle removes an article from the filesystem, SQLite, and collection symlinks.
+func (s *Service) DeleteArticle(ctx context.Context, id string) error {
+	a, err := s.lib.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get article: %w", err)
+	}
+	return s.lib.DeleteArticle(ctx, a)
+}
+
 // MarkRead records that an article was read.
 func (s *Service) MarkRead(ctx context.Context, id string) error {
 	return s.lib.MarkRead(ctx, id, time.Now())

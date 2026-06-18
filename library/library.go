@@ -207,6 +207,30 @@ func (l *Library) RemoveArticleFromCollection(ctx context.Context, articleID, co
 	return l.db.RemoveArticleFromCollection(ctx, articleID, collectionID)
 }
 
+// DeleteArticle removes an article from the filesystem, SQLite, and all collection symlinks.
+func (l *Library) DeleteArticle(ctx context.Context, a store.Article) error {
+	// Remove collection symlinks pointing to this article.
+	collections, err := l.db.CollectionsForArticle(ctx, a.ID)
+	if err == nil {
+		for _, colID := range collections {
+			_ = fs.RemoveArticleFromCollection(l.cfg.DataRoot, colID, a.ID)
+		}
+	}
+
+	// Remove from SQLite.
+	if err := l.db.Delete(ctx, a.ID); err != nil {
+		return fmt.Errorf("delete from db: %w", err)
+	}
+
+	// Remove article directory from filesystem.
+	dir := l.fs.ArticleDir(a.ID)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove article dir: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteCollection removes a collection and all its membership rows from SQLite.
 func (l *Library) DeleteCollection(ctx context.Context, id string) error {
 	return l.db.DeleteCollection(ctx, id)

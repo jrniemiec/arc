@@ -352,6 +352,26 @@ func (s *Store) RemoveArticleFromCollection(ctx context.Context, articleID, coll
 		&sqlitex.ExecOptions{Args: []any{articleID, collectionID}})
 }
 
+// CollectionsForArticle returns the collection IDs an article belongs to.
+func (s *Store) CollectionsForArticle(ctx context.Context, articleID string) ([]string, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+	var ids []string
+	err = sqlitex.Execute(conn,
+		`SELECT collection_id FROM article_collections WHERE article_id = ?`,
+		&sqlitex.ExecOptions{
+			Args: []any{articleID},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				ids = append(ids, stmt.ColumnText(0))
+				return nil
+			},
+		})
+	return ids, err
+}
+
 // RenameCollection updates the collection ID and name in SQLite.
 func (s *Store) RenameCollection(ctx context.Context, oldID, newID string) error {
 	conn, err := s.pool.Take(ctx)

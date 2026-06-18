@@ -205,12 +205,48 @@ func runAgentBriefing(cmd *cobra.Command, _ []string) error {
 		} else {
 			fmt.Fprintf(&sb, "── Maybe (also ingested, lower confidence) ──\n")
 		}
-		for _, a := range maybeArticles {
-			fmt.Fprintf(&sb, "- %s", a.Title)
-			if a.URL != "" && !briefingTTS {
-				fmt.Fprintf(&sb, "  %s", a.URL)
+		for i, a := range maybeArticles {
+			if sep != "" {
+				fmt.Fprintf(&sb, "\n%s\n\n", sep)
+			} else {
+				fmt.Fprintf(&sb, "\n\n")
 			}
-			fmt.Fprintln(&sb)
+			fmt.Fprintf(&sb, "%d. %s\n", i+1, a.Title)
+			if a.URL != "" && !briefingTTS {
+				fmt.Fprintf(&sb, "   %s\n", a.URL)
+			}
+
+			if briefingFlash {
+				flash, err := svc.Read(cmd.Context(), service.ReadRequest{
+					ID:   a.ID,
+					Part: service.PartFlash,
+				})
+				if err == nil && strings.TrimSpace(flash) != "" {
+					fmt.Fprintln(&sb)
+					for _, line := range strings.Split(strings.TrimSpace(flash), "\n") {
+						if strings.TrimSpace(line) != "" {
+							fmt.Fprintf(&sb, "   %s\n", line)
+						}
+					}
+				}
+			}
+
+			if briefingSummary {
+				summary, err := svc.Read(cmd.Context(), service.ReadRequest{
+					ID:   a.ID,
+					Part: service.PartSummary,
+				})
+				if err == nil && strings.TrimSpace(summary) != "" {
+					if briefingTTS {
+						fmt.Fprintf(&sb, "\n   Summary:\n")
+					} else {
+						fmt.Fprintf(&sb, "\n   ── summary ──\n")
+					}
+					for _, line := range strings.Split(strings.TrimSpace(summary), "\n") {
+						fmt.Fprintf(&sb, "   %s\n", line)
+					}
+				}
+			}
 		}
 	}
 
