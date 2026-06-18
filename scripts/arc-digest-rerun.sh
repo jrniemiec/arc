@@ -128,8 +128,8 @@ main() {
   log "decisions run done."
 
   log "generating briefing for run $RUN_ID..."
-  BRIEFING=$("$ARC" agent briefing --run "$RUN_ID")
-  BRIEFING_TTS=$("$ARC" agent briefing --tts --run "$RUN_ID")
+  BRIEFING=$("$ARC" agent digest --run "$RUN_ID")
+  BRIEFING_TTS=$("$ARC" agent digest --tts --run "$RUN_ID")
 
   if [[ -z "$BRIEFING" ]]; then
     log "nothing to brief for run $RUN_ID — skipping email."

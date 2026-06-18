@@ -60,6 +60,10 @@ type RunOptions struct {
 	// Ignored during dry-run.
 	DecisionsDir string
 
+	// SourceRunID, if non-empty, is the original run ID this decisions run is based on.
+	// Set automatically by RunDecisions from the decisions file.
+	SourceRunID string
+
 	// Status, if non-nil, is called to update a status display.
 	// slot 0 is the main spinner line (feed fetch, filter progress).
 	// slots 1..IngestConcurrency are per-ingest sub-lines (one per parallel ingest).
@@ -536,7 +540,12 @@ func RunDecisions(ctx context.Context, opts RunOptions, decisionsPath string) (R
 
 	runID := NewRunID()
 	startedAt := time.Now().UTC()
-	rec := RunRecord{RunID: runID, RunType: "decisions", StartedAt: startedAt}
+	rec := RunRecord{
+		RunID:       runID,
+		RunType:     "decisions",
+		SourceRunID: df.RunID,
+		StartedAt:   startedAt,
+	}
 
 	slog.Info("decisions run started", "run_id", runID, "source", decisionsPath)
 

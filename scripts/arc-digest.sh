@@ -111,8 +111,8 @@ main() {
   log "arc agent run done."
 
   log "generating briefing..."
-  BRIEFING=$("$ARC" agent briefing)
-  BRIEFING_TTS=$("$ARC" agent briefing --tts)
+  BRIEFING=$("$ARC" agent digest)
+  BRIEFING_TTS=$("$ARC" agent digest --tts)
 
   if [[ -z "$BRIEFING" ]]; then
     log "nothing ingested — skipping email."

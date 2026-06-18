@@ -17,9 +17,9 @@ import (
 )
 
 var agentBriefingCmd = &cobra.Command{
-	Use:   "briefing",
-	Short: "Print a briefing of articles ingested in the last agent run",
-	Long: `Formats a human-readable briefing of articles ingested by the feed agent.
+	Use:   "digest",
+	Short: "Print a digest of articles ingested in the last agent run",
+	Long: `Formats a human-readable digest of articles ingested by the feed agent.
 
 By default reads the most recent run. Use --run to target a specific run ID.
 Outputs to stdout — pipe to msmtp or any mailer to send as email.
@@ -27,10 +27,10 @@ Produces no output (exit 0) if the run ingested nothing, so callers can
 check for empty output before sending.
 
 Examples:
-  arc agent briefing
-  arc agent briefing --run agent-20260615-060000
-  arc agent briefing --summary
-  arc agent briefing --flash --summary`,
+  arc agent digest
+  arc agent digest --run agent-20260615-060000
+  arc agent digest --summary
+  arc agent digest --flash --summary`,
 	RunE: runAgentBriefing,
 }
 
@@ -76,7 +76,7 @@ func runAgentBriefing(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("no agent runs recorded yet")
 	}
 
-	// Find target run.
+	// Find target run — must be a daily run (not a decisions rerun).
 	var rec agentpkg.RunRecord
 	if briefingRunID != "" {
 		found := false
@@ -91,7 +91,24 @@ func runAgentBriefing(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("run %q not found in %s", briefingRunID, runsPath)
 		}
 	} else {
-		rec = recs[len(recs)-1]
+		// Default: last daily run (skip decisions reruns).
+		for i := len(recs) - 1; i >= 0; i-- {
+			if recs[i].RunType != "decisions" {
+				rec = recs[i]
+				break
+			}
+		}
+		if rec.RunID == "" {
+			rec = recs[len(recs)-1]
+		}
+	}
+
+	// Find all decisions reruns that reference this run as source.
+	var rerunRecs []agentpkg.RunRecord
+	for _, r := range recs {
+		if r.SourceRunID == rec.RunID && r.RunType == "decisions" {
+			rerunRecs = append(rerunRecs, r)
+		}
 	}
 
 	// Query SQLite for articles from this run.
@@ -104,8 +121,23 @@ func runAgentBriefing(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("list articles: %w", err)
 	}
 
+	// Collect rerun articles.
+	var rerunArticles [][]store.Article
+	for _, rr := range rerunRecs {
+		rrArticles, err := svc.List(cmd.Context(), store.Filter{
+			AgentRunID: rr.RunID,
+			Limit:      200,
+		})
+		if err != nil {
+			continue
+		}
+		if len(rrArticles) > 0 {
+			rerunArticles = append(rerunArticles, rrArticles)
+		}
+	}
+
 	// Nothing ingested — emit no output so the caller can detect and skip sending.
-	if len(articles) == 0 {
+	if len(articles) == 0 && len(rerunArticles) == 0 {
 		return nil
 	}
 
@@ -206,6 +238,66 @@ func runAgentBriefing(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintf(&sb, "── Maybe (also ingested, lower confidence) ──\n")
 		}
 		for i, a := range maybeArticles {
+			if sep != "" {
+				fmt.Fprintf(&sb, "\n%s\n\n", sep)
+			} else {
+				fmt.Fprintf(&sb, "\n\n")
+			}
+			fmt.Fprintf(&sb, "%d. %s\n", i+1, a.Title)
+			if a.URL != "" && !briefingTTS {
+				fmt.Fprintf(&sb, "   %s\n", a.URL)
+			}
+
+			if briefingFlash {
+				flash, err := svc.Read(cmd.Context(), service.ReadRequest{
+					ID:   a.ID,
+					Part: service.PartFlash,
+				})
+				if err == nil && strings.TrimSpace(flash) != "" {
+					fmt.Fprintln(&sb)
+					for _, line := range strings.Split(strings.TrimSpace(flash), "\n") {
+						if strings.TrimSpace(line) != "" {
+							fmt.Fprintf(&sb, "   %s\n", line)
+						}
+					}
+				}
+			}
+
+			if briefingSummary {
+				summary, err := svc.Read(cmd.Context(), service.ReadRequest{
+					ID:   a.ID,
+					Part: service.PartSummary,
+				})
+				if err == nil && strings.TrimSpace(summary) != "" {
+					if briefingTTS {
+						fmt.Fprintf(&sb, "\n   Summary:\n")
+					} else {
+						fmt.Fprintf(&sb, "\n   ── summary ──\n")
+					}
+					for _, line := range strings.Split(strings.TrimSpace(summary), "\n") {
+						fmt.Fprintf(&sb, "   %s\n", line)
+					}
+				}
+			}
+		}
+	}
+
+	// Rerun sections — one per decisions run.
+	for n, rrArticles := range rerunArticles {
+		if len(rrArticles) == 0 {
+			continue
+		}
+		sort.Slice(rrArticles, func(i, j int) bool {
+			return rrArticles[i].IngestedAt.Before(rrArticles[j].IngestedAt)
+		})
+		if sep != "" {
+			fmt.Fprintf(&sb, "\n%s\n\n", sep)
+			fmt.Fprintf(&sb, "── Promoted from review (rerun %d) ──\n", n+1)
+		} else {
+			fmt.Fprintf(&sb, "\n\n")
+			fmt.Fprintf(&sb, "Promoted from review, rerun %d:\n", n+1)
+		}
+		for i, a := range rrArticles {
 			if sep != "" {
 				fmt.Fprintf(&sb, "\n%s\n\n", sep)
 			} else {

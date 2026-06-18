@@ -10,8 +10,9 @@ import (
 // RunRecord is one entry appended to agent/runs.jsonl after each agent run.
 // It provides a structured audit trail of every agent invocation.
 type RunRecord struct {
-	RunID     string       `json:"run_id"`     // agent-YYYYMMDD-HHMMSS
-	RunType   string       `json:"run_type"`   // "daily" | "decisions"
+	RunID       string       `json:"run_id"`                 // agent-YYYYMMDD-HHMMSS
+	RunType     string       `json:"run_type"`               // "daily" | "decisions"
+	SourceRunID string       `json:"source_run_id,omitempty"` // for decisions runs: the original run ID
 	StartedAt time.Time    `json:"started_at"`
 	FinishedAt time.Time   `json:"finished_at"`
 	Feeds     []FeedRecord `json:"feeds"`
