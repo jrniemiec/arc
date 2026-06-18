@@ -75,15 +75,24 @@ func runAgentLog(cmd *cobra.Command, _ []string) error {
 		if rec.Error != "" {
 			status = "✗"
 		}
-		fmt.Printf("%s %s  (%s)  in:%d maybe:%d skip:%d  feeds:%d  %s\n",
+		runType := rec.RunType
+		if runType == "" {
+			runType = "daily" // backwards compat with old records
+		}
+		typeMarker := ""
+		if runType == "decisions" {
+			typeMarker = " [decisions]"
+		}
+		fmt.Printf("%s %s  (%s)  in:%d maybe:%d skip:%d  feeds:%d  %s%s\n",
 			status,
-			rec.StartedAt.Format("2006-01-02 15:04"),
+			rec.StartedAt.Local().Format("2006-01-02 15:04"),
 			duration,
 			rec.TotalIngest,
 			rec.TotalMaybe,
 			rec.TotalSkip,
 			len(rec.Feeds),
 			rec.RunID,
+			typeMarker,
 		)
 		if rec.Error != "" {
 			fmt.Printf("  error: %s\n", rec.Error)

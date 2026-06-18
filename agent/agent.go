@@ -107,6 +107,7 @@ func RunFeeds(ctx context.Context, opts RunOptions) (RunRecord, error) {
 
 	rec := RunRecord{
 		RunID:     runID,
+		RunType:   "daily",
 		StartedAt: startedAt,
 	}
 
@@ -535,7 +536,7 @@ func RunDecisions(ctx context.Context, opts RunOptions, decisionsPath string) (R
 
 	runID := NewRunID()
 	startedAt := time.Now().UTC()
-	rec := RunRecord{RunID: runID, StartedAt: startedAt}
+	rec := RunRecord{RunID: runID, RunType: "decisions", StartedAt: startedAt}
 
 	slog.Info("decisions run started", "run_id", runID, "source", decisionsPath)
 
