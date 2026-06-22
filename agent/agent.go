@@ -454,7 +454,9 @@ func dedupByURL(ctx context.Context, db *sqlite.Store, items []feed.Item) ([]fee
 		if err != nil {
 			return nil, err
 		}
-		if !exists {
+		if exists {
+			slog.Info("skipping already ingested URL", "url", item.Link, "title", item.Title)
+		} else {
 			out = append(out, item)
 		}
 	}
