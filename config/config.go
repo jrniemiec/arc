@@ -52,35 +52,37 @@ type Config struct {
 // ChatConfig holds the configuration for a workspace chat session.
 // It maps 1:1 to workspaces/<name>/chat/chat.json.
 // The global config.Chat section serves as a template — copied into each new workspace.
+// All fields are written to the workspace file (no omitempty) so users can see and
+// edit every option.
 type ChatConfig struct {
 	// Profile is the arc profile name (provider + model) used for chat.
 	// Empty falls back to ingest.flash_profile, then the first available profile.
-	Profile string `json:"profile,omitempty"`
+	Profile string `json:"profile"`
 
 	// Strategy controls how conversation history is trimmed to fit the context window.
 	// Options: "tail" (last N user turns), "token-budget" (fit within token ceiling),
 	// "summarize" (compress old history via LLM).
-	Strategy string `json:"strategy,omitempty"`
+	Strategy string `json:"strategy"`
 
 	// ContextLimit is the token budget for token-budget and summarize strategies.
 	// 0 means no explicit limit (provider default context window is used).
-	ContextLimit int `json:"context_limit,omitempty"`
+	ContextLimit int `json:"context_limit"`
 
 	// MaxOutputTokens caps the response length. 0 uses the provider default (4096).
-	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	MaxOutputTokens int `json:"max_output_tokens"`
 
 	// MaxUserMessages is the number of past user turns kept by the tail strategy.
 	// Default: 50.
-	MaxUserMessages int `json:"max_user_messages,omitempty"`
+	MaxUserMessages int `json:"max_user_messages"`
 
 	// SummarizerProfile is the arc profile used to run history compaction in the
 	// summarize strategy. Empty falls back to the main chat Profile.
-	SummarizerProfile string `json:"summarizer_profile,omitempty"`
+	SummarizerProfile string `json:"summarizer_profile"`
 
 	// VerbatimRatio is the fraction of the token budget kept as verbatim recent
 	// messages in the summarize strategy. The remainder is covered by the summary.
 	// Default: 0.4 (40% verbatim, 60% summary).
-	VerbatimRatio float64 `json:"verbatim_ratio,omitempty"`
+	VerbatimRatio float64 `json:"verbatim_ratio"`
 }
 
 // Profile describes one LLM provider+model combination.
