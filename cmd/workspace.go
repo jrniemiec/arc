@@ -2,13 +2,16 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	chatengine "github.com/jrniemiec/arc/chat/engine"
 	"github.com/jrniemiec/arc/store/fs"
 )
 
@@ -38,6 +41,24 @@ func init() {
 	workspaceRemoveCmd.Flags().StringSlice("resource", nil, "resource basename(s) to remove")
 
 	workspaceOutcomesCmd.Flags().String("read", "", "print this outcome file to stdout")
+
+	workspaceCmd.AddCommand(workspaceChatCmd)
+	workspaceCmd.AddCommand(workspaceChatConfigCmd)
+
+	workspaceChatCmd.Flags().StringP("profile", "p", "", "LLM profile to use (overrides chat config)")
+	workspaceChatCmd.Flags().String("strategy", "", "context strategy: tail|token-budget|summarize")
+	workspaceChatCmd.Flags().Int("context-limit", 0, "token budget override")
+	workspaceChatCmd.Flags().Bool("no-stream", false, "disable streaming, print full response at once")
+	workspaceChatCmd.Flags().Bool("clear", false, "clear history before starting")
+	workspaceChatCmd.Flags().BoolP("debug", "D", false, "print debug info to stderr")
+
+	workspaceChatConfigCmd.Flags().String("profile", "", "set chat profile")
+	workspaceChatConfigCmd.Flags().String("strategy", "", "set context strategy: tail|token-budget|summarize")
+	workspaceChatConfigCmd.Flags().Int("context-limit", 0, "set token budget (0 = unset)")
+	workspaceChatConfigCmd.Flags().Int("max-output-tokens", 0, "cap response length (0 = provider default)")
+	workspaceChatConfigCmd.Flags().Int("max-user-messages", 0, "tail strategy: past user turns to keep (0 = default 50)")
+	workspaceChatConfigCmd.Flags().String("summarizer-profile", "", "profile for history compaction in summarize strategy")
+	workspaceChatConfigCmd.Flags().Float64("verbatim-ratio", 0, "summarize strategy: fraction of budget kept verbatim (0 = default 0.4)")
 }
 
 var workspaceCmd = &cobra.Command{
@@ -553,6 +574,378 @@ var workspaceOutcomesCmd = &cobra.Command{
 		for _, o := range outcomes {
 			fmt.Fprintln(cmd.OutOrStdout(), o)
 		}
+		return nil
+	},
+}
+
+// ── chat ──────────────────────────────────────────────────────────────────────
+
+var workspaceChatCmd = &cobra.Command{
+	Use:   "chat <name>",
+	Short: "Start an interactive chat session in a workspace",
+	Long: `Start an interactive LLM chat session grounded in the workspace corpus.
+
+The system prompt is loaded from workspace system.txt. History persists across
+sessions in chat/history.json. Use /help inside the session for available commands.
+
+Examples:
+  arc workspace chat production-agents
+  arc workspace chat myws --profile opus
+  arc workspace chat myws --strategy token-budget --context-limit 8000`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := resolveWorkspaceName(cmd, args[0])
+		if err != nil {
+			return err
+		}
+
+		cfg := cfgFrom(cmd)
+		profileFlag, _ := cmd.Flags().GetString("profile")
+		stratFlag, _ := cmd.Flags().GetString("strategy")
+		limitFlag, _ := cmd.Flags().GetInt("context-limit")
+		noStream, _ := cmd.Flags().GetBool("no-stream")
+		clearHist, _ := cmd.Flags().GetBool("clear")
+		debug, _ := cmd.Flags().GetBool("debug")
+
+		eng, err := chatengine.New(cfg, name, profileFlag)
+		if err != nil {
+			return fmt.Errorf("chat engine: %w", err)
+		}
+
+		if clearHist {
+			if err := eng.ClearHistory(); err != nil {
+				return fmt.Errorf("clear history: %w", err)
+			}
+		}
+
+		// Print session header.
+		profile := eng.Profile()
+		chatCfg, _ := fs.ReadChatConfig(cfg.DataRoot, name)
+		effectiveStrategy := stratFlag
+		if effectiveStrategy == "" {
+			effectiveStrategy = chatCfg.Strategy
+		}
+		if effectiveStrategy == "" {
+			effectiveStrategy = "tail"
+		}
+		fmt.Fprintf(os.Stderr, "Workspace: %s  Profile: %s (%s/%s)  Strategy: %s\n",
+			name, eng.ProfileName(), profile.Provider, profile.Model, effectiveStrategy)
+		if sys := eng.SystemPrompt(); sys != "" {
+			preview := strings.TrimSpace(sys)
+			if len(preview) > 80 {
+				preview = preview[:80] + "…"
+			}
+			fmt.Fprintf(os.Stderr, "System: %q\n", preview)
+		}
+		fmt.Fprintln(os.Stderr, "Type /help for commands, Ctrl+D or /exit to quit.")
+		fmt.Fprintln(os.Stderr)
+
+		scanner := bufio.NewScanner(os.Stdin)
+		for {
+			fmt.Fprint(os.Stderr, "You> ")
+			if !scanner.Scan() {
+				fmt.Fprintln(os.Stderr)
+				break
+			}
+			input := strings.TrimSpace(scanner.Text())
+			if input == "" {
+				continue
+			}
+
+			// Slash commands.
+			if strings.HasPrefix(input, "/") {
+				parts := strings.SplitN(input, " ", 2)
+				switch parts[0] {
+				case "/exit", "/quit":
+					fmt.Fprintln(os.Stderr, "Bye.")
+					return nil
+				case "/clear":
+					if err := eng.ClearHistory(); err != nil {
+						fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					} else {
+						fmt.Fprintln(os.Stderr, "History cleared.")
+					}
+					continue
+				case "/system":
+					sys := eng.SystemPrompt()
+					if sys == "" {
+						fmt.Fprintln(os.Stderr, "(no system prompt)")
+					} else {
+						fmt.Fprintln(os.Stderr, sys)
+					}
+					continue
+				case "/history":
+					h := eng.History()
+					if len(h.Msgs) == 0 {
+						fmt.Fprintln(os.Stderr, "(no history)")
+					} else {
+						for _, m := range h.Msgs {
+							fmt.Fprintf(os.Stderr, "[%s] %s\n", m.Role, m.Content)
+						}
+					}
+					continue
+				case "/stats":
+					in, out, cost := eng.SessionStats()
+					line := fmt.Sprintf("Session: %d in / %d out tokens", in, out)
+					if cost > 0 {
+						line += fmt.Sprintf(" | $%.4f", cost)
+					}
+					fmt.Fprintln(os.Stderr, line)
+					continue
+				case "/save":
+					filename := ""
+					if len(parts) > 1 {
+						filename = strings.TrimSpace(parts[1])
+					}
+					if filename == "" {
+						filename = time.Now().Format("2006-01-02-150405") + ".md"
+					}
+					if err := saveChatOutcome(cfg.DataRoot, name, filename, eng); err != nil {
+						fmt.Fprintf(os.Stderr, "save: %v\n", err)
+					} else {
+						fmt.Fprintf(os.Stderr, "saved to outcomes/%s\n", filename)
+					}
+					continue
+				case "/help":
+					fmt.Fprint(os.Stderr, chatHelp)
+					continue
+				default:
+					fmt.Fprintf(os.Stderr, "unknown command %q — type /help\n", parts[0])
+					continue
+				}
+			}
+
+			opts := chatengine.ChatOptions{
+				NoStream:         noStream,
+				StrategyOverride: stratFlag,
+				BudgetOverride:   limitFlag,
+				Out:              os.Stderr,
+				Debug:            debug,
+			}
+
+			ctx, cancel := interruptCtx()
+			var result chatengine.ChatResult
+			var chatErr error
+
+			if noStream {
+				result, chatErr = eng.Chat(ctx, input, opts, nil)
+				cancel()
+				if chatErr == nil {
+					h := eng.History()
+					if len(h.Msgs) > 0 {
+						last := h.Msgs[len(h.Msgs)-1]
+						fmt.Println(last.Content)
+					}
+				}
+			} else {
+				fmt.Println() // blank line before response
+				result, chatErr = eng.Chat(ctx, input, opts, func(delta string) error {
+					fmt.Print(delta)
+					return nil
+				})
+				cancel()
+				fmt.Println() // newline after streamed response
+			}
+
+			if chatErr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", chatErr)
+				continue
+			}
+
+			// Per-turn stats.
+			u := result.Usage
+			line := fmt.Sprintf("[%s · %d in · %d out", eng.ProfileName(), u.InputTokens, u.OutputTokens)
+			if cost := cfg.CalcCost(eng.Profile().Model, u.InputTokens, u.OutputTokens); cost > 0 {
+				line += fmt.Sprintf(" · $%.4f", cost)
+			}
+			line += fmt.Sprintf(" · %dms]", result.Elapsed.Milliseconds())
+			fmt.Fprintln(os.Stderr, line)
+		}
+		return nil
+	},
+}
+
+const chatHelp = `Commands:
+  /exit, /quit   end session
+  /clear         clear conversation history
+  /system        print system prompt
+  /history       print conversation history
+  /stats         show session token usage and cost
+  /save [file]   save session to outcomes/<file>.md
+  /help          show this help
+`
+
+// saveChatOutcome writes the conversation history as a markdown file to outcomes/.
+func saveChatOutcome(dataRoot, workspaceName, filename string, eng *chatengine.Engine) error {
+	svc := &struct{ dataRoot, workspace string }{dataRoot, workspaceName}
+	_ = svc // placeholder for direct fs write
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Chat session — %s\n\n", time.Now().Format("2006-01-02")))
+	sb.WriteString(fmt.Sprintf("**Workspace:** %s  \n", workspaceName))
+	sb.WriteString(fmt.Sprintf("**Profile:** %s (%s)  \n\n", eng.ProfileName(), eng.Profile().Model))
+	sb.WriteString("---\n\n")
+
+	for _, m := range eng.History().Msgs {
+		switch m.Role {
+		case "user":
+			sb.WriteString("**You:** ")
+		case "assistant":
+			sb.WriteString("**Assistant:** ")
+		default:
+			sb.WriteString(fmt.Sprintf("**%s:** ", m.Role))
+		}
+		sb.WriteString(m.Content)
+		sb.WriteString("\n\n")
+	}
+
+	outcomesDir := fmt.Sprintf("%s/workspaces/%s/outcomes", dataRoot, workspaceName)
+	if err := os.MkdirAll(outcomesDir, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(fmt.Sprintf("%s/%s", outcomesDir, filename), []byte(sb.String()), 0644)
+}
+
+// interruptCtx returns a context cancelled on SIGINT.
+func interruptCtx() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		select {
+		case <-c:
+			cancel()
+		case <-ctx.Done():
+		}
+		signal.Stop(c)
+	}()
+	return ctx, cancel
+}
+
+// ── chat-config ───────────────────────────────────────────────────────────────
+
+var workspaceChatConfigCmd = &cobra.Command{
+	Use:   "chat-config <name>",
+	Short: "Show or set workspace chat configuration",
+	Long: `Show the current chat configuration for a workspace, or set fields.
+
+Examples:
+  arc workspace chat-config myws
+  arc workspace chat-config myws --profile opus
+  arc workspace chat-config myws --strategy token-budget --context-limit 8000`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name, err := resolveWorkspaceName(cmd, args[0])
+		if err != nil {
+			return err
+		}
+		cfg := cfgFrom(cmd)
+
+		profileFlag, _ := cmd.Flags().GetString("profile")
+		stratFlag, _ := cmd.Flags().GetString("strategy")
+		limitFlag, _ := cmd.Flags().GetInt("context-limit")
+		maxOutputFlag, _ := cmd.Flags().GetInt("max-output-tokens")
+		maxUserFlag, _ := cmd.Flags().GetInt("max-user-messages")
+		summProfileFlag, _ := cmd.Flags().GetString("summarizer-profile")
+		verbatimFlag, _ := cmd.Flags().GetFloat64("verbatim-ratio")
+		anySet := cmd.Flags().Changed("profile") || cmd.Flags().Changed("strategy") ||
+			cmd.Flags().Changed("context-limit") || cmd.Flags().Changed("max-output-tokens") ||
+			cmd.Flags().Changed("max-user-messages") || cmd.Flags().Changed("summarizer-profile") ||
+			cmd.Flags().Changed("verbatim-ratio")
+
+		if anySet {
+			chatCfg, _ := fs.ReadChatConfig(cfg.DataRoot, name)
+			if cmd.Flags().Changed("profile") {
+				chatCfg.Profile = profileFlag
+			}
+			if cmd.Flags().Changed("strategy") {
+				chatCfg.Strategy = stratFlag
+			}
+			if cmd.Flags().Changed("context-limit") {
+				chatCfg.ContextLimit = limitFlag
+			}
+			if cmd.Flags().Changed("max-output-tokens") {
+				chatCfg.MaxOutputTokens = maxOutputFlag
+			}
+			if cmd.Flags().Changed("max-user-messages") {
+				chatCfg.MaxUserMessages = maxUserFlag
+			}
+			if cmd.Flags().Changed("summarizer-profile") {
+				chatCfg.SummarizerProfile = summProfileFlag
+			}
+			if cmd.Flags().Changed("verbatim-ratio") {
+				chatCfg.VerbatimRatio = verbatimFlag
+			}
+			if err := fs.WriteChatConfig(cfg.DataRoot, name, chatCfg); err != nil {
+				return fmt.Errorf("write chat config: %w", err)
+			}
+		}
+
+		chatCfg, _ := fs.ReadChatConfig(cfg.DataRoot, name)
+
+		// Resolve effective profile (same chain as engine.New).
+		effectiveProfile := chatCfg.Profile
+		profileSource := ""
+		if effectiveProfile == "" {
+			effectiveProfile = cfg.Ingest.FlashProfile
+			profileSource = " (from ingest.flash_profile)"
+		}
+		if effectiveProfile == "" {
+			for k := range cfg.Profiles {
+				effectiveProfile = k
+				break
+			}
+			profileSource = " (first available profile)"
+		}
+		profileLine := effectiveProfile
+		if chatCfg.Profile == "" {
+			profileLine = effectiveProfile + profileSource
+		}
+		if p, ok := cfg.Profiles[effectiveProfile]; ok {
+			profileLine += fmt.Sprintf("  (%s/%s)", p.Provider, p.Model)
+		}
+
+		effectiveStrategy := chatCfg.Strategy
+		if effectiveStrategy == "" {
+			effectiveStrategy = "tail"
+		}
+		strategyLine := effectiveStrategy
+		if chatCfg.Strategy == "" {
+			strategyLine += "  (default)"
+		}
+
+		limitLine := "(only used with token-budget or summarize strategy)"
+		if chatCfg.ContextLimit > 0 {
+			limitLine = fmt.Sprintf("%d tokens", chatCfg.ContextLimit)
+		}
+
+		maxOutLine := "provider default (4096)"
+		if chatCfg.MaxOutputTokens > 0 {
+			maxOutLine = fmt.Sprintf("%d tokens", chatCfg.MaxOutputTokens)
+		}
+
+		maxUserLine := "50  (default)"
+		if chatCfg.MaxUserMessages > 0 {
+			maxUserLine = fmt.Sprintf("%d", chatCfg.MaxUserMessages)
+		}
+
+		summProfileLine := "(same as profile)"
+		if chatCfg.SummarizerProfile != "" {
+			summProfileLine = chatCfg.SummarizerProfile
+		}
+
+		verbatimLine := "0.40  (default)"
+		if chatCfg.VerbatimRatio > 0 {
+			verbatimLine = fmt.Sprintf("%.2f", chatCfg.VerbatimRatio)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "Profile:            %s\n", profileLine)
+		fmt.Fprintf(cmd.OutOrStdout(), "Strategy:           %s\n", strategyLine)
+		fmt.Fprintf(cmd.OutOrStdout(), "Context limit:      %s\n", limitLine)
+		fmt.Fprintf(cmd.OutOrStdout(), "Max output tokens:  %s\n", maxOutLine)
+		fmt.Fprintf(cmd.OutOrStdout(), "Max user messages:  %s\n", maxUserLine)
+		fmt.Fprintf(cmd.OutOrStdout(), "Summarizer profile: %s\n", summProfileLine)
+		fmt.Fprintf(cmd.OutOrStdout(), "Verbatim ratio:     %s\n", verbatimLine)
 		return nil
 	},
 }

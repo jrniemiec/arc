@@ -35,12 +35,52 @@ type Config struct {
 	// Used automatically when fetching URLs whose host matches a key.
 	CookieJars map[string]string `json:"cookie_jars,omitempty"`
 
+	// Chat holds default settings for arc workspace chat.
+	// These are copied verbatim into chat/chat.json when a new workspace is created.
+	// After creation the workspace file is the sole source of truth — this section
+	// is never consulted at runtime.
+	Chat ChatConfig `json:"chat"`
+
 	// Agent
 	AgentPath string `json:"agent_path,omitempty"` // default: <DataRoot>/agent
 
 	// Logging
 	LogPath  string `json:"log_path,omitempty"`  // default: <DataRoot>/arc.log
 	LogLevel string `json:"log_level,omitempty"` // debug|info|warn|error; default: info
+}
+
+// ChatConfig holds the configuration for a workspace chat session.
+// It maps 1:1 to workspaces/<name>/chat/chat.json.
+// The global config.Chat section serves as a template — copied into each new workspace.
+type ChatConfig struct {
+	// Profile is the arc profile name (provider + model) used for chat.
+	// Empty falls back to ingest.flash_profile, then the first available profile.
+	Profile string `json:"profile,omitempty"`
+
+	// Strategy controls how conversation history is trimmed to fit the context window.
+	// Options: "tail" (last N user turns), "token-budget" (fit within token ceiling),
+	// "summarize" (compress old history via LLM).
+	Strategy string `json:"strategy,omitempty"`
+
+	// ContextLimit is the token budget for token-budget and summarize strategies.
+	// 0 means no explicit limit (provider default context window is used).
+	ContextLimit int `json:"context_limit,omitempty"`
+
+	// MaxOutputTokens caps the response length. 0 uses the provider default (4096).
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+
+	// MaxUserMessages is the number of past user turns kept by the tail strategy.
+	// Default: 50.
+	MaxUserMessages int `json:"max_user_messages,omitempty"`
+
+	// SummarizerProfile is the arc profile used to run history compaction in the
+	// summarize strategy. Empty falls back to the main chat Profile.
+	SummarizerProfile string `json:"summarizer_profile,omitempty"`
+
+	// VerbatimRatio is the fraction of the token budget kept as verbatim recent
+	// messages in the summarize strategy. The remainder is covered by the summary.
+	// Default: 0.4 (40% verbatim, 60% summary).
+	VerbatimRatio float64 `json:"verbatim_ratio,omitempty"`
 }
 
 // Profile describes one LLM provider+model combination.
@@ -380,9 +420,14 @@ func Default() Config {
 			"gpt-4.1", "gpt-4o-mini",
 		},
 		PreferredStyles: []string{"study-notes", "bullets", "technical"},
-		AgentPath:       filepath.Join(dataRoot, "agent"),
-		LogPath:         filepath.Join(dataRoot, "arc.log"),
-		LogLevel:        "info",
+		Chat: ChatConfig{
+			Strategy:        "tail",
+			MaxUserMessages: 50,
+			VerbatimRatio:   0.4,
+		},
+		AgentPath: filepath.Join(dataRoot, "agent"),
+		LogPath:   filepath.Join(dataRoot, "arc.log"),
+		LogLevel:  "info",
 	}
 }
 
@@ -413,6 +458,7 @@ func Load(path string) (Config, error) {
 		PreferredModels []string           `json:"preferred_models"`
 		PreferredStyles []string           `json:"preferred_styles"`
 		CookieJars      map[string]string  `json:"cookie_jars"`
+		Chat            ChatConfig         `json:"chat"`
 		LogPath         string             `json:"log_path"`
 		LogLevel        string             `json:"log_level"`
 	}
@@ -499,6 +545,27 @@ func Load(path string) (Config, error) {
 	}
 	if len(overlay.CookieJars) > 0 {
 		cfg.CookieJars = overlay.CookieJars
+	}
+	if overlay.Chat.Profile != "" {
+		cfg.Chat.Profile = overlay.Chat.Profile
+	}
+	if overlay.Chat.Strategy != "" {
+		cfg.Chat.Strategy = overlay.Chat.Strategy
+	}
+	if overlay.Chat.ContextLimit != 0 {
+		cfg.Chat.ContextLimit = overlay.Chat.ContextLimit
+	}
+	if overlay.Chat.MaxOutputTokens != 0 {
+		cfg.Chat.MaxOutputTokens = overlay.Chat.MaxOutputTokens
+	}
+	if overlay.Chat.MaxUserMessages != 0 {
+		cfg.Chat.MaxUserMessages = overlay.Chat.MaxUserMessages
+	}
+	if overlay.Chat.SummarizerProfile != "" {
+		cfg.Chat.SummarizerProfile = overlay.Chat.SummarizerProfile
+	}
+	if overlay.Chat.VerbatimRatio != 0 {
+		cfg.Chat.VerbatimRatio = overlay.Chat.VerbatimRatio
 	}
 	if overlay.LogPath != "" {
 		cfg.LogPath = overlay.LogPath

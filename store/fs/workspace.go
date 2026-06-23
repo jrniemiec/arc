@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/jrniemiec/arc/config"
 )
 
 // WorkspaceMeta is the on-disk representation of a workspace's meta.json.
@@ -18,13 +20,6 @@ type WorkspaceMeta struct {
 	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	Status      string    `json:"status"` // "active" | "archived"
-}
-
-// ChatConfig is the on-disk representation of chat/chat.json.
-type ChatConfig struct {
-	Profile      string `json:"profile,omitempty"`        // LLM profile key
-	Strategy     string `json:"strategy,omitempty"`       // "tail" | "token_budget" | "summarize"
-	ContextLimit int    `json:"context_limit,omitempty"`  // token budget override
 }
 
 // ResourceEntry describes one file in a workspace's resources/ directory.
@@ -45,9 +40,10 @@ func WorkspaceDir(dataRoot, name string) string {
 	return filepath.Join(dataRoot, "workspaces", name)
 }
 
-// CreateWorkspace creates a new workspace directory with all subdirectories
-// and writes meta.json. Returns an error if the workspace already exists.
-func CreateWorkspace(dataRoot, name, description string) error {
+// CreateWorkspace creates a new workspace directory with all subdirectories,
+// writes meta.json, and writes chat/chat.json from chatCfg.
+// Returns an error if the workspace already exists.
+func CreateWorkspace(dataRoot, name, description string, chatCfg config.ChatConfig) error {
 	dir := WorkspaceDir(dataRoot, name)
 	if _, err := os.Stat(dir); err == nil {
 		return fmt.Errorf("workspace %q already exists", name)
@@ -65,7 +61,10 @@ func CreateWorkspace(dataRoot, name, description string) error {
 		CreatedAt:   time.Now().UTC(),
 		Status:      "active",
 	}
-	return WriteWorkspaceMeta(dataRoot, m)
+	if err := WriteWorkspaceMeta(dataRoot, m); err != nil {
+		return err
+	}
+	return WriteChatConfig(dataRoot, name, chatCfg)
 }
 
 // ReadWorkspaceMeta reads meta.json from a workspace directory.
@@ -421,24 +420,24 @@ func WriteWorkspaceOutcome(dataRoot, name, filename string, data []byte) error {
 // ── Chat config ───────────────────────────────────────────────────────────────
 
 // ReadChatConfig reads chat/chat.json from a workspace. Returns zero value if missing.
-func ReadChatConfig(dataRoot, name string) (ChatConfig, error) {
+func ReadChatConfig(dataRoot, name string) (config.ChatConfig, error) {
 	path := filepath.Join(WorkspaceDir(dataRoot, name), "chat", "chat.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return ChatConfig{}, nil
+			return config.ChatConfig{}, nil
 		}
-		return ChatConfig{}, fmt.Errorf("read chat config: %w", err)
+		return config.ChatConfig{}, fmt.Errorf("read chat config: %w", err)
 	}
-	var cfg ChatConfig
+	var cfg config.ChatConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return ChatConfig{}, fmt.Errorf("parse chat config: %w", err)
+		return config.ChatConfig{}, fmt.Errorf("parse chat config: %w", err)
 	}
 	return cfg, nil
 }
 
 // WriteChatConfig writes chat/chat.json to a workspace.
-func WriteChatConfig(dataRoot, name string, cfg ChatConfig) error {
+func WriteChatConfig(dataRoot, name string, cfg config.ChatConfig) error {
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "chat")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create chat dir: %w", err)

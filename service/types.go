@@ -3,8 +3,8 @@ package service
 import (
 	"time"
 
+	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/store"
-	"github.com/jrniemiec/arc/store/fs"
 )
 
 // Part identifies which part of an article to read.
@@ -201,7 +201,7 @@ type WorkspaceInfo struct {
 	OutcomeCount    int
 	HasSystem       bool
 	HasHistory      bool
-	ChatConfig      fs.ChatConfig
+	ChatConfig      config.ChatConfig
 }
 
 // CollectionInfo describes a collection with article count.

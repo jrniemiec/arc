@@ -8,12 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/store/fs"
 )
 
-// CreateWorkspace creates a new workspace.
+// CreateWorkspace creates a new workspace, writing chat/chat.json from the global template.
 func (s *Service) CreateWorkspace(ctx context.Context, name, description string) error {
-	if err := fs.CreateWorkspace(s.cfg.DataRoot, name, description); err != nil {
+	if err := fs.CreateWorkspace(s.cfg.DataRoot, name, description, s.cfg.Chat); err != nil {
 		return fmt.Errorf("create workspace: %w", err)
 	}
 	return nil
@@ -172,12 +173,12 @@ func (s *Service) GetWorkspaceSystemPrompt(ctx context.Context, name string) (st
 }
 
 // GetChatConfig reads chat/chat.json for a workspace.
-func (s *Service) GetChatConfig(ctx context.Context, name string) (fs.ChatConfig, error) {
+func (s *Service) GetChatConfig(ctx context.Context, name string) (config.ChatConfig, error) {
 	return fs.ReadChatConfig(s.cfg.DataRoot, name)
 }
 
 // SetChatConfig writes chat/chat.json for a workspace.
-func (s *Service) SetChatConfig(ctx context.Context, name string, cfg fs.ChatConfig) error {
+func (s *Service) SetChatConfig(ctx context.Context, name string, cfg config.ChatConfig) error {
 	return fs.WriteChatConfig(s.cfg.DataRoot, name, cfg)
 }
 
