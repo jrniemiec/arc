@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/jrniemiec/arc/store"
+	"github.com/jrniemiec/arc/store/fs"
 )
 
 // Part identifies which part of an article to read.
@@ -186,6 +187,21 @@ type CollectionMatch struct {
 	Reason         string
 	NewSlug        string // set when LLM proposes a new collection
 	NewDescription string // description for the proposed new collection
+}
+
+// WorkspaceInfo describes a workspace with counts.
+type WorkspaceInfo struct {
+	Name            string
+	Description     string
+	Status          string
+	CreatedAt       time.Time
+	ArticleCount    int
+	CollectionCount int
+	ResourceCount   int
+	OutcomeCount    int
+	HasSystem       bool
+	HasHistory      bool
+	ChatConfig      fs.ChatConfig
 }
 
 // CollectionInfo describes a collection with article count.

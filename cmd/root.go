@@ -170,6 +170,11 @@ func resolveCollectionSlug(cmd *cobra.Command, query string) (string, error) {
 	return svcFrom(cmd).ResolveCollectionSlug(cmd.Context(), query)
 }
 
+// resolveWorkspaceName resolves a user query to a workspace name via the service.
+func resolveWorkspaceName(cmd *cobra.Command, query string) (string, error) {
+	return svcFrom(cmd).ResolveWorkspaceName(cmd.Context(), query)
+}
+
 // exitErr prints an error and exits with code 1.
 func exitErr(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "arc: "+format+"\n", args...)
