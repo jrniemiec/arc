@@ -81,6 +81,22 @@ func sep(width int) string {
 	return fg(ActiveTheme.Dimmed, strings.Repeat("─", width))
 }
 
+// oneLine collapses all whitespace/control characters to spaces and trims.
+// Prevents embedded newlines from breaking the fixed-line layout.
+func oneLine(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\n' || r == '\r' || r == '\t' {
+			b.WriteRune(' ')
+		} else if r < 32 || r == 127 {
+			// skip other control characters
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // truncate cuts s to maxWidth visible chars (no ANSI in s assumed).
 func truncate(s string, maxWidth int) string {
 	if lipgloss.Width(s) <= maxWidth {
@@ -95,76 +111,112 @@ func truncate(s string, maxWidth int) string {
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
-const (
-	topBarHeight  = 2 // tab bar line + separator
-	hintBarHeight = 1 // bottom hints line
-	cmdBarHeight  = 1 // command input line + separator = 2, but for scaffold just 1
-	leftPaneWidth = 26
-)
+// topBarHeight is used by update.go for navPaneHeight calculation.
+const topBarHeight = 2  // tab bar + separator
+const hintBarHeight = 1 // hints bar
+const cmdBarHeight = 1  // separator + command input counted together in update.go
+
+// navWidth returns the left nav pane width.
+// Uses user-set override when dragged; otherwise ~28% of terminal, clamped to [20, 60].
+func (m Model) navWidth() int {
+	if m.navWidthOverride > 0 {
+		return m.navWidthOverride
+	}
+	w := m.width / 4
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+// dividerCol returns the terminal column index (0-based) of the │ divider.
+func (m Model) dividerCol() int {
+	return m.navWidth()
+}
 
 // ── View ──────────────────────────────────────────────────────────────────────
 
 // View implements tea.Model.
+// Builds an explicit slice of exactly m.height lines and joins with "\n".
+// This guarantees bubbletea never receives more lines than the terminal height,
+// which would cause scrolling and make the top bar disappear.
 func (m Model) View() string {
-	if m.width == 0 {
+	if m.width == 0 || m.height < 6 {
 		return ""
 	}
 	t := ActiveTheme
 
-	var sb strings.Builder
-
-	// 1. Top tab bar
-	sb.WriteString(m.renderTabBar())
-	sb.WriteByte('\n')
-	sb.WriteString(sep(m.width))
-	sb.WriteByte('\n')
-
-	// 2. Main area (left nav + right content)
-	mainHeight := m.height - topBarHeight - cmdBarHeight - 1 - hintBarHeight
+	// Fixed rows: top bar (2) + sep (1) + cmd (1) + hints (1) = 5
+	const fixedRows = 5
+	mainHeight := m.height - fixedRows
 	if mainHeight < 1 {
 		mainHeight = 1
 	}
-	sb.WriteString(m.renderMainArea(mainHeight))
 
-	// 3. Separator + command input
-	sb.WriteByte('\n')
-	sb.WriteString(sep(m.width))
-	sb.WriteByte('\n')
-	sb.WriteString(m.renderCommandInput())
+	// Build each section into a []string of exactly the right line count.
+	topLines := []string{m.renderTabBar(), sep(m.width)}
+	mainLines := strings.Split(m.renderMainArea(mainHeight), "\n")
+	botLines := []string{sep(m.width), m.renderCommandInput(), fg(t.StatusText, truncate(m.hintsFor(), m.width))}
 
-	// 4. Hints bar
-	sb.WriteByte('\n')
-	sb.WriteString(fg(t.StatusText, m.hintsFor()))
+	// Assemble exactly m.height lines — clamp/pad each section defensively.
+	out := make([]string, 0, m.height)
+	out = append(out, topLines...)
+	for i := 0; i < mainHeight; i++ {
+		if i < len(mainLines) {
+			out = append(out, mainLines[i])
+		} else {
+			out = append(out, "")
+		}
+	}
+	out = append(out, botLines...)
 
-	return sb.String()
+	// Safety: clamp to exactly m.height so a buggy sub-renderer can't overflow.
+	if len(out) > m.height {
+		out = out[:m.height]
+	}
+	for len(out) < m.height {
+		out = append(out, "")
+	}
+
+	return strings.Join(out, "\n")
 }
 
 // renderTabBar renders the top tab bar line.
 func (m Model) renderTabBar() string {
 	t := ActiveTheme
 	var parts []string
+	var barVisibleWidth int
 	for i := tab(0); i < tabCount; i++ {
-		label := fmt.Sprintf(" %s ", i.String())
+		label := i.String()
 		if i == m.activeTab {
-			parts = append(parts, fgBold(t.TabActive, "["+strings.TrimSpace(label)+"]"))
+			text := "[" + label + "]"
+			parts = append(parts, fgBold(t.TabActive, text))
+			barVisibleWidth += len([]rune(text))
 		} else {
-			parts = append(parts, fg(t.TabInactive, " "+strings.TrimSpace(label)+" "))
+			text := " " + label + " "
+			parts = append(parts, fg(t.TabInactive, text))
+			barVisibleWidth += len([]rune(text))
+		}
+		if int(i) < int(tabCount)-1 {
+			parts = append(parts, fg(t.Dimmed, "  "))
+			barVisibleWidth += 2
 		}
 	}
-	bar := strings.Join(parts, fg(t.Dimmed, "  "))
-	// right-align tab number hints
-	hint := fg(t.Dimmed, "1·2·3 tabs")
-	gap := m.width - lipgloss.Width(bar) - lipgloss.Width(hint)
+	bar := strings.Join(parts, "")
+	hint := "1·2·3 tabs"
+	hintVisible := len([]rune(hint))
+	gap := m.width - barVisibleWidth - hintVisible
 	if gap < 1 {
 		gap = 1
 	}
-	return bar + strings.Repeat(" ", gap) + hint
+	return bar + strings.Repeat(" ", gap) + fg(t.Dimmed, hint)
 }
 
 // renderMainArea renders the split left/right pane for the current tab.
 func (m Model) renderMainArea(height int) string {
 	t := ActiveTheme
-	rightWidth := m.width - leftPaneWidth - 1 // 1 for the vertical divider
+	navW := m.navWidth()
+	rightWidth := m.width - navW - 1 // 1 for the vertical divider
 	if rightWidth < 10 {
 		rightWidth = 10
 	}
@@ -172,7 +224,15 @@ func (m Model) renderMainArea(height int) string {
 	leftLines := m.renderNavPane(height)
 	rightLines := m.renderContentPane(height, rightWidth)
 
-	divider := fg(t.Dimmed, "│")
+	// Divider color reflects active pane: accent when nav or content is focused.
+	var dividerColor lipgloss.Color
+	switch m.focus {
+	case paneNav, paneContent:
+		dividerColor = t.Accent
+	default:
+		dividerColor = t.Dimmed
+	}
+	divider := fg(dividerColor, "│")
 
 	var sb strings.Builder
 	for i := 0; i < height; i++ {
@@ -184,7 +244,7 @@ func (m Model) renderMainArea(height int) string {
 			r = rightLines[i]
 		}
 		// Pad left pane to fixed width
-		l = padRight(l, leftPaneWidth)
+		l = padRight(l, navW)
 		sb.WriteString(l)
 		sb.WriteString(divider)
 		sb.WriteString(r)
@@ -200,8 +260,26 @@ func (m Model) renderNavPane(height int) []string {
 	t := ActiveTheme
 	var lines []string
 
-	header := fgBold(t.NavGroup, m.activeTab.String())
-	lines = append(lines, header)
+	var headerLabel string
+	switch m.activeTab {
+	case tabLibrary:
+		if m.navLoaded {
+			headerLabel = fmt.Sprintf("Articles (%d)", len(m.navItems))
+		} else {
+			headerLabel = "Articles"
+		}
+	case tabAgent:
+		headerLabel = "Agents"
+	case tabStats:
+		headerLabel = "Overview"
+	default:
+		headerLabel = m.activeTab.String()
+	}
+	if m.focus == paneNav {
+		lines = append(lines, fgBold(t.NavGroup, headerLabel))
+	} else {
+		lines = append(lines, fg(t.NavDimmed, headerLabel))
+	}
 	lines = append(lines, "")
 
 	switch m.activeTab {
@@ -227,7 +305,7 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 		return []string{fg(t.NavDimmed, "loading…")}
 	}
 	if m.navErr != "" {
-		return []string{fg(t.NavDimmed, "error: "+truncate(m.navErr, leftPaneWidth-2))}
+		return []string{fg(t.NavDimmed, "error: "+truncate(m.navErr, m.navWidth()-2))}
 	}
 	if len(m.navItems) == 0 {
 		return []string{fg(t.NavDimmed, "(empty)")}
@@ -240,16 +318,17 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 	}
 	for i := m.navScroll; i < end; i++ {
 		item := m.navItems[i]
-		var dot string
+		dotChar := " "
 		if !item.read {
-			dot = fg(t.NavMark, "•")
-		} else {
-			dot = " "
+			dotChar = "•"
 		}
-		title := truncate(item.title, leftPaneWidth-3) // 1 dot + 1 space + title
-		line := dot + " " + fg(t.NavText, title)
+		title := truncate(oneLine(item.title), m.navWidth()-3) // 1 dot + 1 space + title
+		var line string
 		if i == m.navCursor {
-			line = reverse(dot + " " + title)
+			// reverse() must wrap plain text — any \033[0m inside cancels reverse video
+			line = reverse(dotChar + " " + title)
+		} else {
+			line = fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
 		}
 		lines = append(lines, line)
 	}
@@ -276,6 +355,10 @@ func (m Model) renderContentPane(height, width int) []string {
 	}
 }
 
+// contentHeaderLines is the number of fixed lines above the scrollable content:
+// title + meta1 + meta2 + meta3 + sep + tabs + sep = 7
+const contentHeaderLines = 7
+
 func (m Model) renderContentLibrary(height, width int) []string {
 	t := ActiveTheme
 	var lines []string
@@ -295,27 +378,111 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	}
 
 	item := m.navItems[m.navCursor]
-	lines = append(lines, fgBold(t.ContentTitle, truncate(item.title, width-1)))
-	lines = append(lines, fg(t.ContentDimmed, item.date.Format("2006-01-02")))
-	lines = append(lines, "")
+	titleColor := t.ContentDimmed
+	if m.focus == paneContent {
+		titleColor = t.ContentTitle
+	}
 
-	flash := m.flashContent()
-	if flash != "" {
-		// Wrap flash text to content width and emit lines.
-		for _, para := range strings.Split(strings.TrimSpace(flash), "\n") {
-			wrapped := wordWrap(para, width-2)
-			for _, wl := range wrapped {
-				lines = append(lines, fg(t.ContentText, wl))
-			}
-		}
+	// ── Header ────────────────────────────────────────────────────────────────
+	lines = append(lines, fgBold(titleColor, truncate(oneLine(item.title), width-1)))
+
+	// meta line 1: date · source type · read status
+	readMark := fg(t.ContentDimmed, "unread")
+	if item.read {
+		readMark = fg(t.NavMark, "✓ read")
+	}
+	meta1 := fg(t.ContentDimmed, item.date.Format("2006-01-02"))
+	if item.sourceType != "" {
+		meta1 += fg(t.ContentDimmed, "  ·  "+item.sourceType)
+	}
+	meta1 += fg(t.ContentDimmed, "  ·  ") + readMark
+	lines = append(lines, meta1)
+
+	// meta line 2: tags
+	if len(item.tags) > 0 {
+		tagStr := strings.Join(item.tags, ", ")
+		lines = append(lines, fg(t.ContentDimmed, "tags: "+truncate(tagStr, width-7)))
 	} else {
-		lines = append(lines, fg(t.ContentDimmed, "(no flash summary — press  r  to generate)"))
+		lines = append(lines, "")
+	}
+
+	// meta line 3: available variants
+	variantParts := []string{}
+	if item.summary != "" {
+		variantParts = append(variantParts, "summary: "+item.summary)
+	}
+	if item.flashModel != "" {
+		variantParts = append(variantParts, "flash: "+item.flashModel)
+	}
+	if len(variantParts) > 0 {
+		lines = append(lines, fg(t.ContentDimmed, strings.Join(variantParts, "  ")))
+	} else {
+		lines = append(lines, "")
+	}
+
+	// ── Separator ─────────────────────────────────────────────────────────────
+	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
+
+	// ── Sub-tab strip ─────────────────────────────────────────────────────────
+	lines = append(lines, m.renderContentTabs(width))
+
+	// ── Separator ─────────────────────────────────────────────────────────────
+	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
+
+	// ── Scrollable content ────────────────────────────────────────────────────
+	viewH := height - contentHeaderLines
+	if viewH < 1 {
+		viewH = 1
+	}
+
+	if m.contentLoading {
+		lines = append(lines, fg(t.ContentDimmed, "loading…"))
+	} else if len(m.contentLines) == 0 {
+		lines = append(lines, fg(t.ContentDimmed, "(not available — use  arc reprocess  to generate)"))
+	} else {
+		start := m.contentScroll
+		end := start + viewH
+		if end > len(m.contentLines) {
+			end = len(m.contentLines)
+		}
+		for _, l := range m.contentLines[start:end] {
+			lines = append(lines, fg(t.ContentText, truncate(l, width-1)))
+		}
+		// Scroll indicator on last visible line if content overflows
+		if len(m.contentLines) > viewH {
+			pct := 0
+			maxScroll := len(m.contentLines) - viewH
+			if maxScroll > 0 {
+				pct = m.contentScroll * 100 / maxScroll
+			}
+			indicator := fmt.Sprintf(" %d/%d (%d%%)", m.contentScroll+viewH, len(m.contentLines), pct)
+			lines = append(lines, fg(t.ContentDimmed, indicator))
+		}
 	}
 
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
 	return lines[:height]
+}
+
+// renderContentTabs renders the [Body] [Summary] [Flash] [Cards] tab strip.
+func (m Model) renderContentTabs(width int) string {
+	t := ActiveTheme
+	var parts []string
+	tabs := []contentTab{ctBody, ctSummary, ctFlash, ctCards}
+	for _, ct := range tabs {
+		label := "[" + ct.String() + "]"
+		available := contentFilePath(m.contentFiles, ct) != ""
+		if ct == m.contentTab {
+			parts = append(parts, fgBold(t.ContentTabActive, label))
+		} else if available {
+			parts = append(parts, fg(t.ContentTabInactive, label))
+		} else {
+			parts = append(parts, fg(t.Dimmed, label))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m Model) renderContentStats(height, width int) []string {

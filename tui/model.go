@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,6 +11,7 @@ import (
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/service"
 	"github.com/jrniemiec/arc/store"
+	storefs "github.com/jrniemiec/arc/store/fs"
 )
 
 // tab identifies the active top-level tab.
@@ -44,13 +46,43 @@ const (
 	paneCommand                  // command input line
 )
 
+// contentTab identifies the active sub-tab in the content pane.
+type contentTab int
+
+const (
+	ctBody contentTab = iota
+	ctSummary
+	ctFlash
+	ctCards
+	ctCount
+)
+
+func (c contentTab) String() string {
+	switch c {
+	case ctBody:
+		return "Body"
+	case ctSummary:
+		return "Summary"
+	case ctFlash:
+		return "Flash"
+	case ctCards:
+		return "Cards"
+	default:
+		return "?"
+	}
+}
+
 // navItem is one entry in the left navigator.
 type navItem struct {
-	id    string
-	title string
-	date  time.Time
-	read  bool
-	flash string // path to best flash file (empty if none)
+	id         string
+	title      string
+	date       time.Time
+	read       bool
+	root       string // article directory (Files.Root)
+	tags       []string
+	sourceType string
+	summary    string // model/style label e.g. "bullets/sonnet"
+	flashModel string // model label e.g. "haiku"
 }
 
 // Model is the root bubbletea model for the arc TUI.
@@ -76,12 +108,24 @@ type Model struct {
 	svc *service.Service
 	cfg config.Config
 
+	// Nav pane layout
+	navWidthOverride int  // 0 = use proportional; >0 = user-set width
+	dragging         bool // true while dragging the divider
+	dragCol          int  // terminal column of the divider at drag start
+
 	// Library nav
 	navItems  []navItem
 	navCursor int
 	navScroll int
 	navLoaded bool
 	navErr    string
+
+	// Content pane
+	contentTab    contentTab
+	contentScroll int
+	contentLines  []string // lines of the active file, loaded async
+	contentFiles  store.Files
+	contentLoading bool
 
 	// Stats
 	stats       service.Stats
@@ -102,6 +146,11 @@ type statsLoadedMsg struct {
 	err   string
 }
 
+type contentLoadedMsg struct {
+	lines []string
+	files store.Files
+}
+
 // ── Cmds ─────────────────────────────────────────────────────────────────────
 
 func spinnerTick() tea.Cmd {
@@ -118,12 +167,24 @@ func loadNav(svc *service.Service) tea.Cmd {
 		}
 		items := make([]navItem, len(articles))
 		for i, a := range articles {
+			tags := make([]string, len(a.Tags))
+			for j, t := range a.Tags {
+				tags[j] = t.Value
+			}
+			summaryLabel := ""
+			if a.SummaryStyle != "" && a.SummaryModel != "" {
+				summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
+			}
 			items[i] = navItem{
-				id:    a.ID,
-				title: a.Title,
-				date:  a.IngestedAt,
-				read:  a.ReadAt != nil,
-				flash: a.Files.Flash,
+				id:         a.ID,
+				title:      a.Title,
+				date:       a.IngestedAt,
+				read:       a.ReadAt != nil,
+				root:       a.Files.Root,
+				tags:       tags,
+				sourceType: a.SourceType,
+				summary:    summaryLabel,
+				flashModel: a.FlashModel,
 			}
 		}
 		return navLoadedMsg{items: items}
@@ -173,18 +234,47 @@ func (m Model) Init() tea.Cmd {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// flashContent reads the flash file for the selected nav item, or returns "".
-func (m *Model) flashContent() string {
-	if len(m.navItems) == 0 || m.navCursor < 0 || m.navCursor >= len(m.navItems) {
-		return ""
+// loadContent fires an async cmd to probe files and load the active content tab.
+func loadContent(root string, ct contentTab, styles, models []string) tea.Cmd {
+	return func() tea.Msg {
+		files := storefs.ProbeFiles(root)
+		// ProbeFiles leaves Summary/Flash/Flashcards empty — resolve with preferences.
+		files.Summary = storefs.ResolveSummary(root, styles, models)
+		files.Flash = storefs.ResolveFlash(root, models)
+		files.Flashcards = storefs.ResolveFlashcards(root, styles, models)
+		path := contentFilePath(files, ct)
+		var lines []string
+		if path != "" {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				lines = splitLines(string(data))
+			}
+		}
+		return contentLoadedMsg{lines: lines, files: files}
 	}
-	path := m.navItems[m.navCursor].flash
-	if path == "" {
-		return ""
+}
+
+// contentFilePath returns the file path for the given content tab.
+func contentFilePath(files store.Files, ct contentTab) string {
+	switch ct {
+	case ctBody:
+		return files.Body
+	case ctSummary:
+		return files.Summary
+	case ctFlash:
+		return files.Flash
+	case ctCards:
+		return files.Flashcards
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
+	return ""
+}
+
+// splitLines splits text into lines, preserving empty lines, trimming trailing newline.
+func splitLines(text string) []string {
+	if text == "" {
+		return nil
 	}
-	return string(data)
+	// strings.Split on a trailing \n produces a spurious empty last element
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	return lines
 }
