@@ -81,6 +81,53 @@ func sep(width int) string {
 	return fg(ActiveTheme.Dimmed, strings.Repeat("─", width))
 }
 
+// renderSplitSep renders a horizontal separator split at the nav/content divider.
+// isTop=true uses ┬, isTop=false uses ┴. The active pane's portion is accent-colored.
+func (m Model) renderSplitSep(width int, isTop bool) string {
+	t := ActiveTheme
+	navW := m.navWidth()
+	rightW := width - navW - 1
+	if rightW < 0 {
+		rightW = 0
+	}
+
+	junction := "┬"
+	if !isTop {
+		junction = "┴"
+	}
+
+	var navColor, contentColor, junctionColor lipgloss.Color
+	switch m.focus {
+	case paneNav:
+		navColor = t.Accent
+		contentColor = t.Dimmed
+		junctionColor = t.Accent
+	case paneContent:
+		navColor = t.Dimmed
+		contentColor = t.Accent
+		junctionColor = t.Accent
+	case paneCommand:
+		if !isTop {
+			// bottom sep = top border of the command pane
+			navColor = t.Accent
+			contentColor = t.Accent
+			junctionColor = t.Accent
+		} else {
+			navColor = t.Dimmed
+			contentColor = t.Dimmed
+			junctionColor = t.Dimmed
+		}
+	default:
+		navColor = t.Dimmed
+		contentColor = t.Dimmed
+		junctionColor = t.Dimmed
+	}
+
+	return fg(navColor, strings.Repeat("─", navW)) +
+		fg(junctionColor, junction) +
+		fg(contentColor, strings.Repeat("─", rightW))
+}
+
 // oneLine collapses all whitespace/control characters to spaces and trims.
 // Prevents embedded newlines from breaking the fixed-line layout.
 func oneLine(s string) string {
@@ -154,9 +201,9 @@ func (m Model) View() string {
 	}
 
 	// Build each section into a []string of exactly the right line count.
-	topLines := []string{m.renderTabBar(), sep(m.width)}
+	topLines := []string{m.renderTabBar(), m.renderSplitSep(m.width, true)}
 	mainLines := strings.Split(m.renderMainArea(mainHeight), "\n")
-	botLines := []string{sep(m.width), m.renderCommandInput(), fg(t.StatusText, truncate(m.hintsFor(), m.width))}
+	botLines := []string{m.renderSplitSep(m.width, false), m.renderCommandInput(), fg(t.StatusText, truncate(m.hintsFor(), m.width))}
 
 	// Assemble exactly m.height lines — clamp/pad each section defensively.
 	out := make([]string, 0, m.height)
@@ -378,7 +425,7 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	}
 
 	item := m.navItems[m.navCursor]
-	titleColor := t.ContentDimmed
+	titleColor := t.ContentText
 	if m.focus == paneContent {
 		titleColor = t.ContentTitle
 	}
@@ -466,17 +513,18 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	return lines[:height]
 }
 
-// renderContentTabs renders the [Body] [Summary] [Flash] [Cards] tab strip.
+// renderContentTabs renders the [Flash] [Summary] [Body] [Cards] tab strip.
+// The active tab is derived from scroll position via activeSection().
 func (m Model) renderContentTabs(width int) string {
 	t := ActiveTheme
 	var parts []string
-	tabs := []contentTab{ctBody, ctSummary, ctFlash, ctCards}
+	active := m.activeSection()
+	tabs := []contentTab{ctFlash, ctSummary, ctBody, ctCards}
 	for _, ct := range tabs {
 		label := "[" + ct.String() + "]"
-		available := contentFilePath(m.contentFiles, ct) != ""
-		if ct == m.contentTab {
+		if ct == active && m.contentHas[ct] {
 			parts = append(parts, fgBold(t.ContentTabActive, label))
-		} else if available {
+		} else if m.contentHas[ct] {
 			parts = append(parts, fg(t.ContentTabInactive, label))
 		} else {
 			parts = append(parts, fg(t.Dimmed, label))

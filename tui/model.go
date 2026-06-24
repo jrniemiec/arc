@@ -120,12 +120,13 @@ type Model struct {
 	navLoaded bool
 	navErr    string
 
-	// Content pane
-	contentTab    contentTab
-	contentScroll int
-	contentLines  []string // lines of the active file, loaded async
-	contentFiles  store.Files
-	contentLoading bool
+	// Content pane — single concatenated document: Flash → Summary → Body → Cards
+	contentScroll   int
+	contentLines    []string        // all sections joined
+	contentOffsets  [ctCount]int    // line index where each section starts (-1 = absent)
+	contentHas      [ctCount]bool   // which sections exist
+	contentFiles    store.Files
+	contentLoading  bool
 
 	// Stats
 	stats       service.Stats
@@ -147,8 +148,10 @@ type statsLoadedMsg struct {
 }
 
 type contentLoadedMsg struct {
-	lines []string
-	files store.Files
+	lines   []string
+	offsets [ctCount]int
+	has     [ctCount]bool
+	files   store.Files
 }
 
 // ── Cmds ─────────────────────────────────────────────────────────────────────
@@ -234,23 +237,47 @@ func (m Model) Init() tea.Cmd {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// loadContent fires an async cmd to probe files and load the active content tab.
-func loadContent(root string, ct contentTab, styles, models []string) tea.Cmd {
+// loadContent fires an async cmd to build a single concatenated document:
+// Flash → Summary → Body → Cards, each preceded by a section header.
+// Section order matches the natural reading flow: skim first, detail last.
+func loadContent(root string, styles, models []string) tea.Cmd {
 	return func() tea.Msg {
 		files := storefs.ProbeFiles(root)
-		// ProbeFiles leaves Summary/Flash/Flashcards empty — resolve with preferences.
 		files.Summary = storefs.ResolveSummary(root, styles, models)
 		files.Flash = storefs.ResolveFlash(root, models)
 		files.Flashcards = storefs.ResolveFlashcards(root, styles, models)
-		path := contentFilePath(files, ct)
+
+		// Section order for display
+		order := []contentTab{ctFlash, ctSummary, ctBody, ctCards}
+
 		var lines []string
-		if path != "" {
-			data, err := os.ReadFile(path)
-			if err == nil {
-				lines = splitLines(string(data))
-			}
+		var offsets [ctCount]int
+		var has [ctCount]bool
+
+		// initialise all offsets to -1 (absent)
+		for i := range offsets {
+			offsets[i] = -1
 		}
-		return contentLoadedMsg{lines: lines, files: files}
+
+		for _, ct := range order {
+			path := contentFilePath(files, ct)
+			if path == "" {
+				continue
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			has[ct] = true
+			offsets[ct] = len(lines)
+			// Section header
+			lines = append(lines, "── "+ct.String()+" ──")
+			lines = append(lines, "")
+			lines = append(lines, splitLines(string(data))...)
+			lines = append(lines, "") // blank line between sections
+		}
+
+		return contentLoadedMsg{lines: lines, offsets: offsets, has: has, files: files}
 	}
 }
 

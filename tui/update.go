@@ -39,7 +39,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Trigger content load for the first item.
 		if len(m.navItems) > 0 && m.navItems[0].root != "" {
 			m.contentLoading = true
-			cmds = append(cmds, loadContent(m.navItems[0].root, m.contentTab, m.cfg.PreferredStyles, m.cfg.PreferredModels))
+			cmds = append(cmds, loadContent(m.navItems[0].root, m.cfg.PreferredStyles, m.cfg.PreferredModels))
 		}
 
 	case statsLoadedMsg:
@@ -51,6 +51,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case contentLoadedMsg:
 		m.contentFiles = msg.files
 		m.contentLines = msg.lines
+		m.contentOffsets = msg.offsets
+		m.contentHas = msg.has
 		m.contentScroll = 0
 		m.contentLoading = false
 
@@ -172,13 +174,31 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// cycleContentTab moves to the next/prev content tab unconditionally.
+// cycleContentTab jumps contentScroll to the next/prev present section.
 func (m *Model) cycleContentTab(delta int) tea.Cmd {
-	m.contentTab = contentTab((int(m.contentTab) + delta + int(ctCount)) % int(ctCount))
-	m.contentScroll = 0
-	if m.navCursor >= 0 && m.navCursor < len(m.navItems) && m.navItems[m.navCursor].root != "" {
-		m.contentLoading = true
-		return loadContent(m.navItems[m.navCursor].root, m.contentTab, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	cur := m.activeSection()
+	// Collect present sections in display order
+	order := []contentTab{ctFlash, ctSummary, ctBody, ctCards}
+	var present []contentTab
+	for _, ct := range order {
+		if m.contentHas[ct] {
+			present = append(present, ct)
+		}
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	// Find index of current section
+	idx := 0
+	for i, ct := range present {
+		if ct == cur {
+			idx = i
+			break
+		}
+	}
+	next := present[(idx+delta+len(present))%len(present)]
+	if m.contentOffsets[next] >= 0 {
+		m.contentScroll = m.contentOffsets[next]
 	}
 	return nil
 }
@@ -194,7 +214,27 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 	}
 	m.contentLoading = true
 	m.contentLines = nil
-	return loadContent(root, m.contentTab, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	return loadContent(root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+}
+
+// activeSection returns the content tab whose section is currently visible at the top
+// of the content scroll position. Walks offsets in display order, returns the last
+// section whose offset is ≤ contentScroll.
+func (m *Model) activeSection() contentTab {
+	order := []contentTab{ctFlash, ctSummary, ctBody, ctCards}
+	active := ctBody // fallback
+	for _, ct := range order {
+		if m.contentHas[ct] {
+			active = ct
+			break
+		}
+	}
+	for _, ct := range order {
+		if m.contentHas[ct] && m.contentOffsets[ct] >= 0 && m.contentOffsets[ct] <= m.contentScroll {
+			active = ct
+		}
+	}
+	return active
 }
 
 // clampNavScroll adjusts navScroll so navCursor stays within the visible window.
