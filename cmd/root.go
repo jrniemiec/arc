@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/internal/clog"
 	"github.com/jrniemiec/arc/library"
 	"github.com/jrniemiec/arc/service"
+	arctui "github.com/jrniemiec/arc/tui"
 )
 
 // contextKey is used to store values in cobra's context.
@@ -28,6 +30,7 @@ var (
 	dataRoot     string
 	articlesRoot string
 	jsonOut      bool
+	noTUI        bool
 )
 
 var rootCmd = &cobra.Command{
@@ -49,6 +52,18 @@ Examples:
   arc collections list
   arc collections read ml
   arc collections suggest --apply`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !noTUI && isTTY(os.Stdout) {
+			themeMode, _ := cmd.Flags().GetString("theme")
+			m := arctui.New(themeMode)
+			p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+			if _, err := p.Run(); err != nil {
+				return fmt.Errorf("tui: %w", err)
+			}
+			return nil
+		}
+		return cmd.Help()
+	},
 }
 
 // Execute runs the root command.
@@ -66,10 +81,13 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&dataRoot, "data-root", "", "arc data root directory (default: ~/.arc)")
 	rootCmd.PersistentFlags().StringVar(&articlesRoot, "articles-root", "", "articles directory (default: <data-root>/articles)")
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "output JSON")
+	rootCmd.PersistentFlags().BoolVar(&noTUI, "no-tui", false, "disable TUI, run in headless/CLI mode")
+	rootCmd.Flags().String("theme", "auto", "color theme: auto|light|dark")
 
 	rootCmd.PersistentPreRunE = openLibrary
 	rootCmd.PersistentPostRunE = closeLibrary
 }
+
 
 func openLibrary(cmd *cobra.Command, args []string) error {
 	// Skip library init for help requests — opening the library for --help is wasteful
@@ -80,6 +98,10 @@ func openLibrary(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if cmd.Name() == "help" {
+		return nil
+	}
+	// Skip for bare `arc` invocation when TUI will launch — TUI manages its own data access.
+	if cmd.Name() == "arc" && !noTUI && isTTY(os.Stdout) {
 		return nil
 	}
 	cfg, err := loadConfig()
