@@ -1,0 +1,408 @@
+\documentclass[10pt,a4paper,landscape]{article}
+\usepackage[margin=1cm]{geometry}
+\usepackage{multicol}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+
+\definecolor{codebg}{gray}{0.93}
+\definecolor{sectioncolor}{RGB}{30,90,160}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=none,
+  breaklines=true,
+  breakatwhitespace=true,
+  columns=fullflexible,
+  keepspaces=true,
+}
+
+\titleformat{\section}{\normalfont\bfseries\color{sectioncolor}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalfont\small\bfseries}{}{0em}{}
+\titlespacing{\section}{0pt}{4pt}{2pt}
+\titlespacing{\subsection}{0pt}{3pt}{1pt}
+
+\setlength{\columnsep}{0.6cm}
+\pagestyle{empty}
+
+\begin{document}
+\begin{multicols}{3}
+
+{\large\bfseries Arc Cheat Sheet}\\
+{\small\textit{Personal Knowledge Engine}}
+
+\section{Ingest}
+
+\begin{lstlisting}
+# Ingest from URL
+arc ingest https://example.com/article
+
+# Ingest from local file
+arc ingest ~/papers/paper.pdf
+
+# Ingest with collection tag
+arc ingest <url> --collection ml
+
+# Ingest without summary (flash only)
+arc ingest <url> --no-summary
+
+# Force re-ingest (already exists)
+arc ingest <url> --force
+
+# Dry run -> extract only, no write
+arc ingest <url> --dry-run
+\end{lstlisting}
+
+\section{Extract / Summarize / Flash}
+
+\begin{lstlisting}
+# Extract text only
+arc extract <url>
+
+# Summarize piped text
+arc extract <url> | arc summarize
+
+# Summarize with style
+arc summarize --style bullets <slug>
+
+# Generate flash summary
+arc flash <slug>
+
+# Generate flashcards
+arc flashcards <slug>
+
+# Write results back to article dir
+arc summarize --write <slug>
+arc flash --write <slug>
+\end{lstlisting}
+
+\section{Read}
+
+\begin{lstlisting}
+# Read flash summary
+arc read <slug>
+arc read --flash <slug>
+
+# Read full summary
+arc read --summary <slug>
+
+# Read flashcards
+arc read --flashcards <slug>
+
+# Read raw extracted text
+arc read --body <slug>
+\end{lstlisting}
+
+\section{List \& Search}
+
+\begin{lstlisting}
+# List all articles
+arc list
+
+# List agent-ingested only
+arc list --agent
+
+# List from specific run
+arc list --agent-run <run-id>
+
+# List slugs only (for scripting)
+arc list --slugs
+
+# Full-text search
+arc search "attention mechanism"
+
+# Search with limit
+arc search "golang concurrency" -n 20
+\end{lstlisting}
+
+\section{Reprocess \& Reindex}
+
+\begin{lstlisting}
+# Reprocess flash only
+arc reprocess <slug> \
+  --no-summary --no-flashcards --no-embed
+
+# Reprocess missing flash across run
+arc list --agent-run <run-id> --slugs | \
+  xargs -I{} arc reprocess {} \
+  --no-summary --no-flashcards --no-embed
+
+# Reprocess missing only (skip existing)
+arc reprocess <slug> --missing
+
+# Rebuild search index
+arc reindex
+\end{lstlisting}
+
+\section{Collections}
+
+\begin{lstlisting}
+# List all collections
+arc collections list
+
+# Create collection
+arc collections create ml
+
+# Add article to collection
+arc collections add <slug> ml
+
+# Remove from collection
+arc collections remove <slug> ml
+
+# Show articles in collection
+arc collections show ml
+
+# Show collections for an article
+arc collections show <slug>
+
+# Set description
+arc collections describe ml "ML papers"
+
+# Rename
+arc collections rename ml machine-learning
+
+# Delete (--purge removes articles too)
+arc collections delete ml
+
+# Read flashes across collection
+arc collections read ml
+
+# Read summaries
+arc collections read ml --summary
+
+# AI-suggest collections
+arc collections suggest
+arc collections suggest --apply
+
+# Search within collections
+arc collections read ml --search "transformers"
+\end{lstlisting}
+
+\section{Workspaces}
+
+\begin{lstlisting}
+# Create workspace
+arc workspace new <name> "description"
+
+# List workspaces
+arc workspace list
+
+# Show workspace detail
+arc workspace show <name>
+
+# Add articles / collections
+arc workspace add <name> --article <slug>
+arc workspace add <name> --collection <slug>
+
+# Add resource file or URL
+arc workspace resource add <name> <file>
+arc workspace resource add <name> <url>
+
+# Set system prompt
+arc workspace system set <name> "You are..."
+
+# Archive / delete
+arc workspace archive <name>
+arc workspace delete <name>
+\end{lstlisting}
+
+\section{Workspace Chat}
+
+\begin{lstlisting}
+# Start interactive chat REPL
+arc workspace chat <name>
+
+# Chat with specific profile
+arc workspace chat <name> --profile opus
+
+# Chat with strategy override
+arc workspace chat <name> \
+  --strategy token-budget \
+  --context-limit 8000
+
+# Clear history before starting
+arc workspace chat <name> --clear
+
+# In-session slash commands:
+#   /clear    clear conversation history
+#   /history  show turn count + token usage
+#   /stats    session token + cost summary
+#   /system   show system prompt
+#   /save [file]  save transcript to outcomes/
+#   /help     list commands
+#   /exit     quit
+\end{lstlisting}
+
+\section{Chat Config}
+
+\begin{lstlisting}
+# Show config with descriptions
+arc workspace chat-config <name>
+
+# Set fields
+arc workspace chat-config <name> \
+  --profile sonnet
+arc workspace chat-config <name> \
+  --strategy token-budget \
+  --context-limit 8000
+arc workspace chat-config <name> \
+  --max-output-tokens 2048
+arc workspace chat-config <name> \
+  --max-user-messages 20
+arc workspace chat-config <name> \
+  --summarizer-profile haiku \
+  --verbatim-ratio 0.3
+
+# Global template (copied on workspace new):
+#   ~/.arc/config.json  "chat" section
+
+# Per-workspace live config:
+#   ~/.arc/workspaces/<name>/chat/chat.json
+\end{lstlisting}
+
+\columnbreak
+
+\section{Agent}
+
+\begin{lstlisting}
+# Run feed agent (one cycle)
+arc agent run
+
+# Dry run -> filter only, no ingest
+arc agent run --dry-run
+
+# Run with temporary focus
+arc agent run \
+  --focus "Kubernetes performance"
+
+# Process decisions file
+arc agent run \
+  --decisions ~/.arc/agent/decisions-<id>.json
+
+# View run history
+arc agent log
+arc agent log -n 5
+
+# Per-feed signal/noise stats
+arc agent stats
+
+# Print digest for last run
+arc agent digest
+
+# Digest for specific run
+arc agent digest --run <run-id>
+
+# TTS-friendly digest (no URLs/unicode)
+arc agent digest --tts
+
+# Include full summaries
+arc agent digest --summary
+\end{lstlisting}
+
+\section{Decisions File Workflow}
+
+\begin{lstlisting}
+# 1. Edit decisions file:
+#    change action:"-" to action:"+"
+#    on items to promote (status:"pending")
+vi ~/.arc/agent/decisions-<run-id>.json
+
+# 2. Process overrides
+arc-digest-rerun <run-id>
+
+# Or interactive fzf review
+arc-digest-review [run-id]
+\end{lstlisting}
+
+\section{Email Scripts}
+
+\begin{lstlisting}
+# Run agent (no email)
+arc-digest
+
+# Send digest email for run(s)
+arc-digest-email
+arc-digest-email <run-id>
+arc-digest-email <daily-id> <rerun-id>
+
+# Run decisions + ingest overrides
+arc-digest-rerun [run-id]
+
+# Full morning chain (launchd)
+arc-digest && arc-digest-email
+\end{lstlisting}
+
+\section{Other Commands}
+
+\begin{lstlisting}
+# Open source URL in browser
+arc open <slug>
+
+# Delete article
+arc delete <slug>
+
+# Delete by run
+arc delete --agent-run <run-id>
+
+# Dry run delete
+arc delete <slug> --dry-run
+
+# Show stats
+arc stats
+
+# List LLM profiles + pricing
+arc profiles
+
+# Print resolved config
+arc config
+
+# Start MCP server
+arc mcp
+
+# Initialize arc
+arc init
+\end{lstlisting}
+
+\section{Key Paths}
+
+\begin{lstlisting}
+~/.arc/articles/<slug>/        # article data
+~/.arc/collections/            # collection symlinks
+~/.arc/workspaces/<name>/      # workspace root
+  chat/chat.json               #   chat config
+  chat/history.json            #   conversation history
+  system.txt                   #   system prompt
+  articles/                    #   article symlinks
+  resources/                   #   uploaded files
+  outcomes/                    #   saved transcripts
+~/.arc/agent/runs.jsonl        # run history
+~/.arc/agent/decisions-*       # decisions files
+~/.arc/config.json             # main config
+~/.arc/agent/config.json       # agent config
+\end{lstlisting}
+
+\section{Global Flags}
+
+\begin{lstlisting}
+--config <file>       config file path
+--data-root <dir>     arc data root
+--articles-root <dir> articles directory
+--json                JSON output
+\end{lstlisting}
+
+\section{Environment Variables}
+
+\begin{lstlisting}
+ARC_ANTHROPIC_API_KEY  Anthropic API key
+ARC_RECIPIENT          digest email recipient
+ARC_FROM               digest email sender
+ARC                    arc binary path
+ARC_AGENT_DIR          agent directory
+\end{lstlisting}
+
+\end{multicols}
+\end{document}
