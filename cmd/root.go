@@ -55,7 +55,9 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !noTUI && isTTY(os.Stdout) {
 			themeMode, _ := cmd.Flags().GetString("theme")
-			m := arctui.New(themeMode)
+			svc := svcFrom(cmd)
+			cfg := cfgFrom(cmd)
+			m := arctui.New(svc, cfg, themeMode)
 			p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 			if _, err := p.Run(); err != nil {
 				return fmt.Errorf("tui: %w", err)
@@ -98,10 +100,6 @@ func openLibrary(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if cmd.Name() == "help" {
-		return nil
-	}
-	// Skip for bare `arc` invocation when TUI will launch — TUI manages its own data access.
-	if cmd.Name() == "arc" && !noTUI && isTTY(os.Stdout) {
 		return nil
 	}
 	cfg, err := loadConfig()

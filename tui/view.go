@@ -204,42 +204,216 @@ func (m Model) renderNavPane(height int) []string {
 	lines = append(lines, header)
 	lines = append(lines, "")
 
-	placeholder := fg(t.NavDimmed, "(not yet loaded)")
-	lines = append(lines, placeholder)
+	switch m.activeTab {
+	case tabLibrary:
+		lines = append(lines, m.renderNavLibrary(height-2)...)
+	case tabAgent:
+		lines = append(lines, fg(t.NavDimmed, "(coming soon)"))
+	case tabStats:
+		lines = append(lines, fg(t.NavDimmed, "(stats)"))
+	}
 
-	// pad to height
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
 	return lines[:height]
+}
+
+// renderNavLibrary renders the article list into the nav pane.
+func (m Model) renderNavLibrary(maxLines int) []string {
+	t := ActiveTheme
+
+	if !m.navLoaded {
+		return []string{fg(t.NavDimmed, "loading…")}
+	}
+	if m.navErr != "" {
+		return []string{fg(t.NavDimmed, "error: "+truncate(m.navErr, leftPaneWidth-2))}
+	}
+	if len(m.navItems) == 0 {
+		return []string{fg(t.NavDimmed, "(empty)")}
+	}
+
+	var lines []string
+	end := m.navScroll + maxLines
+	if end > len(m.navItems) {
+		end = len(m.navItems)
+	}
+	for i := m.navScroll; i < end; i++ {
+		item := m.navItems[i]
+		var dot string
+		if !item.read {
+			dot = fg(t.NavMark, "•")
+		} else {
+			dot = " "
+		}
+		title := truncate(item.title, leftPaneWidth-3) // 1 dot + 1 space + title
+		line := dot + " " + fg(t.NavText, title)
+		if i == m.navCursor {
+			line = reverse(dot + " " + title)
+		}
+		lines = append(lines, line)
+	}
+	// scroll indicator
+	if len(m.navItems) > maxLines {
+		pct := 0
+		if len(m.navItems) > 1 {
+			pct = m.navScroll * 100 / (len(m.navItems) - maxLines)
+		}
+		lines = append(lines, fg(t.NavDimmed, fmt.Sprintf(" ↕ %d/%d (%d%%)", m.navCursor+1, len(m.navItems), pct)))
+	}
+	return lines
 }
 
 // renderContentPane returns lines for the right content pane.
 func (m Model) renderContentPane(height, width int) []string {
+	switch m.activeTab {
+	case tabLibrary:
+		return m.renderContentLibrary(height, width)
+	case tabStats:
+		return m.renderContentStats(height, width)
+	default:
+		return m.renderContentPlaceholder(height, width)
+	}
+}
+
+func (m Model) renderContentLibrary(height, width int) []string {
 	t := ActiveTheme
 	var lines []string
 
-	title := fgBold(t.ContentTitle, "arc knowledge base")
-	lines = append(lines, title)
+	if len(m.navItems) == 0 || m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+		lines = append(lines, fgBold(t.ContentTitle, "arc knowledge base"))
+		lines = append(lines, "")
+		if !m.navLoaded {
+			lines = append(lines, fg(t.ContentDimmed, "Loading articles…"))
+		} else {
+			lines = append(lines, fg(t.ContentDimmed, "No articles. Use  arc ingest <url>  to add one."))
+		}
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+
+	item := m.navItems[m.navCursor]
+	lines = append(lines, fgBold(t.ContentTitle, truncate(item.title, width-1)))
+	lines = append(lines, fg(t.ContentDimmed, item.date.Format("2006-01-02")))
 	lines = append(lines, "")
-	lines = append(lines, fg(t.ContentDimmed, "Select an item in the navigator to view content."))
-	lines = append(lines, "")
-	lines = append(lines, fg(t.ContentDimmed, "  /  search      find articles"))
-	lines = append(lines, fg(t.ContentDimmed, "  i  ingest      add a URL"))
-	lines = append(lines, fg(t.ContentDimmed, "  ?  help        all keybindings"))
+
+	flash := m.flashContent()
+	if flash != "" {
+		// Wrap flash text to content width and emit lines.
+		for _, para := range strings.Split(strings.TrimSpace(flash), "\n") {
+			wrapped := wordWrap(para, width-2)
+			for _, wl := range wrapped {
+				lines = append(lines, fg(t.ContentText, wl))
+			}
+		}
+	} else {
+		lines = append(lines, fg(t.ContentDimmed, "(no flash summary — press  r  to generate)"))
+	}
 
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
 	return lines[:height]
 }
+
+func (m Model) renderContentStats(height, width int) []string {
+	t := ActiveTheme
+	var lines []string
+
+	lines = append(lines, fgBold(t.ContentTitle, "Knowledge Base Stats"))
+	lines = append(lines, "")
+
+	if !m.statsLoaded {
+		lines = append(lines, fg(t.ContentDimmed, "Loading…"))
+	} else {
+		s := m.stats
+		row := func(label string, val string) string {
+			return fg(t.ContentDimmed, fmt.Sprintf("  %-20s", label)) + fg(t.ContentText, val)
+		}
+		lines = append(lines, row("Articles", fmt.Sprintf("%d", s.TotalArticles)))
+		lines = append(lines, row("Unread", fmt.Sprintf("%d", s.Unread)))
+		lines = append(lines, row("Collections", fmt.Sprintf("%d", s.TotalCollections)))
+		lines = append(lines, row("With embedding", fmt.Sprintf("%d", s.EmbedCoverage)))
+		lines = append(lines, "")
+		lines = append(lines, row("Cost this month", formatUSD(s.CostThisMonth)))
+		lines = append(lines, row("Cost total", formatUSD(s.CostTotal)))
+	}
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
+func (m Model) renderContentPlaceholder(height, width int) []string {
+	t := ActiveTheme
+	var lines []string
+	lines = append(lines, fgBold(t.ContentTitle, m.activeTab.String()))
+	lines = append(lines, "")
+	lines = append(lines, fg(t.ContentDimmed, "(coming soon)"))
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
+// formatUSD renders a dollar amount concisely.
+func formatUSD(v float64) string {
+	if v == 0 {
+		return "$0.00"
+	}
+	if v < 0.01 {
+		return fmt.Sprintf("$%.4f", v)
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
+
+// wordWrap splits text into lines of at most maxWidth runes.
+func wordWrap(text string, maxWidth int) []string {
+	if maxWidth < 10 {
+		maxWidth = 10
+	}
+	if lipgloss.Width(text) <= maxWidth {
+		return []string{text}
+	}
+	var lines []string
+	words := strings.Fields(text)
+	cur := ""
+	for _, w := range words {
+		candidate := w
+		if cur != "" {
+			candidate = cur + " " + w
+		}
+		if lipgloss.Width(candidate) > maxWidth {
+			if cur != "" {
+				lines = append(lines, cur)
+			}
+			cur = w
+		} else {
+			cur = candidate
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	return lines
+}
+
 
 // renderCommandInput renders the command input line.
 func (m Model) renderCommandInput() string {
 	t := ActiveTheme
 	prompt := fg(t.InputPrompt, "> ")
 	if m.focus == paneCommand {
-		return prompt + reverse(" ") + " " + fg(t.InputText, "type a command, / to search")
+		var cursor string
+		if m.cursorVisible {
+			cursor = reverse(" ")
+		} else {
+			cursor = " "
+		}
+		return prompt + cursor + " " + fg(t.InputText, "type a command, / to search")
 	}
 	return prompt + fg(t.Dimmed, "_")
 }

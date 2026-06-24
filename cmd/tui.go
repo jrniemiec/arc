@@ -20,8 +20,10 @@ var tuiCmd = &cobra.Command{
 	Long:  `Open arc's full terminal interface — browse, search, chat, and manage your knowledge base.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		themeMode, _ := cmd.Flags().GetString("theme")
+		svc := svcFrom(cmd)
+		cfg := cfgFrom(cmd)
 
-		m := arctui.New(themeMode)
+		m := arctui.New(svc, cfg, themeMode)
 		p := tea.NewProgram(
 			m,
 			tea.WithAltScreen(),
