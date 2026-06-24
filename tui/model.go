@@ -79,6 +79,7 @@ type navItem struct {
 	date       time.Time
 	read       bool
 	root       string // article directory (Files.Root)
+	url        string // source URL
 	tags       []string
 	sourceType string
 	summary    string // model/style label e.g. "bullets/sonnet"
@@ -131,6 +132,9 @@ type Model struct {
 	// Stats
 	stats       service.Stats
 	statsLoaded bool
+
+	// Browser
+	chromeWindowID string // ID of the Chrome window opened via 'o', closed on exit
 }
 
 // ── Bubbletea message types ───────────────────────────────────────────────────
@@ -184,6 +188,7 @@ func loadNav(svc *service.Service) tea.Cmd {
 				date:       a.IngestedAt,
 				read:       a.ReadAt != nil,
 				root:       a.Files.Root,
+				url:        a.URL,
 				tags:       tags,
 				sourceType: a.SourceType,
 				summary:    summaryLabel,
@@ -205,6 +210,11 @@ func loadStats(svc *service.Service) tea.Cmd {
 }
 
 // ── Constructor ───────────────────────────────────────────────────────────────
+
+// ChromeWindowID returns the ID of the Chrome window opened during this session.
+func (m Model) ChromeWindowID() string {
+	return m.chromeWindowID
+}
 
 // New creates the initial Model.
 func New(svc *service.Service, cfg config.Config, themeMode string) Model {

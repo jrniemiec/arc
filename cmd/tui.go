@@ -30,7 +30,11 @@ var tuiCmd = &cobra.Command{
 			tea.WithMouseCellMotion(),
 		)
 
-		if _, err := p.Run(); err != nil {
+		final, err := p.Run()
+		if m, ok := final.(arctui.Model); ok {
+			arctui.CloseChromeWindow(m.ChromeWindowID())
+		}
+		if err != nil {
 			return fmt.Errorf("tui: %w", err)
 		}
 		return nil

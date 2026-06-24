@@ -59,7 +59,11 @@ Examples:
 			cfg := cfgFrom(cmd)
 			m := arctui.New(svc, cfg, themeMode)
 			p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-			if _, err := p.Run(); err != nil {
+			final, err := p.Run()
+			if fm, ok := final.(arctui.Model); ok {
+				arctui.CloseChromeWindow(fm.ChromeWindowID())
+			}
+			if err != nil {
 				return fmt.Errorf("tui: %w", err)
 			}
 			return nil

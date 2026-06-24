@@ -48,6 +48,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statsLoaded = true
 		}
 
+	case chromeOpenedMsg:
+		if msg.err == nil && msg.windowID != "" {
+			m.chromeWindowID = msg.windowID
+		}
+
 	case contentLoadedMsg:
 		m.contentFiles = msg.files
 		m.contentLines = msg.lines
@@ -133,6 +138,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		if len(m.navItems) > 0 {
 			m.focus = paneContent
 		}
+	case key.Matches(msg, keys.Open):
+		return m.openCurrentURL()
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
@@ -162,6 +169,8 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		return m.cycleContentTab(1)
 	case key.Matches(msg, keys.ContentTabPrev):
 		return m.cycleContentTab(-1)
+	case key.Matches(msg, keys.Open):
+		return m.openCurrentURL()
 	}
 	return nil
 }
@@ -215,6 +224,18 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 	m.contentLoading = true
 	m.contentLines = nil
 	return loadContent(root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+}
+
+// openCurrentURL opens the source URL of the current nav item in a new Chrome window.
+func (m *Model) openCurrentURL() tea.Cmd {
+	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+		return nil
+	}
+	url := m.navItems[m.navCursor].url
+	if url == "" {
+		return nil
+	}
+	return openInChrome(url)
 }
 
 // activeSection returns the content tab whose section is currently visible at the top

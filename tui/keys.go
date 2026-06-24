@@ -24,6 +24,7 @@ type keyMap struct {
 
 	Command key.Binding // / — activate command input
 	Help    key.Binding // ? — help overlay
+	Open    key.Binding // o — open source URL in browser
 	Quit    key.Binding // q / Ctrl+C
 }
 
@@ -91,6 +92,10 @@ var keys = keyMap{
 	Help: key.NewBinding(
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),
+	),
+	Open: key.NewBinding(
+		key.WithKeys("o"),
+		key.WithHelp("o", "open in browser"),
 	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
