@@ -423,7 +423,10 @@ func Default() Config {
 		},
 		PreferredStyles: []string{"study-notes", "bullets", "technical"},
 		Chat: ChatConfig{
+			Profile:         "oai-mini",
 			Strategy:        "tail",
+			ContextLimit:    0,
+			MaxOutputTokens: 0,
 			MaxUserMessages: 50,
 			VerbatimRatio:   0.4,
 		},
