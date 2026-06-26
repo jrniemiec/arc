@@ -135,6 +135,13 @@ type Model struct {
 
 	// Browser
 	chromeWindowID string // ID of the Chrome window opened via 'o', closed on exit
+
+	// Command input
+	inputValue        string
+	inputCursor       int      // rune index into inputValue
+	inputHistory      []string // oldest first, max 128
+	inputHistoryIdx   int      // -1 = live editing; ≥0 = browsing history
+	inputHistorySaved string   // draft saved when history browsing starts
 }
 
 // ── Bubbletea message types ───────────────────────────────────────────────────
@@ -211,6 +218,11 @@ func loadStats(svc *service.Service) tea.Cmd {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
+// inputHistoryInit sets the initial history index (call from New).
+func (m *Model) inputHistoryInit() {
+	m.inputHistoryIdx = -1
+}
+
 // ChromeWindowID returns the ID of the Chrome window opened during this session.
 func (m Model) ChromeWindowID() string {
 	return m.chromeWindowID
@@ -222,14 +234,16 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 	ApplyTheme(themeMode)
 	AdjustThemeForTerminal()
 
-	return Model{
-		activeTab:     tabLibrary,
-		focus:         paneNav,
-		themeMode:     themeMode,
-		cursorVisible: true,
-		svc:           svc,
-		cfg:           cfg,
+	m := Model{
+		activeTab:       tabLibrary,
+		focus:           paneNav,
+		themeMode:       themeMode,
+		cursorVisible:   true,
+		svc:             svc,
+		cfg:             cfg,
+		inputHistoryIdx: -1,
 	}
+	return m
 }
 
 // Init implements tea.Model.

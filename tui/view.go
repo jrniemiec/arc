@@ -617,20 +617,68 @@ func wordWrap(text string, maxWidth int) []string {
 }
 
 
-// renderCommandInput renders the command input line.
+// renderCommandInput renders the command input line with real text and cursor.
 func (m Model) renderCommandInput() string {
 	t := ActiveTheme
-	prompt := fg(t.InputPrompt, "> ")
-	if m.focus == paneCommand {
-		var cursor string
-		if m.cursorVisible {
-			cursor = reverse(" ")
-		} else {
-			cursor = " "
-		}
-		return prompt + cursor + " " + fg(t.InputText, "type a command, / to search")
+	const promptStr = "> "
+	prompt := fg(t.InputPrompt, promptStr)
+	promptW := len([]rune(promptStr))
+	availW := m.width - promptW
+	if availW < 4 {
+		availW = 4
 	}
-	return prompt + fg(t.Dimmed, "_")
+
+	if m.focus != paneCommand {
+		if m.inputValue == "" {
+			return prompt + fg(t.Dimmed, "esc · type a command")
+		}
+		return prompt + fg(t.InputText, truncate(m.inputValue, availW))
+	}
+
+	// Focused: render inputValue with cursor, scrolling viewport to keep cursor visible.
+	runes := []rune(m.inputValue)
+	cursor := m.inputCursor
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+
+	// Compute scroll offset so cursor is always within [offset, offset+availW).
+	offset := 0
+	if cursor >= availW {
+		offset = cursor - availW + 1
+	}
+
+	// Slice the visible window.
+	visEnd := offset + availW
+	if visEnd > len(runes) {
+		visEnd = len(runes)
+	}
+	visible := runes[offset:visEnd]
+	cursorInView := cursor - offset
+
+	// Build: before cursor | cursor char (reversed) | after cursor
+	var sb strings.Builder
+	sb.WriteString(prompt)
+	if cursorInView > 0 {
+		sb.WriteString(fg(t.InputText, string(visible[:cursorInView])))
+	}
+	// Cursor block: the char at cursor, or a space if at end.
+	if m.cursorVisible {
+		var cursorChar string
+		if cursorInView < len(visible) {
+			cursorChar = string(visible[cursorInView])
+		} else {
+			cursorChar = " "
+		}
+		sb.WriteString(reverse(cursorChar))
+		if cursorInView+1 < len(visible) {
+			sb.WriteString(fg(t.InputText, string(visible[cursorInView+1:])))
+		}
+	} else {
+		// Cursor invisible — render all visible text normally.
+		sb.WriteString(fg(t.InputText, string(visible[cursorInView:])))
+	}
+	return sb.String()
 }
 
 // hintsFor returns context-sensitive key hints for the status bar.

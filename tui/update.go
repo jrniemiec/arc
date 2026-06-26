@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -78,6 +80,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return tea.Quit
+	case key.Matches(msg, keys.Back):
+		m.focus = paneCommand
+		m.cursorVisible = true
+		return nil
 	case key.Matches(msg, keys.Tab1):
 		m.activeTab = tabLibrary
 		return nil
@@ -151,8 +157,6 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
-	case key.Matches(msg, keys.Back):
-		m.focus = paneNav
 	case key.Matches(msg, keys.NavUp):
 		if m.contentScroll > 0 {
 			m.contentScroll--
@@ -176,11 +180,143 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
-	switch {
-	case key.Matches(msg, keys.Back):
-		m.focus = paneNav
+	switch msg.Type {
+	case tea.KeyRunes:
+		m.inputExitHistory()
+		m.inputInsert(msg.Runes)
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		m.inputExitHistory()
+		m.inputDeleteBefore()
+	case tea.KeyDelete:
+		m.inputExitHistory()
+		m.inputDeleteAt()
+	case tea.KeyLeft, tea.KeyCtrlB:
+		if m.inputCursor > 0 {
+			m.inputCursor--
+		}
+	case tea.KeyRight, tea.KeyCtrlF:
+		runes := []rune(m.inputValue)
+		if m.inputCursor < len(runes) {
+			m.inputCursor++
+		}
+	case tea.KeyHome, tea.KeyCtrlA:
+		m.inputCursor = 0
+	case tea.KeyEnd, tea.KeyCtrlE:
+		m.inputCursor = len([]rune(m.inputValue))
+	case tea.KeyCtrlU:
+		// kill entire line
+		m.inputExitHistory()
+		m.inputValue = ""
+		m.inputCursor = 0
+	case tea.KeyCtrlK:
+		// kill from cursor to end
+		m.inputExitHistory()
+		runes := []rune(m.inputValue)
+		m.inputValue = string(runes[:m.inputCursor])
+	case tea.KeyUp:
+		m.inputHistoryPrev()
+	case tea.KeyDown:
+		m.inputHistoryNext()
+	case tea.KeyEnter:
+		m.inputSubmit()
 	}
 	return nil
+}
+
+// inputInsert inserts runes at the cursor position.
+func (m *Model) inputInsert(runes []rune) {
+	r := []rune(m.inputValue)
+	r = append(r[:m.inputCursor], append(runes, r[m.inputCursor:]...)...)
+	m.inputValue = string(r)
+	m.inputCursor += len(runes)
+}
+
+// inputDeleteBefore deletes the rune immediately before the cursor (backspace).
+func (m *Model) inputDeleteBefore() {
+	if m.inputCursor == 0 {
+		return
+	}
+	r := []rune(m.inputValue)
+	r = append(r[:m.inputCursor-1], r[m.inputCursor:]...)
+	m.inputValue = string(r)
+	m.inputCursor--
+}
+
+// inputDeleteAt deletes the rune at the cursor position (delete key).
+func (m *Model) inputDeleteAt() {
+	r := []rune(m.inputValue)
+	if m.inputCursor >= len(r) {
+		return
+	}
+	r = append(r[:m.inputCursor], r[m.inputCursor+1:]...)
+	m.inputValue = string(r)
+}
+
+// inputExitHistory exits history browsing mode, keeping the current value.
+func (m *Model) inputExitHistory() {
+	m.inputHistoryIdx = -1
+	m.inputHistorySaved = ""
+}
+
+// inputHistoryPrev navigates to the previous (older) history entry.
+func (m *Model) inputHistoryPrev() {
+	if len(m.inputHistory) == 0 {
+		return
+	}
+	if m.inputHistoryIdx == -1 {
+		m.inputHistorySaved = m.inputValue
+		m.inputHistoryIdx = len(m.inputHistory) - 1
+	} else if m.inputHistoryIdx > 0 {
+		m.inputHistoryIdx--
+	} else {
+		return
+	}
+	m.inputValue = m.inputHistory[m.inputHistoryIdx]
+	m.inputCursor = len([]rune(m.inputValue))
+}
+
+// inputHistoryNext navigates to the next (newer) history entry, or restores draft.
+func (m *Model) inputHistoryNext() {
+	if m.inputHistoryIdx == -1 {
+		return
+	}
+	if m.inputHistoryIdx < len(m.inputHistory)-1 {
+		m.inputHistoryIdx++
+		m.inputValue = m.inputHistory[m.inputHistoryIdx]
+	} else {
+		m.inputValue = m.inputHistorySaved
+		m.inputHistoryIdx = -1
+		m.inputHistorySaved = ""
+	}
+	m.inputCursor = len([]rune(m.inputValue))
+}
+
+// inputSubmit pushes the current value to history and clears the input.
+func (m *Model) inputSubmit() {
+	val := strings.TrimSpace(m.inputValue)
+	if val != "" {
+		m.pushHistory(val)
+	}
+	m.inputValue = ""
+	m.inputCursor = 0
+	m.inputHistoryIdx = -1
+	m.inputHistorySaved = ""
+}
+
+// pushHistory appends val to history, deduplicating consecutive identical entries.
+// Caps entries at 64 runes. Max 128 entries total.
+func (m *Model) pushHistory(val string) {
+	runes := []rune(val)
+	if len(runes) > 64 {
+		val = string(runes[:60]) + " ..."
+	}
+	if len(m.inputHistory) > 0 && m.inputHistory[len(m.inputHistory)-1] == val {
+		return
+	}
+	m.inputHistory = append(m.inputHistory, val)
+	if len(m.inputHistory) > 128 {
+		m.inputHistory = m.inputHistory[1:]
+	}
 }
 
 // cycleContentTab jumps contentScroll to the next/prev present section.
