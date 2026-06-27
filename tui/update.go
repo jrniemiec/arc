@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"context"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/jrniemiec/arc/service"
 )
 
 // Update implements tea.Model.
@@ -34,6 +38,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.navErr = msg.err
 		} else {
 			m.navItems = msg.items
+			m.navItemsAll = msg.items
 			m.navCursor = 0
 			m.navScroll = 0
 		}
@@ -53,6 +58,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chromeOpenedMsg:
 		if msg.err == nil && msg.windowID != "" {
 			m.chromeWindowID = msg.windowID
+		}
+
+	case cmdDoneMsg:
+		if msg.err != "" {
+			m.statusMsg = "✗ " + msg.err
+		} else {
+			m.statusMsg = msg.statusMsg
+			m.setStatusLines(msg.statusLines)
+		}
+		if msg.navItems != nil {
+			m.navItems = msg.navItems
+			m.navFilter = msg.navFilter
+			m.navCursor = 0
+			m.navScroll = 0
+			cmds = append(cmds, m.triggerContentLoad())
+		}
+		if msg.reloadNav && m.svc != nil {
+			cmds = append(cmds, loadNav(m.svc))
 		}
 
 	case contentLoadedMsg:
@@ -81,6 +104,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Quit):
 		return tea.Quit
 	case key.Matches(msg, keys.Back):
+		m.cmdComplete = nil
+		m.cmdCompleteIdx = -1
+		m.paramItems = nil
+		m.paramIdx = -1
+		m.statusMsg = ""
+		m.statusLines = nil
+		m.pendingConfirm = nil
+		m.pendingConfirmMsg = ""
+		m.inputValue = ""
+		m.inputCursor = 0
 		m.focus = paneCommand
 		m.cursorVisible = true
 		return nil
@@ -100,6 +133,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.activeTab = (m.activeTab + 1) % tabCount
 		return nil
 	case key.Matches(msg, keys.PaneNext):
+		// If param picker active, Tab fills selected param into input.
+		if len(m.paramItems) > 0 && m.paramIdx >= 0 {
+			m.acceptParam()
+			return nil
+		}
+		// If completions active, Tab accepts the selected command.
+		if len(m.cmdComplete) > 0 {
+			m.acceptCompletion()
+			return nil
+		}
 		m.focus = (m.focus + 1) % 3
 		if m.focus == paneCommand {
 			m.cursorVisible = true
@@ -149,6 +192,9 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
+		m.inputValue = "/"
+		m.inputCursor = 1
+		m.updateCompletions()
 	case key.Matches(msg, keys.Help):
 		// help overlay in future phases
 	}
@@ -184,12 +230,19 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyRunes:
 		m.inputExitHistory()
 		m.inputInsert(msg.Runes)
+		m.updateCompletions()
+	case tea.KeySpace:
+		m.inputExitHistory()
+		m.inputInsert([]rune{' '})
+		m.updateCompletions()
 	case tea.KeyBackspace, tea.KeyCtrlH:
 		m.inputExitHistory()
 		m.inputDeleteBefore()
+		m.updateCompletions()
 	case tea.KeyDelete:
 		m.inputExitHistory()
 		m.inputDeleteAt()
+		m.updateCompletions()
 	case tea.KeyLeft, tea.KeyCtrlB:
 		if m.inputCursor > 0 {
 			m.inputCursor--
@@ -204,21 +257,82 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyEnd, tea.KeyCtrlE:
 		m.inputCursor = len([]rune(m.inputValue))
 	case tea.KeyCtrlU:
-		// kill entire line
 		m.inputExitHistory()
 		m.inputValue = ""
 		m.inputCursor = 0
+		m.updateCompletions()
 	case tea.KeyCtrlK:
-		// kill from cursor to end
 		m.inputExitHistory()
 		runes := []rune(m.inputValue)
 		m.inputValue = string(runes[:m.inputCursor])
+		m.updateCompletions()
+	case tea.KeyTab:
+		m.acceptCompletion()
 	case tea.KeyUp:
-		m.inputHistoryPrev()
+		if len(m.paramItems) > 0 {
+			if m.paramIdx > 0 {
+				m.paramIdx--
+			}
+		} else if len(m.cmdComplete) > 0 {
+			if m.cmdCompleteIdx > 0 {
+				m.cmdCompleteIdx--
+			}
+		} else {
+			m.inputHistoryPrev()
+		}
 	case tea.KeyDown:
-		m.inputHistoryNext()
+		if len(m.paramItems) > 0 {
+			if m.paramIdx < len(m.paramItems)-1 {
+				m.paramIdx++
+			}
+		} else if len(m.cmdComplete) > 0 {
+			if m.cmdCompleteIdx < len(m.cmdComplete)-1 {
+				m.cmdCompleteIdx++
+			}
+		} else {
+			m.inputHistoryNext()
+		}
 	case tea.KeyEnter:
+		// Param picker: Enter fills selected value into input but does not execute.
+		if len(m.paramItems) > 0 && m.paramIdx >= 0 {
+			m.acceptParam()
+			return nil
+		}
+		// Completion list: Enter on a no-arg command executes; on commands with args, fills like Tab.
+		if len(m.cmdComplete) > 0 && m.cmdCompleteIdx >= 0 {
+			c := m.cmdComplete[m.cmdCompleteIdx]
+			if c.arg == "" {
+				// No arg needed — execute immediately.
+				m.cmdComplete = nil
+				m.cmdCompleteIdx = -1
+				m.inputValue = ""
+				m.inputCursor = 0
+				return m.dispatchCommand(c.cmd)
+			}
+			// Has arg — fill + space and show param picker, same as Tab.
+			m.acceptCompletion()
+			return nil
+		}
+		val := strings.TrimSpace(m.inputValue)
 		m.inputSubmit()
+		m.cmdComplete = nil
+		m.cmdCompleteIdx = -1
+		// Confirmation flow
+		if m.pendingConfirm != nil {
+			if val == "yes" {
+				fn := m.pendingConfirm
+				m.pendingConfirm = nil
+				m.pendingConfirmMsg = ""
+				return fn()
+			}
+			m.pendingConfirm = nil
+			m.pendingConfirmMsg = ""
+			m.statusMsg = "cancelled"
+			return nil
+		}
+		if val != "" {
+			return m.dispatchCommand(val)
+		}
 	}
 	return nil
 }
@@ -407,13 +521,643 @@ func (m *Model) clampNavScroll() {
 	}
 }
 
+// updateCompletions recomputes the completion list based on the current input.
+// Shows completions when input starts with "/" and contains no space.
+// Shows param suggestions when input is a known command followed by a space.
+func (m *Model) updateCompletions() {
+	val := m.inputValue
+	m.statusLines = nil
+
+	if !strings.HasPrefix(val, "/") {
+		m.cmdComplete = nil
+		m.cmdCompleteIdx = -1
+		return
+	}
+
+	// Param suggestion mode: "/cmd " with optional partial arg
+	if strings.Contains(val, " ") {
+		m.cmdComplete = nil
+		m.cmdCompleteIdx = -1
+		parts := strings.SplitN(val, " ", 2)
+		cmd := strings.ToLower(parts[0])
+		arg := strings.ToLower(parts[1])
+		all := m.paramSuggestions(cmd)
+		// Filter by partial arg
+		var filtered []string
+		for _, s := range all {
+			if arg == "" || strings.HasPrefix(strings.ToLower(s), arg) {
+				filtered = append(filtered, s)
+			}
+		}
+		m.paramItems = filtered
+		if len(filtered) > 0 {
+			m.paramIdx = 0
+		} else {
+			m.paramIdx = -1
+		}
+		return
+	}
+
+	// Completion mode: "/prefix" with no space
+	prefix := strings.ToLower(val)
+	var filtered []cmdCompletion
+	for _, c := range m.allCommands() {
+		if strings.HasPrefix(c.cmd, prefix) {
+			filtered = append(filtered, c)
+		}
+	}
+	m.cmdComplete = filtered
+	if m.cmdCompleteIdx >= len(filtered) {
+		m.cmdCompleteIdx = len(filtered) - 1
+	}
+	if len(filtered) > 0 && m.cmdCompleteIdx < 0 {
+		m.cmdCompleteIdx = 0
+	}
+}
+
+// paramSuggestions returns candidate values for commands that take a known arg.
+func (m *Model) paramSuggestions(cmd string) []string {
+	switch cmd {
+	case "/filter":
+		seen := map[string]bool{}
+		var tags []string
+		for _, item := range m.navItemsAll {
+			for _, tag := range item.tags {
+				if !seen[tag] {
+					seen[tag] = true
+					tags = append(tags, tag)
+				}
+			}
+		}
+		return tags
+
+	case "/collection":
+		return nil // user can run /collections to see list
+
+	case "/help":
+		return []string{"filter", "article", "library"}
+	}
+	return nil
+}
+
+// acceptParam fills the selected param value into the input, replacing any partial arg.
+func (m *Model) acceptParam() {
+	if m.paramIdx < 0 || m.paramIdx >= len(m.paramItems) {
+		return
+	}
+	val := m.paramItems[m.paramIdx]
+	// Replace everything after the first space with the selected value.
+	input := m.inputValue
+	if idx := strings.Index(input, " "); idx >= 0 {
+		input = input[:idx]
+	}
+	m.inputValue = input + " " + val
+	m.inputCursor = len([]rune(m.inputValue))
+	m.paramItems = nil
+	m.paramIdx = -1
+}
+
+// acceptCompletion fills the input with the selected command + space (if it takes an arg).
+// Then immediately populates paramItems if the command has param suggestions.
+func (m *Model) acceptCompletion() {
+	if m.cmdCompleteIdx < 0 || m.cmdCompleteIdx >= len(m.cmdComplete) {
+		return
+	}
+	c := m.cmdComplete[m.cmdCompleteIdx]
+	if c.arg != "" {
+		m.inputValue = c.cmd + " "
+	} else {
+		m.inputValue = c.cmd
+	}
+	m.inputCursor = len([]rune(m.inputValue))
+	m.cmdComplete = nil
+	m.cmdCompleteIdx = -1
+	// Immediately show param picker if this command has suggestions.
+	params := m.paramSuggestions(c.cmd)
+	m.paramItems = params
+	if len(params) > 0 {
+		m.paramIdx = 0
+	} else {
+		m.paramIdx = -1
+	}
+}
+
+// dispatchCommand parses and executes a submitted command string.
+func (m *Model) dispatchCommand(val string) tea.Cmd {
+	m.statusLines = nil
+	m.statusMsg = ""
+	m.pendingConfirm = nil
+	m.pendingConfirmMsg = ""
+
+	parts := strings.Fields(val)
+	if len(parts) == 0 {
+		return nil
+	}
+	cmd := strings.ToLower(parts[0])
+	arg := ""
+	if len(parts) > 1 {
+		arg = strings.Join(parts[1:], " ")
+	}
+
+	switch cmd {
+	case "/search":
+		if arg == "" {
+			m.statusMsg = "usage: /search <query>"
+			return nil
+		}
+		m.applyNavFilter("search", arg)
+		return nil
+
+	case "/filter":
+		if arg == "" {
+			m.statusMsg = "usage: /filter <tag>"
+			return nil
+		}
+		m.applyNavFilter("tag", arg)
+		return nil
+
+	case "/collection":
+		if arg == "" {
+			m.statusMsg = "usage: /collection <name>"
+			return nil
+		}
+		return m.filterByCollection(arg)
+
+	case "/clear":
+		m.navItems = m.navItemsAll
+		m.navFilter = ""
+		m.navCursor = 0
+		m.navScroll = 0
+		m.statusMsg = "✓ filter cleared"
+		return m.triggerContentLoad()
+
+	case "/tags":
+		return m.cmdTags()
+
+	case "/collections":
+		return m.cmdCollections()
+
+	case "/open":
+		return m.openCurrentURL()
+
+	case "/read":
+		return m.cmdMarkRead()
+
+	case "/unread":
+		return m.cmdMarkUnread()
+
+	case "/delete":
+		return m.cmdDeleteArticle()
+
+	case "/reprocess":
+		return m.cmdReprocess()
+
+	case "/ingest":
+		if arg == "" {
+			m.statusMsg = "usage: /ingest <url>"
+			return nil
+		}
+		return m.cmdIngest(arg)
+
+	case "/stats":
+		return m.cmdStats()
+
+	case "/help":
+		m.setStatusLines(m.helpLines(arg))
+		return nil
+
+	default:
+		m.statusMsg = "✗ unknown command: " + parts[0]
+		return nil
+	}
+}
+
+// applyNavFilter filters navItems from navItemsAll by mode ("search" or "tag") and query.
+func (m *Model) applyNavFilter(mode, query string) {
+	q := strings.ToLower(query)
+	var filtered []navItem
+	for _, item := range m.navItemsAll {
+		switch mode {
+		case "search":
+			if strings.Contains(strings.ToLower(item.title), q) ||
+				strings.Contains(strings.ToLower(item.url), q) {
+				filtered = append(filtered, item)
+			}
+		case "tag":
+			for _, tag := range item.tags {
+				if strings.Contains(strings.ToLower(tag), q) {
+					filtered = append(filtered, item)
+					break
+				}
+			}
+		}
+	}
+	m.navItems = filtered
+	m.navCursor = 0
+	m.navScroll = 0
+	n := len(filtered)
+	if n == 0 {
+		m.statusMsg = fmt.Sprintf("no results for %q", query)
+		m.navFilter = ""
+	} else {
+		m.navFilter = mode + ": " + query + " · " + fmt.Sprintf("%d", n) + " results  ·  /clear to reset"
+		m.statusMsg = ""
+	}
+}
+
+// cmdMarkRead marks the current article as read in-memory and persists to DB.
+func (m *Model) cmdMarkRead() tea.Cmd {
+	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	id := m.navItems[m.navCursor].id
+	m.navItems[m.navCursor].read = true
+	for i, item := range m.navItemsAll {
+		if item.id == id {
+			m.navItemsAll[i].read = true
+			break
+		}
+	}
+	m.statusMsg = "✓ marked as read"
+	if m.svc == nil {
+		return nil
+	}
+	svc := m.svc
+	return func() tea.Msg {
+		_ = svc.MarkRead(context.Background(), id)
+		return nil
+	}
+}
+
+// cmdMarkUnread marks the current article as unread in-memory and persists to DB.
+func (m *Model) cmdMarkUnread() tea.Cmd {
+	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	id := m.navItems[m.navCursor].id
+	m.navItems[m.navCursor].read = false
+	for i, item := range m.navItemsAll {
+		if item.id == id {
+			m.navItemsAll[i].read = false
+			break
+		}
+	}
+	m.statusMsg = "✓ marked as unread"
+	if m.svc == nil {
+		return nil
+	}
+	svc := m.svc
+	return func() tea.Msg {
+		_ = svc.MarkUnread(context.Background(), id)
+		return nil
+	}
+}
+
+// cmdDeleteArticle prompts for confirmation then deletes the current article.
+func (m *Model) cmdDeleteArticle() tea.Cmd {
+	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	item := m.navItems[m.navCursor]
+	m.pendingConfirmMsg = fmt.Sprintf("delete %q? type yes + Enter to confirm, Esc to cancel", item.title)
+	m.pendingConfirm = func() tea.Cmd {
+		id := item.id
+		svc := m.svc
+		// Remove from in-memory lists immediately
+		m.navItems = removeNavItem(m.navItems, id)
+		m.navItemsAll = removeNavItem(m.navItemsAll, id)
+		if m.navCursor >= len(m.navItems) {
+			m.navCursor = len(m.navItems) - 1
+		}
+		m.statusMsg = "✓ deleted"
+		m.pendingConfirm = nil
+		m.pendingConfirmMsg = ""
+		if svc == nil {
+			return nil
+		}
+		return func() tea.Msg {
+			_ = svc.DeleteArticle(context.Background(), id)
+			return nil
+		}
+	}
+	return nil
+}
+
+// cmdTags shows all tags from navItemsAll in the status area.
+func (m *Model) cmdTags() tea.Cmd {
+	seen := map[string]bool{}
+	var tags []string
+	for _, item := range m.navItemsAll {
+		for _, tag := range item.tags {
+			if !seen[tag] {
+				seen[tag] = true
+				tags = append(tags, tag)
+			}
+		}
+	}
+	if len(tags) == 0 {
+		m.statusMsg = "(no tags found)"
+		return nil
+	}
+	lines := make([]string, 0, len(tags)+1)
+	lines = append(lines, fmt.Sprintf("tags (%d):", len(tags)))
+	for _, t := range tags {
+		lines = append(lines, "  "+t)
+	}
+	m.setStatusLines(lines)
+	return nil
+}
+
+// cmdCollections shows all collections in the status area.
+func (m *Model) cmdCollections() tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	svc := m.svc
+	return func() tea.Msg {
+		cols, err := svc.ListCollections(context.Background())
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		if len(cols) == 0 {
+			return cmdDoneMsg{statusMsg: "(no collections)"}
+		}
+		lines := make([]string, 0, len(cols)+1)
+		lines = append(lines, fmt.Sprintf("collections (%d):", len(cols)))
+		for _, c := range cols {
+			line := "  " + c.Slug
+			if c.Description != "" {
+				line += "  — " + c.Description
+			}
+			lines = append(lines, line)
+		}
+		return cmdDoneMsg{statusLines: lines}
+	}
+}
+
+// filterByCollection filters nav pane to articles in the given collection.
+func (m *Model) filterByCollection(name string) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	svc := m.svc
+	all := m.navItemsAll
+	return func() tea.Msg {
+		slugs, err := svc.ListCollectionArticles(context.Background(), name)
+		if err != nil {
+			return cmdDoneMsg{err: fmt.Sprintf("collection %q: %v", name, err)}
+		}
+		slugSet := map[string]bool{}
+		for _, s := range slugs {
+			slugSet[s] = true
+		}
+		var filtered []navItem
+		for _, item := range all {
+			if slugSet[item.id] {
+				filtered = append(filtered, item)
+			}
+		}
+		if len(filtered) == 0 {
+			return cmdDoneMsg{err: fmt.Sprintf("collection %q: no articles found", name)}
+		}
+		return cmdDoneMsg{
+			navItems:  filtered,
+			navFilter: fmt.Sprintf("collection: %s · %d articles  ·  /clear to reset", name, len(filtered)),
+		}
+	}
+}
+
+// cmdStats shows library stats in the status area.
+func (m *Model) cmdStats() tea.Cmd {
+	if !m.statsLoaded {
+		m.statusMsg = "stats not loaded yet"
+		return nil
+	}
+	s := m.stats
+	lines := []string{
+		fmt.Sprintf("articles: %d  ·  unread: %d  ·  collections: %d", s.TotalArticles, s.Unread, s.TotalCollections),
+		fmt.Sprintf("cost this month: %s  ·  total: %s", formatUSD(s.CostThisMonth), formatUSD(s.CostTotal)),
+	}
+	m.setStatusLines(lines)
+	return nil
+}
+
+// cmdReprocess regenerates summary/flash for the current article.
+func (m *Model) cmdReprocess() tea.Cmd {
+	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	item := m.navItems[m.navCursor]
+	svc := m.svc
+	cfg := m.cfg
+	m.statusMsg = "⠸ reprocessing " + item.id + "…"
+	return func() tea.Msg {
+		req := service.ReprocessRequest{
+			Slug: item.id,
+		}
+		_ = cfg
+		_, err := svc.Reprocess(context.Background(), req)
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ reprocessed " + item.id, reloadNav: false}
+	}
+}
+
+// cmdIngest ingests a new article from a URL.
+func (m *Model) cmdIngest(url string) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	svc := m.svc
+	cfg := m.cfg
+	m.statusMsg = "⠸ ingesting " + url + "…"
+	return func() tea.Msg {
+		req := service.IngestRequest{
+			URL:      url,
+			Progress: func(msg string) {},
+		}
+		_ = cfg
+		result, err := svc.Ingest(context.Background(), req)
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{
+			statusMsg: fmt.Sprintf("✓ ingested %s", result.Slug),
+			reloadNav: true,
+		}
+	}
+}
+
+// helpGroups defines the command groups for the Library tab.
+var helpGroups = []struct {
+	name     string
+	commands []cmdCompletion
+}{
+	{"filter", []cmdCompletion{
+		{"/search", "<query>", "filter articles by title or URL"},
+		{"/filter", "<tag>", "filter articles by tag"},
+		{"/collection", "<name>", "filter articles by collection"},
+		{"/clear", "", "clear active filter"},
+		{"/tags", "", "list all tags"},
+		{"/collections", "", "list all collections"},
+	}},
+	{"article", []cmdCompletion{
+		{"/open", "", "open source URL in Chrome"},
+		{"/read", "", "mark current article as read"},
+		{"/unread", "", "mark current article as unread"},
+		{"/delete", "", "delete current article"},
+		{"/reprocess", "", "regenerate summary/flash for current article"},
+	}},
+	{"library", []cmdCompletion{
+		{"/ingest", "<url>", "add a new article"},
+		{"/stats", "", "show library stats"},
+	}},
+}
+
+// helpLines returns context-sensitive help for the active tab.
+// group="" shows all groups; group="filter"|"article"|"library" shows that group only.
+func (m *Model) helpLines(group string) []string {
+	if m.activeTab != tabLibrary {
+		return []string{"no commands available for this tab"}
+	}
+
+	renderGroup := func(g struct {
+		name     string
+		commands []cmdCompletion
+	}) []string {
+		lines := []string{g.name + ":"}
+		for _, c := range g.commands {
+			synopsis := c.cmd
+			if c.arg != "" {
+				synopsis += " " + c.arg
+			}
+			lines = append(lines, fmt.Sprintf("  %-24s  %s", synopsis, c.desc))
+		}
+		return lines
+	}
+
+	if group == "" {
+		var lines []string
+		for i, g := range helpGroups {
+			if i > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, renderGroup(g)...)
+		}
+		return lines
+	}
+
+	for _, g := range helpGroups {
+		if g.name == group {
+			return renderGroup(g)
+		}
+	}
+	return []string{fmt.Sprintf("unknown group %q — available: filter, article, library", group)}
+}
+
+// removeNavItem removes the item with the given id from a slice.
+func removeNavItem(items []navItem, id string) []navItem {
+	out := items[:0]
+	for _, item := range items {
+		if item.id != id {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 // handleMouse handles mouse press, release, and motion events.
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	divCol := m.dividerCol()
 
+	// Mouse wheel scrolling.
+	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+		delta := 1
+		if msg.Button == tea.MouseButtonWheelUp {
+			delta = -1
+		}
+
+		// Status area — scrolls when statusLines visible, regardless of position.
+		if len(m.statusLines) > 0 {
+			maxVisible := m.height * 30 / 100
+			if maxVisible < 3 {
+				maxVisible = 3
+			}
+			m.statusScroll += delta
+			if m.statusScroll < 0 {
+				m.statusScroll = 0
+			}
+			maxScroll := len(m.statusLines) - maxVisible
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.statusScroll > maxScroll {
+				m.statusScroll = maxScroll
+			}
+			return nil
+		}
+
+		// Nav pane wheel (left of divider).
+		if msg.X < m.dividerCol() {
+			m.navScroll += delta
+			if m.navScroll < 0 {
+				m.navScroll = 0
+			}
+			max := len(m.navItems) - m.navPaneHeight()
+			if max < 0 {
+				max = 0
+			}
+			if m.navScroll > max {
+				m.navScroll = max
+			}
+			// Keep cursor within visible window.
+			if m.navCursor < m.navScroll {
+				m.navCursor = m.navScroll
+			} else if m.navCursor >= m.navScroll+m.navPaneHeight() {
+				m.navCursor = m.navScroll + m.navPaneHeight() - 1
+			}
+			return m.triggerContentLoad()
+		}
+
+		// Content pane wheel (right of divider).
+		if msg.X > m.dividerCol() {
+			m.contentScroll += delta
+			if m.contentScroll < 0 {
+				m.contentScroll = 0
+			}
+			maxScroll := len(m.contentLines) - m.contentViewHeight()
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.contentScroll > maxScroll {
+				m.contentScroll = maxScroll
+			}
+			return nil
+		}
+	}
+
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
+			// Check command input row first — it spans full width.
+			cmdRow := m.height - hintBarHeight - m.completionCount() - statusSepHeight - cmdBarHeight
+			if msg.Y == cmdRow {
+				m.focus = paneCommand
+				m.cursorVisible = true
+				return nil
+			}
 			// Clicking on or within 1 col of the divider starts a drag.
 			if msg.X >= divCol-1 && msg.X <= divCol+1 {
 				m.dragging = true
@@ -426,13 +1170,6 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if cmd := m.clickNavRow(msg.Y); cmd != nil {
 					return cmd
 				}
-				return nil
-			}
-			// Click in command input area (bottom rows).
-			cmdRow := m.height - hintBarHeight - 1 // separator + input line
-			if msg.Y >= cmdRow {
-				m.focus = paneCommand
-				m.cursorVisible = true
 				return nil
 			}
 			// Click in content pane.
@@ -472,8 +1209,9 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 
 // navPaneHeight returns usable item lines in the nav pane.
 func (m *Model) navPaneHeight() int {
-	// 5 fixed rows (top bar 2 + sep 1 + cmd 1 + hints 1) + 2 nav header rows
-	h := m.height - 5 - 2
+	// fixed: top bar (2) + split sep (1) + cmd (1) + status sep (1) + status bar (1) = 6
+	// plus completions expanding upward, plus 2 nav header rows
+	h := m.height - 6 - m.completionCount() - 2
 	if h < 1 {
 		h = 1
 	}
@@ -483,7 +1221,7 @@ func (m *Model) navPaneHeight() int {
 // contentViewHeight returns the number of lines available for scrollable content.
 // Layout: header (4 lines) + sep + tab strip + sep = 7 fixed lines in content pane.
 func (m *Model) contentViewHeight() int {
-	mainH := m.height - 5 // total minus 5 fixed rows
+	mainH := m.height - 6 - m.completionCount()
 	h := mainH - contentHeaderLines
 	if h < 1 {
 		h = 1

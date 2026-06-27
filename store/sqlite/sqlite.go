@@ -427,6 +427,17 @@ func (s *Store) MarkRead(ctx context.Context, id string, t time.Time) error {
 		&sqlitex.ExecOptions{Args: []any{t.UTC().Format(time.RFC3339), id}})
 }
 
+// MarkUnread clears read_at for an article.
+func (s *Store) MarkUnread(ctx context.Context, id string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	return sqlitex.Execute(conn, `UPDATE articles SET read_at = NULL WHERE id = ?`,
+		&sqlitex.ExecOptions{Args: []any{id}})
+}
+
 // MarkPlayed sets played_at for an article.
 func (s *Store) MarkPlayed(ctx context.Context, id string, t time.Time) error {
 	conn, err := s.pool.Take(ctx)

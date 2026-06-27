@@ -177,6 +177,11 @@ func (l *Library) MarkRead(ctx context.Context, id string, t time.Time) error {
 	return l.db.MarkRead(ctx, id, t)
 }
 
+// MarkUnread clears the read_at timestamp for an article.
+func (l *Library) MarkUnread(ctx context.Context, id string) error {
+	return l.db.MarkUnread(ctx, id)
+}
+
 // MarkPlayed records that an article was played at time t.
 func (l *Library) MarkPlayed(ctx context.Context, id string, t time.Time) error {
 	return l.db.MarkPlayed(ctx, id, t)

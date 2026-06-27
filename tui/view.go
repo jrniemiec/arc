@@ -159,9 +159,10 @@ func truncate(s string, maxWidth int) string {
 // ── Layout constants ──────────────────────────────────────────────────────────
 
 // topBarHeight is used by update.go for navPaneHeight calculation.
-const topBarHeight = 2  // tab bar + separator
-const hintBarHeight = 1 // hints bar
-const cmdBarHeight = 1  // separator + command input counted together in update.go
+const topBarHeight = 2   // tab bar + separator
+const hintBarHeight = 1  // status bar (bottom line)
+const statusSepHeight = 1 // separator between command input and status bar
+const cmdBarHeight = 1   // command input line
 
 // navWidth returns the left nav pane width.
 // Uses user-set override when dragged; otherwise ~28% of terminal, clamped to [20, 60].
@@ -191,10 +192,9 @@ func (m Model) View() string {
 	if m.width == 0 || m.height < 6 {
 		return ""
 	}
-	t := ActiveTheme
-
-	// Fixed rows: top bar (2) + sep (1) + cmd (1) + hints (1) = 5
-	const fixedRows = 5
+	// Fixed rows: top bar (2) + split sep (1) + cmd (1) + status sep (1) + completions (N) + status bar (1) = 6+N
+	compLines := m.renderCompletionLines()
+	fixedRows := 6 + len(compLines)
 	mainHeight := m.height - fixedRows
 	if mainHeight < 1 {
 		mainHeight = 1
@@ -203,7 +203,12 @@ func (m Model) View() string {
 	// Build each section into a []string of exactly the right line count.
 	topLines := []string{m.renderTabBar(), m.renderSplitSep(m.width, true)}
 	mainLines := strings.Split(m.renderMainArea(mainHeight), "\n")
-	botLines := []string{m.renderSplitSep(m.width, false), m.renderCommandInput(), fg(t.StatusText, truncate(m.hintsFor(), m.width))}
+	botLines := make([]string, 0, 4+len(compLines))
+	botLines = append(botLines, m.renderSplitSep(m.width, false))
+	botLines = append(botLines, m.renderCommandInput())
+	botLines = append(botLines, m.renderStatusSep())
+	botLines = append(botLines, compLines...)
+	botLines = append(botLines, m.renderStatusLine())
 
 	// Assemble exactly m.height lines — clamp/pad each section defensively.
 	out := make([]string, 0, m.height)
@@ -679,6 +684,100 @@ func (m Model) renderCommandInput() string {
 		sb.WriteString(fg(t.InputText, string(visible[cursorInView:])))
 	}
 	return sb.String()
+}
+
+// renderStatusSep renders the separator between the command input and the status bar.
+// Accent-colored when the command pane is focused.
+func (m Model) renderStatusSep() string {
+	t := ActiveTheme
+	if m.focus == paneCommand {
+		return fg(t.Accent, strings.Repeat("─", m.width))
+	}
+	return fg(t.Dimmed, strings.Repeat("─", m.width))
+}
+
+// renderCompletionLines renders the expanded status area content.
+// Priority: completions > statusLines. Returns nil when neither is active.
+func (m Model) renderCompletionLines() []string {
+	t := ActiveTheme
+
+	// Completion popup
+	if len(m.cmdComplete) > 0 {
+		maxCmd, maxArg := 0, 0
+		for _, c := range m.cmdComplete {
+			if len(c.cmd) > maxCmd {
+				maxCmd = len(c.cmd)
+			}
+			if len(c.arg) > maxArg {
+				maxArg = len(c.arg)
+			}
+		}
+		lines := make([]string, len(m.cmdComplete))
+		for i, c := range m.cmdComplete {
+			cmdPart := fmt.Sprintf(" %-*s  ", maxCmd, c.cmd)
+			argPart := fmt.Sprintf("%-*s  ", maxArg, c.arg)
+			if i == m.cmdCompleteIdx {
+				lines[i] = fgBold(t.Accent, cmdPart) + fg(t.ContentDimmed, argPart) + fg(t.ContentText, c.desc)
+			} else {
+				lines[i] = fg(t.NavText, cmdPart) + fg(t.ContentDimmed, argPart+c.desc)
+			}
+		}
+		return lines
+	}
+
+	// Param picker (second level: /cmd <partial arg>)
+	if len(m.paramItems) > 0 {
+		lines := make([]string, len(m.paramItems))
+		for i, p := range m.paramItems {
+			if i == m.paramIdx {
+				lines[i] = fgBold(t.Accent, " "+truncate(p, m.width-1))
+			} else {
+				lines[i] = fg(t.NavText, " "+truncate(p, m.width-1))
+			}
+		}
+		return lines
+	}
+
+	// Multi-line status content (/help, /tags, /collections, command output)
+	if len(m.statusLines) > 0 {
+		// Determine max visible lines — cap at 30% of terminal height.
+		maxVisible := m.height * 30 / 100
+		if maxVisible < 3 {
+			maxVisible = 3
+		}
+		start := m.statusScroll
+		if start > len(m.statusLines)-1 {
+			start = len(m.statusLines) - 1
+		}
+		end := start + maxVisible
+		if end > len(m.statusLines) {
+			end = len(m.statusLines)
+		}
+		visible := m.statusLines[start:end]
+		lines := make([]string, len(visible))
+		for i, l := range visible {
+			lines[i] = fg(t.ContentText, " "+truncate(l, m.width-1))
+		}
+		return lines
+	}
+
+	return nil
+}
+
+// renderStatusLine renders the bottom status bar line.
+// Priority: pendingConfirmMsg > navFilter > statusMsg > empty.
+func (m Model) renderStatusLine() string {
+	t := ActiveTheme
+	if m.pendingConfirmMsg != "" {
+		return fg(t.Accent, truncate(" "+m.pendingConfirmMsg, m.width))
+	}
+	if m.navFilter != "" {
+		return fg(t.Accent, truncate(" "+m.navFilter, m.width))
+	}
+	if m.statusMsg != "" {
+		return fg(t.StatusText, truncate(" "+m.statusMsg, m.width))
+	}
+	return ""
 }
 
 // hintsFor returns context-sensitive key hints for the status bar.

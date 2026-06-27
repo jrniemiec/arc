@@ -686,6 +686,11 @@ func (s *Service) MarkRead(ctx context.Context, id string) error {
 	return s.lib.MarkRead(ctx, id, time.Now())
 }
 
+// MarkUnread clears the read_at timestamp for an article.
+func (s *Service) MarkUnread(ctx context.Context, id string) error {
+	return s.lib.MarkUnread(ctx, id)
+}
+
 // MarkPlayed records that an article was played via TTS.
 func (s *Service) MarkPlayed(ctx context.Context, id string) error {
 	return s.lib.MarkPlayed(ctx, id, time.Now())

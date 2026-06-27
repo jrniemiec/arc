@@ -142,6 +142,62 @@ type Model struct {
 	inputHistory      []string // oldest first, max 128
 	inputHistoryIdx   int      // -1 = live editing; ≥0 = browsing history
 	inputHistorySaved string   // draft saved when history browsing starts
+
+	// Command completions (first level: /prefix with no space)
+	cmdComplete    []cmdCompletion // filtered completions (nil = none)
+	cmdCompleteIdx int             // -1 = none highlighted; ≥0 = index
+
+	// Param completions (second level: /cmd <partial arg>)
+	paramItems []string // candidate values
+	paramIdx   int      // -1 = none highlighted; ≥0 = index
+
+	// Nav filter
+	navItemsAll []navItem // unfiltered copy; set on first load
+	navFilter   string    // active filter description ("" = no filter)
+
+	// Status bar
+	statusMsg    string   // ephemeral 1-line command feedback
+	statusLines  []string // multi-line status area (/help, /tags, command output)
+	statusScroll int      // scroll offset into statusLines
+
+	// Pending confirmation (/delete)
+	pendingConfirm    func() tea.Cmd // action to run on "yes"
+	pendingConfirmMsg string         // message shown while waiting
+}
+
+// cmdCompletion is one entry in the command completion popup.
+type cmdCompletion struct {
+	cmd  string // e.g. "/search"
+	arg  string // e.g. "<query>"  (empty if no arg)
+	desc string // e.g. "filter articles by text"
+}
+
+// libraryCommands is the command set for the Library tab.
+var libraryCommands = []cmdCompletion{
+	{"/search", "<query>", "filter articles by title or URL"},
+	{"/filter", "<tag>", "filter articles by tag"},
+	{"/collection", "<name>", "filter articles by collection"},
+	{"/clear", "", "clear active filter"},
+	{"/tags", "", "list all tags"},
+	{"/collections", "", "list all collections"},
+	{"/open", "", "open source URL in Chrome"},
+	{"/read", "", "mark current article as read"},
+	{"/unread", "", "mark current article as unread"},
+	{"/delete", "", "delete current article"},
+	{"/reprocess", "", "regenerate summary/flash for current article"},
+	{"/ingest", "<url>", "add a new article"},
+	{"/stats", "", "show library stats"},
+	{"/help", "", "show command reference"},
+}
+
+// allCommands returns commands relevant to the active tab.
+func (m *Model) allCommands() []cmdCompletion {
+	switch m.activeTab {
+	case tabLibrary:
+		return libraryCommands
+	default:
+		return nil
+	}
 }
 
 // ── Bubbletea message types ───────────────────────────────────────────────────
@@ -163,6 +219,15 @@ type contentLoadedMsg struct {
 	offsets [ctCount]int
 	has     [ctCount]bool
 	files   store.Files
+}
+
+type cmdDoneMsg struct {
+	statusMsg   string
+	statusLines []string
+	err         string
+	reloadNav   bool      // true = reload nav after completion
+	navItems    []navItem // non-nil = replace navItems with this
+	navFilter   string    // non-empty = set navFilter
 }
 
 // ── Cmds ─────────────────────────────────────────────────────────────────────
@@ -228,6 +293,23 @@ func (m Model) ChromeWindowID() string {
 	return m.chromeWindowID
 }
 
+// setStatusLines sets statusLines and resets the scroll offset.
+func (m *Model) setStatusLines(lines []string) {
+	m.statusLines = lines
+	m.statusScroll = 0
+}
+
+// completionCount returns the number of lines currently expanding the status area.
+func (m *Model) completionCount() int {
+	if len(m.cmdComplete) > 0 {
+		return len(m.cmdComplete)
+	}
+	if len(m.paramItems) > 0 {
+		return len(m.paramItems)
+	}
+	return len(m.statusLines)
+}
+
 // New creates the initial Model.
 func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 	DetectTerminal()
@@ -242,6 +324,8 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		svc:             svc,
 		cfg:             cfg,
 		inputHistoryIdx: -1,
+		cmdCompleteIdx:  -1,
+		paramIdx:        -1,
 	}
 	return m
 }
