@@ -237,31 +237,36 @@ func (m Model) View() string {
 func (m Model) renderTabBar() string {
 	t := ActiveTheme
 	var parts []string
-	var barVisibleWidth int
 	for i := tab(0); i < tabCount; i++ {
 		label := i.String()
 		if i == m.activeTab {
-			text := "[" + label + "]"
-			parts = append(parts, fgBold(t.TabActive, text))
-			barVisibleWidth += len([]rune(text))
+			parts = append(parts, fgBold(t.TabActive, "["+label+"]"))
 		} else {
-			text := " " + label + " "
-			parts = append(parts, fg(t.TabInactive, text))
-			barVisibleWidth += len([]rune(text))
+			parts = append(parts, fg(t.TabInactive, " "+label+" "))
 		}
 		if int(i) < int(tabCount)-1 {
 			parts = append(parts, fg(t.Dimmed, "  "))
-			barVisibleWidth += 2
 		}
 	}
-	bar := strings.Join(parts, "")
-	hint := "1·2·3 tabs"
-	hintVisible := len([]rune(hint))
-	gap := m.width - barVisibleWidth - hintVisible
-	if gap < 1 {
-		gap = 1
+	return strings.Join(parts, "")
+}
+
+// tabBarHitTest returns the tab index at column x in the tab bar, or -1 if none.
+// Layout mirrors renderTabBar: each tab is "[Label]" or " Label ", separated by "  ".
+func tabBarHitTest(x int) tab {
+	col := 0
+	for i := tab(0); i < tabCount; i++ {
+		label := i.String()
+		width := len(label) + 2 // " Label " or "[Label]"
+		if x >= col && x < col+width {
+			return i
+		}
+		col += width
+		if int(i) < int(tabCount)-1 {
+			col += 2 // separator "  "
+		}
 	}
-	return bar + strings.Repeat(" ", gap) + fg(t.Dimmed, hint)
+	return -1
 }
 
 // renderMainArea renders the split left/right pane for the current tab.
@@ -363,6 +368,13 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 		return []string{fg(t.NavDimmed, "(empty)")}
 	}
 
+	numbered := m.navFilter != ""
+	// Width of the widest number prefix, e.g. "12. " = 4 chars for 10-99 items.
+	numWidth := 0
+	if numbered {
+		numWidth = len(fmt.Sprintf("%d. ", len(m.navItems)))
+	}
+
 	var lines []string
 	end := m.navScroll + maxLines
 	if end > len(m.navItems) {
@@ -370,17 +382,27 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 	}
 	for i := m.navScroll; i < end; i++ {
 		item := m.navItems[i]
-		dotChar := " "
-		if !item.read {
-			dotChar = "•"
+		var prefix string
+		if numbered {
+			prefix = fmt.Sprintf("%*d. ", numWidth-2, i+1) // right-align number
+		} else {
+			if item.read {
+				prefix = "  "
+			} else {
+				prefix = "• "
+			}
 		}
-		title := truncate(oneLine(item.title), m.navWidth()-3) // 1 dot + 1 space + title
+		title := truncate(oneLine(item.title), m.navWidth()-len(prefix))
 		var line string
 		if i == m.navCursor {
-			// reverse() must wrap plain text — any \033[0m inside cancels reverse video
-			line = reverse(dotChar + " " + title)
+			line = reverse(prefix + title)
 		} else {
-			line = fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
+			if numbered {
+				line = fg(t.NavDimmed, prefix) + fg(t.NavText, title)
+			} else {
+				dotChar := prefix[:len(prefix)-1] // strip trailing space for coloring
+				line = fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
+			}
 		}
 		lines = append(lines, line)
 	}

@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -72,6 +74,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.navFilter = msg.navFilter
 			m.navCursor = 0
 			m.navScroll = 0
+			if msg.err == "" {
+				m.focus = paneNav
+			}
 			cmds = append(cmds, m.triggerContentLoad())
 		}
 		if msg.reloadNav && m.svc != nil {
@@ -117,21 +122,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.focus = paneCommand
 		m.cursorVisible = true
 		return nil
-	case key.Matches(msg, keys.Tab1):
-		m.activeTab = tabLibrary
-		return nil
-	case key.Matches(msg, keys.Tab2):
-		m.activeTab = tabAgent
-		return nil
-	case key.Matches(msg, keys.Tab3):
-		m.activeTab = tabStats
-		return nil
-	case key.Matches(msg, keys.TabPrev):
-		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
-		return nil
-	case key.Matches(msg, keys.TabNext):
-		m.activeTab = (m.activeTab + 1) % tabCount
-		return nil
 	case key.Matches(msg, keys.PaneNext):
 		// If param picker active, Tab fills selected param into input.
 		if len(m.paramItems) > 0 && m.paramIdx >= 0 {
@@ -171,6 +161,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
+	case key.Matches(msg, keys.ContentTabPrev):
+		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
+		return nil
+	case key.Matches(msg, keys.ContentTabNext):
+		m.activeTab = (m.activeTab + 1) % tabCount
+		return nil
 	case key.Matches(msg, keys.NavUp):
 		if m.navCursor > 0 {
 			m.navCursor--
@@ -187,6 +183,12 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		if len(m.navItems) > 0 {
 			m.focus = paneContent
 		}
+	case key.Matches(msg, keys.MarkRead):
+		return m.cmdMarkRead()
+	case key.Matches(msg, keys.MarkUnread):
+		return m.cmdMarkUnread()
+	case key.Matches(msg, keys.Delete):
+		return m.cmdDeleteArticle()
 	case key.Matches(msg, keys.Open):
 		return m.openCurrentURL()
 	case key.Matches(msg, keys.Command):
@@ -662,11 +664,16 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	switch cmd {
 	case "/search":
 		if arg == "" {
-			m.statusMsg = "usage: /search <query>"
+			m.statusMsg = "usage: /search <query> [--limit N]"
 			return nil
 		}
-		m.applyNavFilter("search", arg)
-		return nil
+		query, limit := parseSearchArg(arg)
+		if m.svc == nil {
+			m.applyNavFilter("search", query)
+			return nil
+		}
+		m.statusMsg = "searching…"
+		return cmdFTSSearch(m.svc, query, limit)
 
 	case "/filter":
 		if arg == "" {
@@ -688,6 +695,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		m.navFilter = ""
 		m.navCursor = 0
 		m.navScroll = 0
+		m.focus = paneNav
 		m.statusMsg = "✓ filter cleared"
 		return m.triggerContentLoad()
 
@@ -721,6 +729,9 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	case "/stats":
 		return m.cmdStats()
+
+	case "/log", "/logs":
+		return m.cmdLog()
 
 	case "/help":
 		m.setStatusLines(m.helpLines(arg))
@@ -932,6 +943,67 @@ func (m *Model) filterByCollection(name string) tea.Cmd {
 	}
 }
 
+// parseSearchArg splits a /search arg string into query and optional --limit value.
+// e.g. "go concurrency --limit 50" → ("go concurrency", 50)
+func parseSearchArg(arg string) (query string, limit int) {
+	const flag = "--limit"
+	if idx := strings.Index(arg, flag); idx != -1 {
+		rest := strings.TrimSpace(arg[idx+len(flag):])
+		before := strings.TrimSpace(arg[:idx])
+		var n int
+		if _, err := fmt.Sscanf(rest, "%d", &n); err == nil && n > 0 {
+			return before, n
+		}
+	}
+	return arg, 0
+}
+
+// cmdFTSSearch runs a full-text search via the FTS5 index and replaces nav with results.
+// limit=0 uses the service default (20).
+func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
+	return func() tea.Msg {
+		results, err := svc.Search(context.Background(), service.SearchRequest{Query: query, Limit: limit})
+		if err != nil {
+			return cmdDoneMsg{err: fmt.Sprintf("search: %v", err)}
+		}
+		if len(results) == 0 {
+			return cmdDoneMsg{
+				statusMsg: fmt.Sprintf("no results for %q", query),
+				navItems:  []navItem{},
+				navFilter: fmt.Sprintf("search: %q · 0 results  ·  /clear to reset", query),
+			}
+		}
+		items := make([]navItem, len(results))
+		for i, r := range results {
+			a := r.Article
+			tags := make([]string, len(a.Tags))
+			for j, t := range a.Tags {
+				tags[j] = t.Value
+			}
+			summaryLabel := ""
+			if a.SummaryStyle != "" && a.SummaryModel != "" {
+				summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
+			}
+			items[i] = navItem{
+				id:         a.ID,
+				title:      a.Title,
+				date:       a.IngestedAt,
+				read:       a.ReadAt != nil,
+				root:       a.Files.Root,
+				url:        a.URL,
+				tags:       tags,
+				sourceType: a.SourceType,
+				summary:    summaryLabel,
+				flashModel: a.FlashModel,
+			}
+		}
+		return cmdDoneMsg{
+			navItems:  items,
+			navFilter: fmt.Sprintf("search: %q · %d results  ·  /clear to reset", query, len(items)),
+		}
+	}
+}
+
 // cmdStats shows library stats in the status area.
 func (m *Model) cmdStats() tea.Cmd {
 	if !m.statsLoaded {
@@ -944,6 +1016,50 @@ func (m *Model) cmdStats() tea.Cmd {
 		fmt.Sprintf("cost this month: %s  ·  total: %s", formatUSD(s.CostThisMonth), formatUSD(s.CostTotal)),
 	}
 	m.setStatusLines(lines)
+	return nil
+}
+
+// cmdLog opens or closes a tail of the arc log file in a new terminal window.
+// Calling it a second time writes a sentinel file that signals the tail script to exit.
+func (m *Model) cmdLog() tea.Cmd {
+	pid := os.Getpid()
+	sentinelPath := fmt.Sprintf("%s/arc-log-stop-%d", os.TempDir(), pid)
+
+	if m.logViewerOpen {
+		_ = os.WriteFile(sentinelPath, nil, 0o644)
+		m.logViewerOpen = false
+		m.statusMsg = "log viewer closed"
+		return nil
+	}
+
+	logPath := m.cfg.LogPath
+	scriptPath := fmt.Sprintf("%s/arc-log-viewer-%d.sh", os.TempDir(), pid)
+
+	script := fmt.Sprintf(
+		"#!/bin/bash\ntrap 'rm -f %q %q' EXIT\ntail -n 200 -f %q & __t=$!\nwhile kill -0 %d 2>/dev/null && [ ! -f %q ]; do sleep 1; done\nkill $__t 2>/dev/null\n",
+		scriptPath, sentinelPath, logPath, pid, sentinelPath,
+	)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		m.statusMsg = fmt.Sprintf("✗ /log: could not write script: %v", err)
+		return nil
+	}
+
+	var appleScript string
+	switch ActiveTerminal {
+	case TermITerm2:
+		appleScript = fmt.Sprintf(
+			`tell application "iTerm2" to create window with default profile command %q`,
+			scriptPath,
+		)
+	default:
+		appleScript = fmt.Sprintf(
+			`tell application "Terminal" to do script %q`,
+			scriptPath,
+		)
+	}
+	go exec.Command("osascript", "-e", appleScript).Run() //nolint:errcheck
+	m.logViewerOpen = true
+	m.statusMsg = "log viewer opened — /log again to close"
 	return nil
 }
 
@@ -1006,7 +1122,7 @@ var helpGroups = []struct {
 	commands []cmdCompletion
 }{
 	{"filter", []cmdCompletion{
-		{"/search", "<query>", "filter articles by title or URL"},
+		{"/search", "<query> [--limit N]", "full-text search (FTS5)"},
 		{"/filter", "<tag>", "filter articles by tag"},
 		{"/collection", "<name>", "filter articles by collection"},
 		{"/clear", "", "clear active filter"},
@@ -1023,6 +1139,7 @@ var helpGroups = []struct {
 	{"library", []cmdCompletion{
 		{"/ingest", "<url>", "add a new article"},
 		{"/stats", "", "show library stats"},
+		{"/log", "", "open/close debug log tail in a new terminal window"},
 	}},
 }
 
@@ -1151,6 +1268,13 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
+			// Click on tab bar (row 0).
+			if msg.Y == 0 {
+				if t := tabBarHitTest(msg.X); t >= 0 {
+					m.activeTab = t
+				}
+				return nil
+			}
 			// Check command input row first — it spans full width.
 			cmdRow := m.height - hintBarHeight - m.completionCount() - statusSepHeight - cmdBarHeight
 			if msg.Y == cmdRow {

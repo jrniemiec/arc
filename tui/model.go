@@ -136,6 +136,9 @@ type Model struct {
 	// Browser
 	chromeWindowID string // ID of the Chrome window opened via 'o', closed on exit
 
+	// Log viewer
+	logViewerOpen bool // true while the tail window is open
+
 	// Command input
 	inputValue        string
 	inputCursor       int      // rune index into inputValue
@@ -174,7 +177,7 @@ type cmdCompletion struct {
 
 // libraryCommands is the command set for the Library tab.
 var libraryCommands = []cmdCompletion{
-	{"/search", "<query>", "filter articles by title or URL"},
+	{"/search", "<query> [--limit N]", "full-text search (FTS5)"},
 	{"/filter", "<tag>", "filter articles by tag"},
 	{"/collection", "<name>", "filter articles by collection"},
 	{"/clear", "", "clear active filter"},
@@ -187,6 +190,7 @@ var libraryCommands = []cmdCompletion{
 	{"/reprocess", "", "regenerate summary/flash for current article"},
 	{"/ingest", "<url>", "add a new article"},
 	{"/stats", "", "show library stats"},
+	{"/log", "", "open/close debug log tail in a new terminal window"},
 	{"/help", "", "show command reference"},
 }
 
@@ -323,11 +327,17 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		cursorVisible:   true,
 		svc:             svc,
 		cfg:             cfg,
+		inputHistory:    loadCommandHistory(historyPath(cfg.DataRoot)),
 		inputHistoryIdx: -1,
 		cmdCompleteIdx:  -1,
 		paramIdx:        -1,
 	}
 	return m
+}
+
+// SaveHistory persists the command history to disk. Call after p.Run() exits.
+func (m Model) SaveHistory() {
+	saveCommandHistory(historyPath(m.cfg.DataRoot), m.inputHistory)
 }
 
 // Init implements tea.Model.

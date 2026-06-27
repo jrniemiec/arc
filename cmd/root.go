@@ -31,6 +31,7 @@ var (
 	articlesRoot string
 	jsonOut      bool
 	noTUI        bool
+	logLevel     string
 )
 
 var rootCmd = &cobra.Command{
@@ -62,6 +63,7 @@ Examples:
 			final, err := p.Run()
 			if fm, ok := final.(arctui.Model); ok {
 				arctui.CloseChromeWindow(fm.ChromeWindowID())
+				fm.SaveHistory()
 			}
 			if err != nil {
 				return fmt.Errorf("tui: %w", err)
@@ -88,6 +90,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&articlesRoot, "articles-root", "", "articles directory (default: <data-root>/articles)")
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "output JSON")
 	rootCmd.PersistentFlags().BoolVar(&noTUI, "no-tui", false, "disable TUI, run in headless/CLI mode")
+	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "", "log level: debug|info|warn|error (overrides config)")
 	rootCmd.Flags().String("theme", "auto", "color theme: auto|light|dark")
 
 	rootCmd.PersistentPreRunE = openLibrary
@@ -111,9 +114,13 @@ func openLibrary(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Initialise logging. clog.Init is idempotent — safe to call every command.
-	logLevel, _ := clog.ParseLevel(cfg.LogLevel)
-	clog.Init(cfg.LogPath, logLevel)
+	// Initialise logging. --log-level flag overrides config value.
+	levelStr := logLevel
+	if levelStr == "" {
+		levelStr = cfg.LogLevel
+	}
+	level, _ := clog.ParseLevel(levelStr)
+	clog.Init(cfg.LogPath, level)
 
 	lib, err := library.Open(cmd.Context(), cfg)
 	if err != nil {
