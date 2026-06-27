@@ -197,3 +197,31 @@ func TerminalName() string {
 		return "unknown"
 	}
 }
+
+// SetupTerminal applies terminal-specific escape sequences before p.Run().
+// Returns a cleanup function that must be deferred by the caller.
+// On iTerm2: enables alternate scroll mode (\033[?1007h) so mouse wheel
+// events are delivered as cursor-key sequences, and downgrades to basic
+// mouse mode (\033[?1002l + \033[?1000h) so clicks are reported but drag
+// motion is not — allowing native text selection while keeping click events.
+func SetupTerminal() func() {
+	if ActiveTerminal == TermITerm2 {
+		fmt.Fprint(os.Stdout, "\033[?1007h")
+		return func() {
+			fmt.Fprint(os.Stdout, "\033[?1007l")
+			fmt.Fprint(os.Stdout, "\033[?1000l")
+		}
+	}
+	return func() {}
+}
+
+// DowngradeMouseMode downgrades from cell-motion tracking to basic click-only
+// mode on iTerm2. Called from Init() after bubbletea enables 1002h, so we
+// downgrade to 1000h — clicks are still reported, drag motion is not (allowing
+// native text selection), and 1007h handles wheel as cursor keys.
+func DowngradeMouseMode() {
+	if ActiveTerminal == TermITerm2 {
+		// Disable motion tracking, enable basic click reporting + SGR coords.
+		fmt.Fprint(os.Stdout, "\033[?1002l\033[?1000h\033[?1006h")
+	}
+}

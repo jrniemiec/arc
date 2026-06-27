@@ -101,6 +101,9 @@ type Model struct {
 	// Theme
 	themeMode string // "auto" | "light" | "dark"
 
+	// Selection mode — screen frozen, mouse disabled for native text selection
+	selectionMode bool
+
 	// Spinner — drives cursor blink and future progress indicators
 	spinnerFrame  int
 	cursorVisible bool // toggles every 4 ticks (~400 ms) for blinking cursor
@@ -346,6 +349,15 @@ func (m Model) Init() tea.Cmd {
 		spinnerTick(),
 		tea.EnableMouseCellMotion,
 		tea.HideCursor, // we manage the cursor via fake reverse-video rendering
+	}
+	// On iTerm2: downgrade to basic click-only mouse mode after bubbletea
+	// enables 1002h — keeps click events, drops motion tracking so native
+	// drag-to-select works. Wheel is handled by alternate scroll mode (1007h).
+	if ActiveTerminal == TermITerm2 {
+		cmds = append(cmds, func() tea.Msg {
+			DowngradeMouseMode()
+			return nil
+		})
 	}
 	if m.svc != nil {
 		cmds = append(cmds, loadNav(m.svc), loadStats(m.svc))

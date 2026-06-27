@@ -24,11 +24,9 @@ var tuiCmd = &cobra.Command{
 		cfg := cfgFrom(cmd)
 
 		m := arctui.New(svc, cfg, themeMode)
-		p := tea.NewProgram(
-			m,
-			tea.WithAltScreen(),
-			tea.WithMouseCellMotion(),
-		)
+		cleanup := arctui.SetupTerminal()
+		defer cleanup()
+		p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 		final, err := p.Run()
 		if fm, ok := final.(arctui.Model); ok {

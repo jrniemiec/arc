@@ -787,9 +787,12 @@ func (m Model) renderCompletionLines() []string {
 }
 
 // renderStatusLine renders the bottom status bar line.
-// Priority: pendingConfirmMsg > navFilter > statusMsg > empty.
+// Priority: selectionMode > pendingConfirmMsg > navFilter > statusMsg > empty.
 func (m Model) renderStatusLine() string {
 	t := ActiveTheme
+	if m.selectionMode {
+		return fgBold(t.Accent, truncate(" selection mode — drag to select · Cmd+C to copy · Ctrl+\\ or Esc to exit", m.width))
+	}
 	if m.pendingConfirmMsg != "" {
 		return fg(t.Accent, truncate(" "+m.pendingConfirmMsg, m.width))
 	}

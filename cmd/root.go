@@ -59,6 +59,8 @@ Examples:
 			svc := svcFrom(cmd)
 			cfg := cfgFrom(cmd)
 			m := arctui.New(svc, cfg, themeMode)
+			cleanup := arctui.SetupTerminal()
+			defer cleanup()
 			p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 			final, err := p.Run()
 			if fm, ok := final.(arctui.Model); ok {

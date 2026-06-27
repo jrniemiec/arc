@@ -15,6 +15,20 @@ import (
 
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Selection mode: screen is frozen for native text selection.
+	// Return unchanged model + no commands so bubbletea does not redraw.
+	// Only the exit key breaks out.
+	if m.selectionMode {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			if key.Type == tea.KeyEsc || key.String() == "ctrl+\\" {
+				m.selectionMode = false
+				m.statusMsg = ""
+				return m, tea.Batch(tea.EnableMouseCellMotion, spinnerTick())
+			}
+		}
+		return m, nil
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -106,6 +120,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Global keys — always active
 	switch {
+	case msg.String() == "ctrl+\\":
+		m.selectionMode = true
+		// One final redraw shows the status message, then screen freezes.
+		return tea.DisableMouse
 	case key.Matches(msg, keys.Quit):
 		return tea.Quit
 	case key.Matches(msg, keys.Back):
