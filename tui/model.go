@@ -41,7 +41,8 @@ func (t tab) String() string {
 type focusPane int
 
 const (
-	paneNav     focusPane = iota // left navigator
+	paneTabBar  focusPane = iota // top tab bar (Library/Agent/Stats)
+	paneNav                      // left navigator
 	paneContent                  // right content pane
 	paneCommand                  // command input line
 )
@@ -70,6 +71,53 @@ func (c contentTab) String() string {
 	default:
 		return "?"
 	}
+}
+
+// navSubTab identifies the active sub-tab inside the Library nav pane.
+type navSubTab int
+
+const (
+	navSubTabArticles    navSubTab = iota
+	navSubTabCollections
+	navSubTabWorkspaces
+	navSubTabCount
+)
+
+func (n navSubTab) String() string {
+	switch n {
+	case navSubTabArticles:
+		return "Articles"
+	case navSubTabCollections:
+		return "Collections"
+	case navSubTabWorkspaces:
+		return "Workspaces"
+	default:
+		return "?"
+	}
+}
+
+// navRowKind distinguishes collection header rows from article rows.
+type navRowKind int
+
+const (
+	rowArticle    navRowKind = iota
+	rowCollection            // a collection header row
+)
+
+// navRow is a unified display row for the Collections sub-tab tree.
+type navRow struct {
+	kind navRowKind
+
+	// rowArticle fields
+	item     *navItem
+	indented bool // true when inside an expanded collection
+
+	// rowCollection fields
+	colSlug  string
+	colName  string
+	colDesc  string
+	colCount int
+	expanded bool
 }
 
 // navItem is one entry in the left navigator.
@@ -117,12 +165,22 @@ type Model struct {
 	dragging         bool // true while dragging the divider
 	dragCol          int  // terminal column of the divider at drag start
 
-	// Library nav
+	// Library nav — sub-tab
+	navSubTab navSubTab
+
+	// Library nav — Articles sub-tab
 	navItems  []navItem
 	navCursor int
 	navScroll int
 	navLoaded bool
 	navErr    string
+
+	// Library nav — Collections sub-tab
+	navRows          []navRow
+	navRowCursor     int
+	navRowScroll     int
+	collectionsLoaded bool
+	collectionsErr    string
 
 	// Content pane — single concatenated document: Flash → Summary → Body → Cards
 	contentScroll   int
@@ -228,6 +286,18 @@ type contentLoadedMsg struct {
 	files   store.Files
 }
 
+type collectionsLoadedMsg struct {
+	collections []service.CollectionInfo
+	err         string
+}
+
+type collectionArticlesLoadedMsg struct {
+	slug   string
+	items  []navItem
+	err    string
+	rowIdx int // index of the header row that triggered this load
+}
+
 type cmdDoneMsg struct {
 	statusMsg   string
 	statusLines []string
@@ -285,6 +355,38 @@ func loadStats(svc *service.Service) tea.Cmd {
 			return statsLoadedMsg{err: err.Error()}
 		}
 		return statsLoadedMsg{stats: s}
+	}
+}
+
+func loadCollectionsTree(svc *service.Service) tea.Cmd {
+	return func() tea.Msg {
+		cols, err := svc.ListCollections(context.Background())
+		if err != nil {
+			return collectionsLoadedMsg{err: err.Error()}
+		}
+		return collectionsLoadedMsg{collections: cols}
+	}
+}
+
+// loadCollectionArticlesCmd loads articles for one collection by filtering navItemsAll.
+// all is captured by value (snapshot at dispatch time).
+func loadCollectionArticlesCmd(svc *service.Service, all []navItem, slug string, rowIdx int) tea.Cmd {
+	return func() tea.Msg {
+		slugs, err := svc.ListCollectionArticles(context.Background(), slug)
+		if err != nil {
+			return collectionArticlesLoadedMsg{slug: slug, err: err.Error(), rowIdx: rowIdx}
+		}
+		slugSet := make(map[string]bool, len(slugs))
+		for _, s := range slugs {
+			slugSet[s] = true
+		}
+		var items []navItem
+		for _, item := range all {
+			if slugSet[item.id] {
+				items = append(items, item)
+			}
+		}
+		return collectionArticlesLoadedMsg{slug: slug, items: items, rowIdx: rowIdx}
 	}
 }
 

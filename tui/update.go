@@ -65,6 +65,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, loadContent(m.navItems[0].root, m.cfg.PreferredStyles, m.cfg.PreferredModels))
 		}
 
+	case collectionsLoadedMsg:
+		if msg.err != "" {
+			m.collectionsErr = msg.err
+		} else {
+			rows := make([]navRow, 0, len(msg.collections))
+			for _, c := range msg.collections {
+				rows = append(rows, navRow{
+					kind:     rowCollection,
+					colSlug:  c.Slug,
+					colName:  c.Name,
+					colDesc:  c.Description,
+					colCount: c.ArticleCount,
+				})
+			}
+			m.navRows = rows
+			m.navRowCursor = 0
+			m.navRowScroll = 0
+		}
+		m.collectionsLoaded = true
+
+	case collectionArticlesLoadedMsg:
+		if msg.err != "" {
+			m.statusMsg = "✗ " + msg.err
+		} else {
+			// Find header by slug (index may have shifted from concurrent expands).
+			headerIdx := -1
+			for i, r := range m.navRows {
+				if r.kind == rowCollection && r.colSlug == msg.slug {
+					headerIdx = i
+					break
+				}
+			}
+			if headerIdx >= 0 {
+				m.navRows[headerIdx].expanded = true
+				children := make([]navRow, 0, len(msg.items))
+				for i := range msg.items {
+					item := msg.items[i]
+					children = append(children, navRow{
+						kind:     rowArticle,
+						item:     &item,
+						indented: true,
+					})
+				}
+				before := make([]navRow, headerIdx+1)
+				copy(before, m.navRows[:headerIdx+1])
+				after := make([]navRow, len(m.navRows)-(headerIdx+1))
+				copy(after, m.navRows[headerIdx+1:])
+				m.navRows = append(append(before, children...), after...)
+				m.clampNavRowScroll()
+				m.statusMsg = ""
+			}
+		}
+
 	case statsLoadedMsg:
 		if msg.err == "" {
 			m.stats = msg.stats
@@ -151,13 +204,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.acceptCompletion()
 			return nil
 		}
-		m.focus = (m.focus + 1) % 3
+		m.focus = (m.focus + 1) % 4 // TabBar → Nav → Content → Command → TabBar
 		if m.focus == paneCommand {
 			m.cursorVisible = true
 		}
 		return nil
 	case key.Matches(msg, keys.PanePrev):
-		m.focus = (m.focus + 2) % 3 // +2 mod 3 = -1 mod 3
+		m.focus = (m.focus + 3) % 4 // +3 mod 4 = -1 mod 4
 		if m.focus == paneCommand {
 			m.cursorVisible = true
 		}
@@ -166,6 +219,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	// Pane-specific keys
 	switch m.focus {
+	case paneTabBar:
+		return m.handleTabBarKey(msg)
 	case paneNav:
 		return m.handleNavKey(msg)
 	case paneContent:
@@ -177,30 +232,35 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
+// handleTabBarKey handles keys when the top tab bar has focus.
+// ←/→ cycle top-level tabs; ↓ or Enter drops focus to nav pane.
+// j/k and all other nav keys are intentionally ignored.
+func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, keys.ContentTabPrev):
 		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
-		return nil
 	case key.Matches(msg, keys.ContentTabNext):
 		m.activeTab = (m.activeTab + 1) % tabCount
-		return nil
+	case key.Matches(msg, keys.NavDown), key.Matches(msg, keys.Select):
+		m.focus = paneNav
+	}
+	return nil
+}
+
+func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, keys.ContentTabPrev):
+		return m.navLeft()
+	case key.Matches(msg, keys.ContentTabNext):
+		return m.navRight()
 	case key.Matches(msg, keys.NavUp):
-		if m.navCursor > 0 {
-			m.navCursor--
-			m.clampNavScroll()
-			return m.triggerContentLoad()
-		}
+		return m.navCursorUp()
 	case key.Matches(msg, keys.NavDown):
-		if m.navCursor < len(m.navItems)-1 {
-			m.navCursor++
-			m.clampNavScroll()
-			return m.triggerContentLoad()
-		}
+		return m.navCursorDown()
+	case key.Matches(msg, keys.Expand):
+		return m.navToggleExpand()
 	case key.Matches(msg, keys.Select):
-		if len(m.navItems) > 0 {
-			m.focus = paneContent
-		}
+		return m.navSelect()
 	case key.Matches(msg, keys.MarkRead):
 		return m.cmdMarkRead()
 	case key.Matches(msg, keys.MarkUnread):
@@ -215,10 +275,174 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		m.inputValue = "/"
 		m.inputCursor = 1
 		m.updateCompletions()
-	case key.Matches(msg, keys.Help):
-		// help overlay in future phases
 	}
 	return nil
+}
+
+// navLeft handles ← in the nav pane — cycles sub-tabs.
+func (m *Model) navLeft() tea.Cmd {
+	if m.activeTab != tabLibrary {
+		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
+		return nil
+	}
+	return m.switchNavSubTab((m.navSubTab - 1 + navSubTabCount) % navSubTabCount)
+}
+
+// navRight handles → in the nav pane — cycles sub-tabs.
+func (m *Model) navRight() tea.Cmd {
+	if m.activeTab != tabLibrary {
+		m.activeTab = (m.activeTab + 1) % tabCount
+		return nil
+	}
+	return m.switchNavSubTab((m.navSubTab + 1) % navSubTabCount)
+}
+
+// navCursorUp moves the cursor up in the active sub-tab.
+func (m *Model) navCursorUp() tea.Cmd {
+	switch m.navSubTab {
+	case navSubTabArticles:
+		if m.navCursor > 0 {
+			m.navCursor--
+			m.clampNavScroll()
+			return m.triggerContentLoad()
+		}
+	case navSubTabCollections:
+		if m.navRowCursor > 0 {
+			m.navRowCursor--
+			m.clampNavRowScroll()
+			return m.triggerCollectionContentLoad()
+		}
+	}
+	return nil
+}
+
+// navCursorDown moves the cursor down in the active sub-tab.
+func (m *Model) navCursorDown() tea.Cmd {
+	switch m.navSubTab {
+	case navSubTabArticles:
+		if m.navCursor < len(m.navItems)-1 {
+			m.navCursor++
+			m.clampNavScroll()
+			return m.triggerContentLoad()
+		}
+	case navSubTabCollections:
+		if m.navRowCursor < len(m.navRows)-1 {
+			m.navRowCursor++
+			m.clampNavRowScroll()
+			return m.triggerCollectionContentLoad()
+		}
+	}
+	return nil
+}
+
+// navToggleExpand toggles expand/collapse on a collection header (Space key).
+func (m *Model) navToggleExpand() tea.Cmd {
+	if m.navSubTab != navSubTabCollections || m.navRowCursor >= len(m.navRows) {
+		return nil
+	}
+	row := m.navRows[m.navRowCursor]
+	if row.kind != rowCollection {
+		return nil
+	}
+	if row.expanded {
+		return m.collapseCollection(m.navRowCursor)
+	}
+	return m.expandCollection(m.navRowCursor)
+}
+
+// navSelect handles Enter in the nav pane.
+func (m *Model) navSelect() tea.Cmd {
+	switch m.navSubTab {
+	case navSubTabArticles:
+		if len(m.navItems) > 0 {
+			m.focus = paneContent
+		}
+	case navSubTabCollections:
+		if m.navRowCursor >= len(m.navRows) {
+			return nil
+		}
+		row := m.navRows[m.navRowCursor]
+		if row.kind == rowCollection {
+			return m.navToggleExpand()
+		}
+		if row.kind == rowArticle {
+			m.focus = paneContent
+		}
+	}
+	return nil
+}
+
+// switchNavSubTab switches to the given Library nav sub-tab.
+func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
+	m.navSubTab = sub
+	m.navRowCursor = 0
+	m.navRowScroll = 0
+	m.navCursor = 0
+	m.navScroll = 0
+	if sub == navSubTabCollections && !m.collectionsLoaded && m.svc != nil {
+		return loadCollectionsTree(m.svc)
+	}
+	return nil
+}
+
+// expandCollection starts an async load of articles for a collapsed collection header.
+func (m *Model) expandCollection(rowIdx int) tea.Cmd {
+	if rowIdx < 0 || rowIdx >= len(m.navRows) {
+		return nil
+	}
+	row := m.navRows[rowIdx]
+	if row.kind != rowCollection || row.expanded || m.svc == nil {
+		return nil
+	}
+	m.statusMsg = "loading " + row.colSlug + "…"
+	return loadCollectionArticlesCmd(m.svc, m.navItemsAll, row.colSlug, rowIdx)
+}
+
+// collapseCollection removes child article rows from an expanded collection.
+func (m *Model) collapseCollection(rowIdx int) tea.Cmd {
+	if rowIdx < 0 || rowIdx >= len(m.navRows) || m.navRows[rowIdx].kind != rowCollection {
+		return nil
+	}
+	m.navRows[rowIdx].expanded = false
+	// Remove consecutive indented article children after the header.
+	i := rowIdx + 1
+	for i < len(m.navRows) && m.navRows[i].kind == rowArticle && m.navRows[i].indented {
+		i++
+	}
+	m.navRows = append(m.navRows[:rowIdx+1], m.navRows[i:]...)
+	if m.navRowCursor > rowIdx {
+		m.navRowCursor = rowIdx
+	}
+	m.clampNavRowScroll()
+	return nil
+}
+
+
+// triggerCollectionContentLoad loads content for the article under navRowCursor.
+func (m *Model) triggerCollectionContentLoad() tea.Cmd {
+	if m.navRowCursor < 0 || m.navRowCursor >= len(m.navRows) {
+		return nil
+	}
+	row := m.navRows[m.navRowCursor]
+	if row.kind != rowArticle || row.item == nil || row.item.root == "" {
+		return nil
+	}
+	m.contentLoading = true
+	m.contentLines = nil
+	return loadContent(row.item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+}
+
+// clampNavRowScroll keeps navRowCursor visible within the scroll window.
+func (m *Model) clampNavRowScroll() {
+	h := m.navPaneHeight()
+	if h < 1 {
+		h = 1
+	}
+	if m.navRowCursor < m.navRowScroll {
+		m.navRowScroll = m.navRowCursor
+	} else if m.navRowCursor >= m.navRowScroll+h {
+		m.navRowScroll = m.navRowCursor - h + 1
+	}
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
@@ -484,28 +708,22 @@ func (m *Model) cycleContentTab(delta int) tea.Cmd {
 
 // triggerContentLoad fires loadContent for the current nav cursor item.
 func (m *Model) triggerContentLoad() tea.Cmd {
-	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
-		return nil
-	}
-	root := m.navItems[m.navCursor].root
-	if root == "" {
+	item := m.selectedNavItem()
+	if item == nil || item.root == "" {
 		return nil
 	}
 	m.contentLoading = true
 	m.contentLines = nil
-	return loadContent(root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	return loadContent(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
 }
 
 // openCurrentURL opens the source URL of the current nav item in a new Chrome window.
 func (m *Model) openCurrentURL() tea.Cmd {
-	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+	item := m.selectedNavItem()
+	if item == nil || item.url == "" {
 		return nil
 	}
-	url := m.navItems[m.navCursor].url
-	if url == "" {
-		return nil
-	}
-	return openInChrome(url)
+	return openInChrome(item.url)
 }
 
 // activeSection returns the content tab whose section is currently visible at the top
@@ -796,14 +1014,15 @@ func (m *Model) applyNavFilter(mode, query string) {
 
 // cmdMarkRead marks the current article as read in-memory and persists to DB.
 func (m *Model) cmdMarkRead() tea.Cmd {
-	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+	item := m.selectedNavItem()
+	if item == nil {
 		m.statusMsg = "✗ no article selected"
 		return nil
 	}
-	id := m.navItems[m.navCursor].id
-	m.navItems[m.navCursor].read = true
-	for i, item := range m.navItemsAll {
-		if item.id == id {
+	id := item.id
+	item.read = true
+	for i, ni := range m.navItemsAll {
+		if ni.id == id {
 			m.navItemsAll[i].read = true
 			break
 		}
@@ -821,14 +1040,15 @@ func (m *Model) cmdMarkRead() tea.Cmd {
 
 // cmdMarkUnread marks the current article as unread in-memory and persists to DB.
 func (m *Model) cmdMarkUnread() tea.Cmd {
-	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+	item := m.selectedNavItem()
+	if item == nil {
 		m.statusMsg = "✗ no article selected"
 		return nil
 	}
-	id := m.navItems[m.navCursor].id
-	m.navItems[m.navCursor].read = false
-	for i, item := range m.navItemsAll {
-		if item.id == id {
+	id := item.id
+	item.read = false
+	for i, ni := range m.navItemsAll {
+		if ni.id == id {
 			m.navItemsAll[i].read = false
 			break
 		}
@@ -846,12 +1066,17 @@ func (m *Model) cmdMarkUnread() tea.Cmd {
 
 // cmdDeleteArticle prompts for confirmation then deletes the current article.
 func (m *Model) cmdDeleteArticle() tea.Cmd {
-	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+	sel := m.selectedNavItem()
+	if sel == nil {
 		m.statusMsg = "✗ no article selected"
 		return nil
 	}
-	item := m.navItems[m.navCursor]
+	item := *sel
 	m.pendingConfirmMsg = fmt.Sprintf("delete %q? type yes + Enter to confirm, Esc to cancel", item.title)
+	m.focus = paneCommand
+	m.cursorVisible = true
+	m.inputValue = ""
+	m.inputCursor = 0
 	m.pendingConfirm = func() tea.Cmd {
 		id := item.id
 		svc := m.svc
@@ -864,13 +1089,15 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 		m.statusMsg = "✓ deleted"
 		m.pendingConfirm = nil
 		m.pendingConfirmMsg = ""
+		m.focus = paneNav
+		contentCmd := m.triggerContentLoad()
 		if svc == nil {
-			return nil
+			return contentCmd
 		}
-		return func() tea.Msg {
+		return tea.Batch(contentCmd, func() tea.Msg {
 			_ = svc.DeleteArticle(context.Background(), id)
 			return nil
-		}
+		})
 	}
 	return nil
 }
@@ -1083,7 +1310,8 @@ func (m *Model) cmdLog() tea.Cmd {
 
 // cmdReprocess regenerates summary/flash for the current article.
 func (m *Model) cmdReprocess() tea.Cmd {
-	if m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+	sel := m.selectedNavItem()
+	if sel == nil {
 		m.statusMsg = "✗ no article selected"
 		return nil
 	}
@@ -1091,7 +1319,7 @@ func (m *Model) cmdReprocess() tea.Cmd {
 		m.statusMsg = "✗ service unavailable"
 		return nil
 	}
-	item := m.navItems[m.navCursor]
+	item := *sel
 	svc := m.svc
 	cfg := m.cfg
 	m.statusMsg = "⠸ reprocessing " + item.id + "…"
@@ -1246,6 +1474,25 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 		// Nav pane wheel (left of divider).
 		if msg.X < m.dividerCol() {
+			if m.navSubTab == navSubTabCollections {
+				m.navRowScroll += delta
+				if m.navRowScroll < 0 {
+					m.navRowScroll = 0
+				}
+				max := len(m.navRows) - m.navPaneHeight()
+				if max < 0 {
+					max = 0
+				}
+				if m.navRowScroll > max {
+					m.navRowScroll = max
+				}
+				if m.navRowCursor < m.navRowScroll {
+					m.navRowCursor = m.navRowScroll
+				} else if m.navRowCursor >= m.navRowScroll+m.navPaneHeight() {
+					m.navRowCursor = m.navRowScroll + m.navPaneHeight() - 1
+				}
+				return m.triggerCollectionContentLoad()
+			}
 			m.navScroll += delta
 			if m.navScroll < 0 {
 				m.navScroll = 0
@@ -1290,6 +1537,16 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			if msg.Y == 0 {
 				if t := tabBarHitTest(msg.X); t >= 0 {
 					m.activeTab = t
+					m.focus = paneTabBar
+				}
+				return nil
+			}
+			// Click on nav sub-tab bar (row topBarHeight+1, nav column only).
+			subTabRow := topBarHeight + 1
+			if msg.Y == subTabRow && msg.X < m.dividerCol() && m.activeTab == tabLibrary {
+				if sub := navSubTabHitTest(msg.X); sub >= 0 {
+					m.focus = paneNav
+					return m.switchNavSubTab(sub)
 				}
 				return nil
 			}
@@ -1338,13 +1595,26 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 // clickNavRow moves navCursor to the item at the given terminal row (0-based Y).
+// Library: content starts at topBarHeight + 3 (top bar + sub-tab bar + blank).
+// Other tabs: topBarHeight + 2 (top bar + label).
 func (m *Model) clickNavRow(y int) tea.Cmd {
-	// Nav content starts at row: topBarHeight (2) + 2 header lines = row 4
 	contentStartRow := topBarHeight + 2
-	idx := m.navScroll + (y - contentStartRow)
-	if idx >= 0 && idx < len(m.navItems) {
-		m.navCursor = idx
-		return m.triggerContentLoad()
+	if m.activeTab == tabLibrary {
+		contentStartRow = topBarHeight + 3
+	}
+	switch m.navSubTab {
+	case navSubTabArticles:
+		idx := m.navScroll + (y - contentStartRow)
+		if idx >= 0 && idx < len(m.navItems) {
+			m.navCursor = idx
+			return m.triggerContentLoad()
+		}
+	case navSubTabCollections:
+		idx := m.navRowScroll + (y - contentStartRow)
+		if idx >= 0 && idx < len(m.navRows) {
+			m.navRowCursor = idx
+			return m.triggerCollectionContentLoad()
+		}
 	}
 	return nil
 }
@@ -1352,8 +1622,14 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 // navPaneHeight returns usable item lines in the nav pane.
 func (m *Model) navPaneHeight() int {
 	// fixed: top bar (2) + split sep (1) + cmd (1) + status sep (1) + status bar (1) = 6
-	// plus completions expanding upward, plus 2 nav header rows
-	h := m.height - 6 - m.completionCount() - 2
+	// plus completions expanding upward
+	// Library tab: 2 header rows (sub-tab bar + blank)
+	// Other tabs: 1 header row (label)
+	overhead := 1
+	if m.activeTab == tabLibrary {
+		overhead = 2
+	}
+	h := m.height - 6 - m.completionCount() - overhead
 	if h < 1 {
 		h = 1
 	}

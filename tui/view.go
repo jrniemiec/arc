@@ -98,6 +98,17 @@ func (m Model) renderSplitSep(width int, isTop bool) string {
 
 	var navColor, contentColor, junctionColor lipgloss.Color
 	switch m.focus {
+	case paneTabBar:
+		if isTop {
+			// Top separator is the border below the tab bar — highlight full line.
+			navColor = t.Accent
+			contentColor = t.Accent
+			junctionColor = t.Accent
+		} else {
+			navColor = t.Dimmed
+			contentColor = t.Dimmed
+			junctionColor = t.Dimmed
+		}
 	case paneNav:
 		navColor = t.Accent
 		contentColor = t.Dimmed
@@ -317,41 +328,166 @@ func (m Model) renderNavPane(height int) []string {
 	t := ActiveTheme
 	var lines []string
 
-	var headerLabel string
-	switch m.activeTab {
-	case tabLibrary:
-		if m.navLoaded {
-			headerLabel = fmt.Sprintf("Articles (%d)", len(m.navItems))
-		} else {
-			headerLabel = "Articles"
+	if m.activeTab == tabLibrary {
+		// Sub-tab bar + blank separator, then list content.
+		lines = append(lines, m.renderNavSubTabBar())
+		lines = append(lines, "")
+		switch m.navSubTab {
+		case navSubTabArticles:
+			lines = append(lines, m.renderNavLibrary(height-2)...)
+		case navSubTabCollections:
+			lines = append(lines, m.renderNavCollections(height-2)...)
+		case navSubTabWorkspaces:
+			lines = append(lines, fg(t.NavDimmed, "  (coming soon)"))
 		}
-	case tabAgent:
-		headerLabel = "Agents"
-	case tabStats:
-		headerLabel = "Overview"
-	default:
-		headerLabel = m.activeTab.String()
-	}
-	if m.focus == paneNav {
-		lines = append(lines, fgBold(t.NavGroup, headerLabel))
 	} else {
-		lines = append(lines, fg(t.NavDimmed, headerLabel))
-	}
-	lines = append(lines, "")
-
-	switch m.activeTab {
-	case tabLibrary:
-		lines = append(lines, m.renderNavLibrary(height-2)...)
-	case tabAgent:
-		lines = append(lines, fg(t.NavDimmed, "(coming soon)"))
-	case tabStats:
-		lines = append(lines, fg(t.NavDimmed, "(stats)"))
+		// Non-Library tabs keep a single label header + content.
+		var headerLabel string
+		switch m.activeTab {
+		case tabAgent:
+			headerLabel = "Agents"
+		case tabStats:
+			headerLabel = "Overview"
+		default:
+			headerLabel = m.activeTab.String()
+		}
+		if m.focus == paneNav {
+			lines = append(lines, fgBold(t.NavGroup, headerLabel))
+		} else {
+			lines = append(lines, fg(t.NavDimmed, headerLabel))
+		}
+		switch m.activeTab {
+		case tabAgent:
+			lines = append(lines, fg(t.NavDimmed, "(coming soon)"))
+		case tabStats:
+			lines = append(lines, fg(t.NavDimmed, "(stats)"))
+		}
 	}
 
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
 	return lines[:height]
+}
+
+// renderNavSubTabBar renders the Articles / Collections / Workspaces sub-tab row,
+// truncated to the nav pane width.
+func (m Model) renderNavSubTabBar() string {
+	t := ActiveTheme
+	w := m.navWidth()
+	var parts []string
+	visibleWidth := 0
+	for i := navSubTab(0); i < navSubTabCount; i++ {
+		label := i.String()
+		text := " " + label + " "
+		if i == m.navSubTab {
+			text = "[" + label + "]"
+		}
+		textWidth := len([]rune(text))
+		if visibleWidth+textWidth > w {
+			break
+		}
+		if i == m.navSubTab {
+			parts = append(parts, fgBold(t.TabActive, text))
+		} else {
+			parts = append(parts, fg(t.TabInactive, text))
+		}
+		visibleWidth += textWidth
+		if int(i) < int(navSubTabCount)-1 {
+			sep := "  "
+			if visibleWidth+len(sep) > w {
+				break
+			}
+			parts = append(parts, fg(t.Dimmed, sep))
+			visibleWidth += len(sep)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// navSubTabHitTest returns the navSubTab at column x, or -1 if none.
+func navSubTabHitTest(x int) navSubTab {
+	col := 0
+	for i := navSubTab(0); i < navSubTabCount; i++ {
+		label := i.String()
+		width := len(label) + 2 // "[Label]" or " Label "
+		if x >= col && x < col+width {
+			return i
+		}
+		col += width
+		if int(i) < int(navSubTabCount)-1 {
+			col += 2 // separator "  "
+		}
+	}
+	return -1
+}
+
+// renderNavCollections renders the collection tree into the nav pane.
+func (m Model) renderNavCollections(maxLines int) []string {
+	t := ActiveTheme
+
+	if !m.collectionsLoaded {
+		return []string{fg(t.NavDimmed, "  loading…")}
+	}
+	if m.collectionsErr != "" {
+		return []string{fg(t.NavDimmed, "  error: "+truncate(m.collectionsErr, m.navWidth()-4))}
+	}
+	if len(m.navRows) == 0 {
+		return []string{fg(t.NavDimmed, "  (no collections)")}
+	}
+
+	var lines []string
+	end := m.navRowScroll + maxLines
+	if end > len(m.navRows) {
+		end = len(m.navRows)
+	}
+	for i := m.navRowScroll; i < end; i++ {
+		row := m.navRows[i]
+		selected := i == m.navRowCursor
+		var line string
+
+		switch row.kind {
+		case rowCollection:
+			arrow := "▶ "
+			if row.expanded {
+				arrow = "▼ "
+			}
+			label := arrow + row.colSlug
+			if row.colCount > 0 {
+				label += fmt.Sprintf("  (%d)", row.colCount)
+			}
+			label = truncate(label, m.navWidth()-1)
+			if selected {
+				line = reverse(label)
+			} else {
+				line = fgBold(t.NavGroup, label)
+			}
+
+		case rowArticle:
+			prefix := "    " // indented under collection
+			dot := "• "
+			if row.item.read {
+				dot = "  "
+			}
+			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot))
+			if selected {
+				line = reverse(prefix + dot + title)
+			} else {
+				line = fg(t.NavDimmed, prefix) + fg(t.NavMark, dot[:1]) + " " + fg(t.NavText, title)
+			}
+		}
+		lines = append(lines, line)
+	}
+
+	// Scroll indicator
+	if len(m.navRows) > maxLines {
+		pct := 0
+		if len(m.navRows) > 1 {
+			pct = m.navRowScroll * 100 / (len(m.navRows) - maxLines)
+		}
+		lines = append(lines, fg(t.NavDimmed, fmt.Sprintf(" ↕ %d/%d (%d%%)", m.navRowCursor+1, len(m.navRows), pct)))
+	}
+	return lines
 }
 
 // renderNavLibrary renders the article list into the nav pane.
@@ -433,11 +569,30 @@ func (m Model) renderContentPane(height, width int) []string {
 // title + meta1 + meta2 + meta3 + sep + tabs + sep = 7
 const contentHeaderLines = 7
 
+// selectedNavItem returns the navItem currently under the cursor, or nil.
+func (m Model) selectedNavItem() *navItem {
+	switch m.navSubTab {
+	case navSubTabArticles:
+		if m.navCursor >= 0 && m.navCursor < len(m.navItems) {
+			return &m.navItems[m.navCursor]
+		}
+	case navSubTabCollections:
+		if m.navRowCursor >= 0 && m.navRowCursor < len(m.navRows) {
+			r := m.navRows[m.navRowCursor]
+			if r.kind == rowArticle && r.item != nil {
+				return r.item
+			}
+		}
+	}
+	return nil
+}
+
 func (m Model) renderContentLibrary(height, width int) []string {
 	t := ActiveTheme
 	var lines []string
 
-	if len(m.navItems) == 0 || m.navCursor < 0 || m.navCursor >= len(m.navItems) {
+	item := m.selectedNavItem()
+	if item == nil {
 		lines = append(lines, fgBold(t.ContentTitle, "arc knowledge base"))
 		lines = append(lines, "")
 		if !m.navLoaded {
@@ -450,8 +605,6 @@ func (m Model) renderContentLibrary(height, width int) []string {
 		}
 		return lines[:height]
 	}
-
-	item := m.navItems[m.navCursor]
 	titleColor := t.ContentText
 	if m.focus == paneContent {
 		titleColor = t.ContentTitle
@@ -801,6 +954,33 @@ func (m Model) renderStatusLine() string {
 	}
 	if m.statusMsg != "" {
 		return fg(t.StatusText, truncate(" "+m.statusMsg, m.width))
+	}
+	// Idle: show context stats for the active tab/sub-tab.
+	if m.activeTab == tabLibrary {
+		switch m.navSubTab {
+		case navSubTabArticles:
+			if m.navLoaded {
+				unread := 0
+				for _, item := range m.navItemsAll {
+					if !item.read {
+						unread++
+					}
+				}
+				return fg(t.Dimmed, fmt.Sprintf(" Articles · %d total · %d unread", len(m.navItemsAll), unread))
+			}
+		case navSubTabCollections:
+			if m.collectionsLoaded {
+				n := 0
+				for _, r := range m.navRows {
+					if r.kind == rowCollection {
+						n++
+					}
+				}
+				return fg(t.Dimmed, fmt.Sprintf(" Collections · %d total", n))
+			}
+		case navSubTabWorkspaces:
+			return fg(t.Dimmed, " Workspaces · coming soon")
+		}
 	}
 	return ""
 }
