@@ -8,6 +8,10 @@ type keyMap struct {
 
 	NavUp   key.Binding // j / ↑
 	NavDown key.Binding // k / ↓
+	PageUp   key.Binding // PgUp / Ctrl+U
+	PageDown key.Binding // PgDn / Ctrl+D
+	Home     key.Binding // Home / g
+	End      key.Binding // End / G
 
 	Select  key.Binding // Enter
 	Back    key.Binding // Esc
@@ -41,6 +45,22 @@ var keys = keyMap{
 	NavDown: key.NewBinding(
 		key.WithKeys("j", "down"),
 		key.WithHelp("j/↓", "down"),
+	),
+	PageUp: key.NewBinding(
+		key.WithKeys("pgup", "ctrl+u"),
+		key.WithHelp("PgUp", "page up"),
+	),
+	PageDown: key.NewBinding(
+		key.WithKeys("pgdown", "ctrl+d"),
+		key.WithHelp("PgDn", "page down"),
+	),
+	Home: key.NewBinding(
+		key.WithKeys("home", "g"),
+		key.WithHelp("Home/g", "go to top"),
+	),
+	End: key.NewBinding(
+		key.WithKeys("end", "G"),
+		key.WithHelp("End/G", "go to bottom"),
 	),
 	Select: key.NewBinding(
 		key.WithKeys("enter"),

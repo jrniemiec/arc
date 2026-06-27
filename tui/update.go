@@ -257,6 +257,14 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		return m.navCursorUp()
 	case key.Matches(msg, keys.NavDown):
 		return m.navCursorDown()
+	case key.Matches(msg, keys.PageUp):
+		return m.navPageUp()
+	case key.Matches(msg, keys.PageDown):
+		return m.navPageDown()
+	case key.Matches(msg, keys.Home):
+		return m.navHome()
+	case key.Matches(msg, keys.End):
+		return m.navEnd()
 	case key.Matches(msg, keys.Expand):
 		return m.navToggleExpand()
 	case key.Matches(msg, keys.Select):
@@ -328,6 +336,90 @@ func (m *Model) navCursorDown() tea.Cmd {
 	case navSubTabCollections:
 		if m.navRowCursor < len(m.navRows)-1 {
 			m.navRowCursor++
+			m.clampNavRowScroll()
+			return m.triggerCollectionContentLoad()
+		}
+	}
+	return nil
+}
+
+// navPageUp scrolls the nav pane up by one page.
+func (m *Model) navPageUp() tea.Cmd {
+	h := m.navPaneHeight()
+	switch m.navSubTab {
+	case navSubTabArticles:
+		m.navCursor -= h
+		if m.navCursor < 0 {
+			m.navCursor = 0
+		}
+		m.clampNavScroll()
+		return m.triggerContentLoad()
+	case navSubTabCollections:
+		m.navRowCursor -= h
+		if m.navRowCursor < 0 {
+			m.navRowCursor = 0
+		}
+		m.clampNavRowScroll()
+		return m.triggerCollectionContentLoad()
+	}
+	return nil
+}
+
+// navPageDown scrolls the nav pane down by one page.
+func (m *Model) navPageDown() tea.Cmd {
+	h := m.navPaneHeight()
+	switch m.navSubTab {
+	case navSubTabArticles:
+		m.navCursor += h
+		if m.navCursor >= len(m.navItems) {
+			m.navCursor = len(m.navItems) - 1
+		}
+		if m.navCursor < 0 {
+			m.navCursor = 0
+		}
+		m.clampNavScroll()
+		return m.triggerContentLoad()
+	case navSubTabCollections:
+		m.navRowCursor += h
+		if m.navRowCursor >= len(m.navRows) {
+			m.navRowCursor = len(m.navRows) - 1
+		}
+		if m.navRowCursor < 0 {
+			m.navRowCursor = 0
+		}
+		m.clampNavRowScroll()
+		return m.triggerCollectionContentLoad()
+	}
+	return nil
+}
+
+// navHome jumps the nav cursor to the first item.
+func (m *Model) navHome() tea.Cmd {
+	switch m.navSubTab {
+	case navSubTabArticles:
+		m.navCursor = 0
+		m.clampNavScroll()
+		return m.triggerContentLoad()
+	case navSubTabCollections:
+		m.navRowCursor = 0
+		m.clampNavRowScroll()
+		return m.triggerCollectionContentLoad()
+	}
+	return nil
+}
+
+// navEnd jumps the nav cursor to the last item.
+func (m *Model) navEnd() tea.Cmd {
+	switch m.navSubTab {
+	case navSubTabArticles:
+		if len(m.navItems) > 0 {
+			m.navCursor = len(m.navItems) - 1
+			m.clampNavScroll()
+			return m.triggerContentLoad()
+		}
+	case navSubTabCollections:
+		if len(m.navRows) > 0 {
+			m.navRowCursor = len(m.navRows) - 1
 			m.clampNavRowScroll()
 			return m.triggerCollectionContentLoad()
 		}
@@ -459,6 +551,28 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		if m.contentScroll < maxScroll {
 			m.contentScroll++
 		}
+	case key.Matches(msg, keys.PageUp):
+		m.contentScroll -= m.contentViewHeight()
+		if m.contentScroll < 0 {
+			m.contentScroll = 0
+		}
+	case key.Matches(msg, keys.PageDown):
+		maxScroll := len(m.contentLines) - m.contentViewHeight()
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		m.contentScroll += m.contentViewHeight()
+		if m.contentScroll > maxScroll {
+			m.contentScroll = maxScroll
+		}
+	case key.Matches(msg, keys.Home):
+		m.contentScroll = 0
+	case key.Matches(msg, keys.End):
+		maxScroll := len(m.contentLines) - m.contentViewHeight()
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		m.contentScroll = maxScroll
 	case key.Matches(msg, keys.ContentTabNext):
 		return m.cycleContentTab(1)
 	case key.Matches(msg, keys.ContentTabPrev):
