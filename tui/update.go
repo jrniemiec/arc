@@ -900,13 +900,18 @@ func (m *Model) updateCompletions() {
 		m.cmdCompleteIdx = -1
 		parts := strings.SplitN(val, " ", 2)
 		cmd := strings.ToLower(parts[0])
-		arg := strings.ToLower(parts[1])
-		all := m.paramSuggestions(cmd)
-		// Filter by partial arg
-		var filtered []string
-		for _, s := range all {
-			if arg == "" || strings.HasPrefix(strings.ToLower(s), arg) {
-				filtered = append(filtered, s)
+		arg := parts[1] // preserve case for display; lowercase when filtering
+		all := m.paramSuggestions(cmd, arg)
+		// Filter by partial last token
+		partial := strings.ToLower(arg)
+		// For multi-word args (e.g. "/help article "), filter on the last word
+		if idx := strings.LastIndex(partial, " "); idx >= 0 {
+			partial = partial[idx+1:]
+		}
+		var filtered []cmdCompletion
+		for _, c := range all {
+			if partial == "" || strings.HasPrefix(strings.ToLower(c.cmd), partial) {
+				filtered = append(filtered, c)
 			}
 		}
 		m.paramItems = filtered
@@ -936,39 +941,61 @@ func (m *Model) updateCompletions() {
 }
 
 // paramSuggestions returns candidate values for commands that take a known arg.
-func (m *Model) paramSuggestions(cmd string) []string {
+// arg is the partial text already typed after the command (may include spaces for /help).
+func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 	switch cmd {
 	case "/filter":
 		seen := map[string]bool{}
-		var tags []string
+		var items []cmdCompletion
 		for _, item := range m.navItemsAll {
 			for _, tag := range item.tags {
 				if !seen[tag] {
 					seen[tag] = true
-					tags = append(tags, tag)
+					items = append(items, cmdCompletion{cmd: tag})
 				}
 			}
 		}
-		return tags
+		return items
 
 	case "/collection":
 		return nil // user can run /collections to see list
 
 	case "/help":
-		return []string{"filter", "article", "library"}
+		// Second level: "/help article " → return command entries for that group.
+		trimmed := strings.TrimSpace(strings.ToLower(arg))
+		for _, g := range helpGroups {
+			if trimmed == g.name || strings.HasPrefix(trimmed, g.name+" ") {
+				items := make([]cmdCompletion, len(g.commands))
+				for i, c := range g.commands {
+					name := c.cmd
+					// For CLI-only entries like "arc workspace new", show just the subcommand.
+					if parts := strings.Fields(name); len(parts) == 3 && parts[0] == "arc" {
+						name = parts[2]
+					}
+					items[i] = cmdCompletion{cmd: name, desc: c.desc}
+				}
+				return items
+			}
+		}
+		// First level: return group names.
+		items := make([]cmdCompletion, len(helpGroups))
+		for i, g := range helpGroups {
+			items[i] = cmdCompletion{cmd: g.name}
+		}
+		return items
 	}
 	return nil
 }
 
-// acceptParam fills the selected param value into the input, replacing any partial arg.
+// acceptParam fills the selected param value into the input, replacing any partial last token.
 func (m *Model) acceptParam() {
 	if m.paramIdx < 0 || m.paramIdx >= len(m.paramItems) {
 		return
 	}
-	val := m.paramItems[m.paramIdx]
-	// Replace everything after the first space with the selected value.
+	val := m.paramItems[m.paramIdx].cmd
+	// Find the last space in the input and replace everything after it with val.
 	input := m.inputValue
-	if idx := strings.Index(input, " "); idx >= 0 {
+	if idx := strings.LastIndex(input, " "); idx >= 0 {
 		input = input[:idx]
 	}
 	m.inputValue = input + " " + val
@@ -993,7 +1020,7 @@ func (m *Model) acceptCompletion() {
 	m.cmdComplete = nil
 	m.cmdCompleteIdx = -1
 	// Immediately show param picker if this command has suggestions.
-	params := m.paramSuggestions(c.cmd)
+	params := m.paramSuggestions(c.cmd, "")
 	m.paramItems = params
 	if len(params) > 0 {
 		m.paramIdx = 0
@@ -1582,37 +1609,63 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 }
 
 // helpGroups defines the command groups for the Library tab.
+// Names match the CLI convention: singular (article, collection, workspace).
 var helpGroups = []struct {
 	name     string
 	commands []cmdCompletion
 }{
-	{"filter", []cmdCompletion{
+	{"article", []cmdCompletion{
 		{"/search", "<query> [--limit N]", "full-text search (FTS5)"},
 		{"/filter", "<tag>", "filter articles by tag"},
-		{"/collection", "<name>", "filter articles by collection"},
-		{"/clear", "", "clear active filter"},
-		{"/tags", "", "list all tags"},
-		{"/collections", "", "list all collections"},
 		{"/favorites", "", "show only favorited articles"},
-	}},
-	{"article", []cmdCompletion{
+		{"/clear", "", "clear active filter"},
 		{"/open", "", "open source URL in Chrome"},
 		{"/read", "", "mark current article as read"},
 		{"/unread", "", "mark current article as unread"},
 		{"/favorite", "", "toggle favorite on current article"},
 		{"/delete", "", "delete current article"},
 		{"/reprocess", "", "regenerate summary/flash for current article"},
-	}},
-	{"library", []cmdCompletion{
 		{"/ingest", "<url>", "add a new article"},
+	}},
+	{"collection", []cmdCompletion{
+		{"/collections", "", "list all collections"},
+		{"/collection", "<name>", "show articles in a collection"},
+		{"/search", "<query>", "search collections by name/slug  (Collections sub-tab)"},
+		{"/clear", "", "clear active filter"},
+		{"arc collections create", "<slug>", "create a new collection  (CLI only)"},
+		{"arc collections add", "<article> <slug>", "add article to collection  (CLI only)"},
+		{"arc collections remove", "<article> <slug>", "remove article from collection  (CLI only)"},
+		{"arc collections rename", "<old> <new>", "rename a collection  (CLI only)"},
+		{"arc collections delete", "<slug>", "delete a collection  (CLI only)"},
+		{"arc collections describe", "<slug> <desc>", "set collection description  (CLI only)"},
+		{"arc collections suggest", "[--apply]", "AI-suggest collections for article  (CLI only)"},
+		{"arc collections read", "<slug>", "read flash/summary across collection  (CLI only)"},
+	}},
+	{"system", []cmdCompletion{
+		{"/tags", "", "list all tags"},
 		{"/stats", "", "show library stats"},
 		{"/log", "", "open/close debug log tail in a new terminal window"},
+	}},
+	{"workspace", []cmdCompletion{
+		{"arc workspace new", "<slug> <title>", "create a new workspace  (CLI only)"},
+		{"arc workspace list", "", "list workspaces  (CLI only)"},
+		{"arc workspace show", "<slug>", "show workspace details  (CLI only)"},
+		{"arc workspace add", "<slug>", "add articles/collections/resources  (CLI only)"},
+		{"arc workspace remove", "<slug>", "remove articles/collections/resources  (CLI only)"},
+		{"arc workspace chat", "<slug>", "start interactive chat session  (CLI only)"},
+		{"arc workspace rename", "<old> <new>", "rename a workspace  (CLI only)"},
+		{"arc workspace delete", "<slug>", "delete a workspace  (CLI only)"},
+		{"arc workspace describe", "<slug> <desc>", "set workspace description  (CLI only)"},
+		{"arc workspace archive", "<slug>", "archive a workspace  (CLI only)"},
+		{"arc workspace outcomes", "<slug>", "list or read outcomes  (CLI only)"},
+		{"arc workspace system", "<slug>", "get/set system prompt  (CLI only)"},
 	}},
 }
 
 // helpLines returns context-sensitive help for the active tab.
-// group="" shows all groups; group="filter"|"article"|"library" shows that group only.
-func (m *Model) helpLines(group string) []string {
+// arg="" shows all groups; "article" shows article commands;
+// "article /read" shows just the /read entry.
+func (m *Model) helpLines(arg string) []string {
 	if m.activeTab != tabLibrary {
 		return []string{"no commands available for this tab"}
 	}
@@ -1623,7 +1676,12 @@ func (m *Model) helpLines(group string) []string {
 	}) []string {
 		lines := []string{g.name + ":"}
 		for _, c := range g.commands {
-			synopsis := c.cmd
+			displayCmd := c.cmd
+			// For CLI-only entries like "arc collections create", show just the subcommand.
+			if parts := strings.Fields(displayCmd); len(parts) == 3 && parts[0] == "arc" {
+				displayCmd = parts[2]
+			}
+			synopsis := displayCmd
 			if c.arg != "" {
 				synopsis += " " + c.arg
 			}
@@ -1632,7 +1690,10 @@ func (m *Model) helpLines(group string) []string {
 		return lines
 	}
 
-	if group == "" {
+	arg = strings.TrimSpace(strings.ToLower(arg))
+
+	// No arg — show all groups.
+	if arg == "" {
 		var lines []string
 		for i, g := range helpGroups {
 			if i > 0 {
@@ -1643,12 +1704,46 @@ func (m *Model) helpLines(group string) []string {
 		return lines
 	}
 
+	// Two-level: "article /read" — show just that command entry.
+	parts := strings.SplitN(arg, " ", 2)
+	groupName := parts[0]
+	cmdFilter := ""
+	if len(parts) == 2 {
+		cmdFilter = strings.TrimSpace(parts[1])
+	}
+
 	for _, g := range helpGroups {
-		if g.name == group {
-			return renderGroup(g)
+		if g.name == groupName {
+			if cmdFilter == "" {
+				return renderGroup(g)
+			}
+			// Filter to matching command(s).
+			var lines []string
+			for _, c := range g.commands {
+				displayCmd := c.cmd
+				if parts := strings.Fields(displayCmd); len(parts) == 3 && parts[0] == "arc" {
+					displayCmd = parts[2]
+				}
+				if strings.HasPrefix(displayCmd, cmdFilter) {
+					synopsis := displayCmd
+					if c.arg != "" {
+						synopsis += " " + c.arg
+					}
+					lines = append(lines, fmt.Sprintf("  %-24s  %s", synopsis, c.desc))
+				}
+			}
+			if len(lines) == 0 {
+				return []string{fmt.Sprintf("no commands matching %q in %q", cmdFilter, groupName)}
+			}
+			return lines
 		}
 	}
-	return []string{fmt.Sprintf("unknown group %q — available: filter, article, library", group)}
+
+	groupNames := make([]string, len(helpGroups))
+	for i, g := range helpGroups {
+		groupNames[i] = g.name
+	}
+	return []string{fmt.Sprintf("unknown group %q — available: %s", groupName, strings.Join(groupNames, ", "))}
 }
 
 // removeNavItem removes the item with the given id from a slice.

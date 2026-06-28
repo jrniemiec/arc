@@ -217,8 +217,8 @@ type Model struct {
 	cmdCompleteIdx int             // -1 = none highlighted; ≥0 = index
 
 	// Param completions (second level: /cmd <partial arg>)
-	paramItems []string // candidate values
-	paramIdx   int      // -1 = none highlighted; ≥0 = index
+	paramItems []cmdCompletion // candidate values (cmd=value to insert, desc=display hint)
+	paramIdx   int             // -1 = none highlighted; ≥0 = index
 
 	// Nav filter
 	navItemsAll []navItem // unfiltered copy; set on first load

@@ -1002,10 +1002,17 @@ func (m Model) renderCompletionLines() []string {
 	if len(m.paramItems) > 0 {
 		lines := make([]string, len(m.paramItems))
 		for i, p := range m.paramItems {
-			if i == m.paramIdx {
-				lines[i] = fgBold(t.Accent, " "+truncate(p, m.width-1))
+			var display string
+			if p.desc != "" {
+				display = fmt.Sprintf("%-18s  %s", p.cmd, p.desc)
 			} else {
-				lines[i] = fg(t.NavText, " "+truncate(p, m.width-1))
+				display = p.cmd
+			}
+			display = truncate(display, m.width-2)
+			if i == m.paramIdx {
+				lines[i] = fgBold(t.Accent, " "+display)
+			} else {
+				lines[i] = fg(t.NavText, " "+display) + fg(t.ContentDimmed, "")
 			}
 		}
 		return lines
