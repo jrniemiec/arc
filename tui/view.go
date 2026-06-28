@@ -522,7 +522,9 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 		if numbered {
 			prefix = fmt.Sprintf("%*d. ", numWidth-2, i+1) // right-align number
 		} else {
-			if item.read {
+			if item.favorite {
+				prefix = "★ "
+			} else if item.read {
 				prefix = "  "
 			} else {
 				prefix = "• "
@@ -534,10 +536,18 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 			line = reverse(prefix + title)
 		} else {
 			if numbered {
-				line = fg(t.NavDimmed, prefix) + fg(t.NavText, title)
+				if item.favorite {
+					line = fg(t.Favorite, "★") + " " + fg(t.NavText, title)
+				} else {
+					line = fg(t.NavDimmed, prefix) + fg(t.NavText, title)
+				}
 			} else {
-				dotChar := prefix[:len(prefix)-1] // strip trailing space for coloring
-				line = fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
+				if item.favorite {
+					line = fg(t.Favorite, "★") + " " + fg(t.NavText, title)
+				} else {
+					dotChar := prefix[:len(prefix)-1] // strip trailing space for coloring
+					line = fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
+				}
 			}
 		}
 		lines = append(lines, line)
@@ -569,6 +579,20 @@ func (m Model) renderContentPane(height, width int) []string {
 // title + meta1 + meta2 + meta3 + sep + tabs + sep = 7
 const contentHeaderLines = 7
 
+// selectedCollection returns the navRow when the cursor is on a collection header, or nil.
+func (m Model) selectedCollection() *navRow {
+	if m.navSubTab != navSubTabCollections {
+		return nil
+	}
+	if m.navRowCursor >= 0 && m.navRowCursor < len(m.navRows) {
+		r := &m.navRows[m.navRowCursor]
+		if r.kind == rowCollection {
+			return r
+		}
+	}
+	return nil
+}
+
 // selectedNavItem returns the navItem currently under the cursor, or nil.
 func (m Model) selectedNavItem() *navItem {
 	switch m.navSubTab {
@@ -590,6 +614,10 @@ func (m Model) selectedNavItem() *navItem {
 func (m Model) renderContentLibrary(height, width int) []string {
 	t := ActiveTheme
 	var lines []string
+
+	if col := m.selectedCollection(); col != nil {
+		return m.renderContentCollection(height, width, col)
+	}
 
 	item := m.selectedNavItem()
 	if item == nil {
@@ -613,10 +641,13 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	// ── Header ────────────────────────────────────────────────────────────────
 	lines = append(lines, fgBold(titleColor, truncate(oneLine(item.title), width-1)))
 
-	// meta line 1: date · source type · read status
+	// meta line 1: date · source type · read status · favorite
 	readMark := fg(t.ContentDimmed, "unread")
 	if item.read {
 		readMark = fg(t.NavMark, "✓ read")
+	}
+	if item.favorite {
+		readMark += fg(t.ContentDimmed, "  ·  ") + fg(t.Favorite, "★ favorite")
 	}
 	meta1 := fg(t.ContentDimmed, item.date.Format("2006-01-02"))
 	if item.sourceType != "" {
@@ -667,22 +698,30 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	} else if len(m.contentLines) == 0 {
 		lines = append(lines, fg(t.ContentDimmed, "(not available — use  arc reprocess  to generate)"))
 	} else {
-		start := m.contentScroll
-		end := start + viewH
-		if end > len(m.contentLines) {
-			end = len(m.contentLines)
+		// Render from contentScroll (logical lines), wrapping each line to width.
+		// Stop when viewH visual rows are consumed.
+		visual := 0
+		for i := m.contentScroll; i < len(m.contentLines) && visual < viewH; i++ {
+			wrapped := wordWrap(m.contentLines[i], width-1)
+			if len(wrapped) == 0 {
+				wrapped = []string{""}
+			}
+			for _, wl := range wrapped {
+				if visual >= viewH {
+					break
+				}
+				lines = append(lines, fg(t.ContentText, wl))
+				visual++
+			}
 		}
-		for _, l := range m.contentLines[start:end] {
-			lines = append(lines, fg(t.ContentText, truncate(l, width-1)))
-		}
-		// Scroll indicator on last visible line if content overflows
-		if len(m.contentLines) > viewH {
+		// Scroll indicator when content extends beyond current view.
+		if m.contentScroll > 0 || m.contentScroll+viewH < len(m.contentLines) {
 			pct := 0
-			maxScroll := len(m.contentLines) - viewH
+			maxScroll := len(m.contentLines) - 1
 			if maxScroll > 0 {
 				pct = m.contentScroll * 100 / maxScroll
 			}
-			indicator := fmt.Sprintf(" %d/%d (%d%%)", m.contentScroll+viewH, len(m.contentLines), pct)
+			indicator := fmt.Sprintf(" line %d/%d (%d%%)", m.contentScroll+1, len(m.contentLines), pct)
 			lines = append(lines, fg(t.ContentDimmed, indicator))
 		}
 	}
@@ -711,6 +750,65 @@ func (m Model) renderContentTabs(width int) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// renderContentCollection renders collection metadata in the content pane.
+func (m Model) renderContentCollection(height, width int, col *navRow) []string {
+	t := ActiveTheme
+	var lines []string
+
+	titleColor := t.ContentText
+	if m.focus == paneContent {
+		titleColor = t.ContentTitle
+	}
+
+	lines = append(lines, fgBold(titleColor, truncate(col.colSlug, width-1)))
+
+	// meta line 1: article count · created at
+	meta1 := fg(t.ContentDimmed, fmt.Sprintf("%d articles", col.colCount))
+	if !col.colCreatedAt.IsZero() {
+		meta1 += fg(t.ContentDimmed, "  ·  created "+col.colCreatedAt.Format("2006-01-02"))
+	}
+	lines = append(lines, meta1)
+
+	// meta line 2: name (if different from slug)
+	if col.colName != "" && col.colName != col.colSlug {
+		lines = append(lines, fg(t.ContentDimmed, "name: "+truncate(col.colName, width-6)))
+	} else {
+		lines = append(lines, "")
+	}
+
+	// meta line 3: flags
+	var flags []string
+	if col.colHasSummary {
+		flags = append(flags, "meta-summary")
+	}
+	if col.colHasSystem {
+		flags = append(flags, "system prompt")
+	}
+	if len(flags) > 0 {
+		lines = append(lines, fg(t.ContentDimmed, strings.Join(flags, "  ·  ")))
+	} else {
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
+	lines = append(lines, "")
+	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
+
+	// Description body
+	if col.colDesc != "" {
+		for _, l := range wordWrap(col.colDesc, width-1) {
+			lines = append(lines, fg(t.ContentText, l))
+		}
+	} else {
+		lines = append(lines, fg(t.ContentDimmed, "(no description)"))
+	}
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
 }
 
 func (m Model) renderContentStats(height, width int) []string {

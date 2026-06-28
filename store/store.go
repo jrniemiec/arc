@@ -15,6 +15,7 @@ type Article struct {
 	IngestedAt     time.Time
 	ReadAt         *time.Time
 	PlayedAt       *time.Time
+	FavoritedAt    *time.Time
 	Collections    []string // collection IDs
 	Tags           []Tag
 	SummaryModel   string

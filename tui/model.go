@@ -113,11 +113,14 @@ type navRow struct {
 	indented bool // true when inside an expanded collection
 
 	// rowCollection fields
-	colSlug  string
-	colName  string
-	colDesc  string
-	colCount int
-	expanded bool
+	colSlug       string
+	colName       string
+	colDesc       string
+	colCount      int
+	colCreatedAt  time.Time
+	colHasSummary bool
+	colHasSystem  bool
+	expanded      bool
 }
 
 // navItem is one entry in the left navigator.
@@ -126,6 +129,7 @@ type navItem struct {
 	title      string
 	date       time.Time
 	read       bool
+	favorite   bool
 	root       string // article directory (Files.Root)
 	url        string // source URL
 	tags       []string
@@ -176,9 +180,10 @@ type Model struct {
 	navErr    string
 
 	// Library nav — Collections sub-tab
-	navRows          []navRow
-	navRowCursor     int
-	navRowScroll     int
+	navRows           []navRow
+	navRowsAll        []navRow // unfiltered copy; set on first load
+	navRowCursor      int
+	navRowScroll      int
 	collectionsLoaded bool
 	collectionsErr    string
 
@@ -336,6 +341,7 @@ func loadNav(svc *service.Service) tea.Cmd {
 				title:      a.Title,
 				date:       a.IngestedAt,
 				read:       a.ReadAt != nil,
+				favorite:   a.FavoritedAt != nil,
 				root:       a.Files.Root,
 				url:        a.URL,
 				tags:       tags,

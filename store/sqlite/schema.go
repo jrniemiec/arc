@@ -78,4 +78,6 @@ ALTER TABLE articles ADD COLUMN agent_run_id   TEXT;
 ALTER TABLE articles ADD COLUMN agent_verdict  TEXT;
 ALTER TABLE articles ADD COLUMN agent_reason   TEXT;
 CREATE INDEX IF NOT EXISTS idx_articles_agent_run ON articles(agent_run_id);
+ALTER TABLE articles ADD COLUMN favorited_at   TEXT;
+CREATE INDEX IF NOT EXISTS idx_articles_favorited ON articles(favorited_at);
 `

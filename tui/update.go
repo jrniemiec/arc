@@ -72,14 +72,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			rows := make([]navRow, 0, len(msg.collections))
 			for _, c := range msg.collections {
 				rows = append(rows, navRow{
-					kind:     rowCollection,
-					colSlug:  c.Slug,
-					colName:  c.Name,
-					colDesc:  c.Description,
-					colCount: c.ArticleCount,
+					kind:          rowCollection,
+					colSlug:       c.Slug,
+					colName:       c.Name,
+					colDesc:       c.Description,
+					colCount:      c.ArticleCount,
+					colCreatedAt:  c.CreatedAt,
+					colHasSummary: c.HasSummary,
+					colHasSystem:  c.HasSystem,
 				})
 			}
 			m.navRows = rows
+			m.navRowsAll = rows
 			m.navRowCursor = 0
 			m.navRowScroll = 0
 		}
@@ -273,6 +277,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		return m.cmdMarkRead()
 	case key.Matches(msg, keys.MarkUnread):
 		return m.cmdMarkUnread()
+	case key.Matches(msg, keys.ToggleFav):
+		return m.cmdToggleFavorite()
 	case key.Matches(msg, keys.Delete):
 		return m.cmdDeleteArticle()
 	case key.Matches(msg, keys.Open):
@@ -579,6 +585,8 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		return m.cycleContentTab(-1)
 	case key.Matches(msg, keys.Open):
 		return m.openCurrentURL()
+	case key.Matches(msg, keys.ToggleFav):
+		return m.cmdToggleFavorite()
 	}
 	return nil
 }
@@ -1017,6 +1025,10 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			m.statusMsg = "usage: /search <query> [--limit N]"
 			return nil
 		}
+		if m.navSubTab == navSubTabCollections {
+			m.filterCollections(arg)
+			return nil
+		}
 		query, limit := parseSearchArg(arg)
 		if m.svc == nil {
 			m.applyNavFilter("search", query)
@@ -1041,6 +1053,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.filterByCollection(arg)
 
 	case "/clear":
+		if m.navSubTab == navSubTabCollections {
+			m.navRows = m.navRowsAll
+			m.navRowCursor = 0
+			m.navRowScroll = 0
+			m.navFilter = ""
+			m.focus = paneNav
+			m.statusMsg = "✓ filter cleared"
+			return nil
+		}
 		m.navItems = m.navItemsAll
 		m.navFilter = ""
 		m.navCursor = 0
@@ -1054,6 +1075,13 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	case "/collections":
 		return m.cmdCollections()
+
+	case "/favorites":
+		m.applyNavFilter("favorite", "")
+		return nil
+
+	case "/favorite":
+		return m.cmdToggleFavorite()
 
 	case "/open":
 		return m.openCurrentURL()
@@ -1093,6 +1121,34 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	}
 }
 
+// filterCollections filters navRowsAll to collections matching query (slug/name/description).
+func (m *Model) filterCollections(query string) {
+	q := strings.ToLower(query)
+	var filtered []navRow
+	for _, row := range m.navRowsAll {
+		if row.kind != rowCollection {
+			continue
+		}
+		if strings.Contains(strings.ToLower(row.colSlug), q) ||
+			strings.Contains(strings.ToLower(row.colName), q) ||
+			strings.Contains(strings.ToLower(row.colDesc), q) {
+			filtered = append(filtered, row)
+		}
+	}
+	m.navRows = filtered
+	m.navRowCursor = 0
+	m.navRowScroll = 0
+	m.focus = paneNav
+	n := len(filtered)
+	if n == 0 {
+		m.statusMsg = fmt.Sprintf("no collections matching %q", query)
+		m.navFilter = ""
+	} else {
+		m.navFilter = fmt.Sprintf("collections: %q · %d results  ·  /clear to reset", query, n)
+		m.statusMsg = ""
+	}
+}
+
 // applyNavFilter filters navItems from navItemsAll by mode ("search" or "tag") and query.
 func (m *Model) applyNavFilter(mode, query string) {
 	q := strings.ToLower(query)
@@ -1111,6 +1167,10 @@ func (m *Model) applyNavFilter(mode, query string) {
 					break
 				}
 			}
+		case "favorite":
+			if item.favorite {
+				filtered = append(filtered, item)
+			}
 		}
 	}
 	m.navItems = filtered
@@ -1118,10 +1178,18 @@ func (m *Model) applyNavFilter(mode, query string) {
 	m.navScroll = 0
 	n := len(filtered)
 	if n == 0 {
-		m.statusMsg = fmt.Sprintf("no results for %q", query)
+		if mode == "favorite" {
+			m.statusMsg = "no favorites yet — press f to mark an article"
+		} else {
+			m.statusMsg = fmt.Sprintf("no results for %q", query)
+		}
 		m.navFilter = ""
 	} else {
-		m.navFilter = mode + ": " + query + " · " + fmt.Sprintf("%d", n) + " results  ·  /clear to reset"
+		if mode == "favorite" {
+			m.navFilter = fmt.Sprintf("★ favorites · %d articles  ·  /clear to reset", n)
+		} else {
+			m.navFilter = mode + ": " + query + " · " + fmt.Sprintf("%d", n) + " results  ·  /clear to reset"
+		}
 		m.statusMsg = ""
 	}
 }
@@ -1174,6 +1242,42 @@ func (m *Model) cmdMarkUnread() tea.Cmd {
 	svc := m.svc
 	return func() tea.Msg {
 		_ = svc.MarkUnread(context.Background(), id)
+		return nil
+	}
+}
+
+// cmdToggleFavorite toggles the favorite flag on the current article.
+func (m *Model) cmdToggleFavorite() tea.Cmd {
+	item := m.selectedNavItem()
+	if item == nil {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	id := item.id
+	nowFav := !item.favorite
+	// Update in-memory lists.
+	item.favorite = nowFav
+	for i, ni := range m.navItemsAll {
+		if ni.id == id {
+			m.navItemsAll[i].favorite = nowFav
+			break
+		}
+	}
+	if nowFav {
+		m.statusMsg = "★ marked as favorite"
+	} else {
+		m.statusMsg = "✓ removed from favorites"
+	}
+	if m.svc == nil {
+		return nil
+	}
+	svc := m.svc
+	return func() tea.Msg {
+		if nowFav {
+			_ = svc.MarkFavorite(context.Background(), id)
+		} else {
+			_ = svc.UnmarkFavorite(context.Background(), id)
+		}
 		return nil
 	}
 }
@@ -1348,6 +1452,7 @@ func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
 				title:      a.Title,
 				date:       a.IngestedAt,
 				read:       a.ReadAt != nil,
+				favorite:   a.FavoritedAt != nil,
 				root:       a.Files.Root,
 				url:        a.URL,
 				tags:       tags,
@@ -1488,11 +1593,13 @@ var helpGroups = []struct {
 		{"/clear", "", "clear active filter"},
 		{"/tags", "", "list all tags"},
 		{"/collections", "", "list all collections"},
+		{"/favorites", "", "show only favorited articles"},
 	}},
 	{"article", []cmdCompletion{
 		{"/open", "", "open source URL in Chrome"},
 		{"/read", "", "mark current article as read"},
 		{"/unread", "", "mark current article as unread"},
+		{"/favorite", "", "toggle favorite on current article"},
 		{"/delete", "", "delete current article"},
 		{"/reprocess", "", "regenerate summary/flash for current article"},
 	}},
@@ -1655,8 +1762,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				}
 				return nil
 			}
-			// Click on nav sub-tab bar (row topBarHeight+1, nav column only).
-			subTabRow := topBarHeight + 1
+			// Click on nav sub-tab bar (first row of main area = topBarHeight).
+			subTabRow := topBarHeight
 			if msg.Y == subTabRow && msg.X < m.dividerCol() && m.activeTab == tabLibrary {
 				if sub := navSubTabHitTest(msg.X); sub >= 0 {
 					m.focus = paneNav

@@ -23,9 +23,10 @@ type keyMap struct {
 	Command    key.Binding // / — activate command input
 	Help       key.Binding // ? — help overlay
 	Open       key.Binding // o — open source URL in browser
-	MarkRead   key.Binding // r — mark article as read
-	MarkUnread key.Binding // u — mark article as unread
-	Delete     key.Binding // D — delete article
+	MarkRead     key.Binding // r — mark article as read
+	MarkUnread   key.Binding // u — mark article as unread
+	ToggleFav    key.Binding // f — toggle favorite
+	Delete       key.Binding // D — delete article
 	Quit       key.Binding // q / Ctrl+C
 }
 
@@ -101,6 +102,10 @@ var keys = keyMap{
 	MarkUnread: key.NewBinding(
 		key.WithKeys("u"),
 		key.WithHelp("u", "mark unread"),
+	),
+	ToggleFav: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "toggle favorite"),
 	),
 	Delete: key.NewBinding(
 		key.WithKeys("D"),

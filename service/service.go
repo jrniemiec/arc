@@ -691,6 +691,16 @@ func (s *Service) MarkUnread(ctx context.Context, id string) error {
 	return s.lib.MarkUnread(ctx, id)
 }
 
+// MarkFavorite marks an article as a favorite.
+func (s *Service) MarkFavorite(ctx context.Context, id string) error {
+	return s.lib.MarkFavorite(ctx, id, time.Now())
+}
+
+// UnmarkFavorite removes the favorite mark from an article.
+func (s *Service) UnmarkFavorite(ctx context.Context, id string) error {
+	return s.lib.UnmarkFavorite(ctx, id)
+}
+
 // MarkPlayed records that an article was played via TTS.
 func (s *Service) MarkPlayed(ctx context.Context, id string) error {
 	return s.lib.MarkPlayed(ctx, id, time.Now())

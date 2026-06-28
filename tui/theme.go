@@ -47,6 +47,9 @@ type Theme struct {
 
 	// Dimmed (general purpose)
 	Dimmed lipgloss.Color
+
+	// Favorite star
+	Favorite lipgloss.Color
 }
 
 // Nord is a cool-blues dark theme based on the Nord palette.
@@ -75,6 +78,7 @@ var Nord = Theme{
 	Accent:     "#88C0D0", // nord8
 	BoxBorder:  "#88C0D0", // nord8
 	Dimmed:     "#4C566A", // nord3
+	Favorite:   "#F5A623", // amber
 }
 
 // ClaudeCode approximates the color palette used by Claude Code's TUI.
@@ -103,6 +107,7 @@ var ClaudeCode = Theme{
 	Accent:     "#6598FF",
 	BoxBorder:  "#6598FF",
 	Dimmed:     "#505050",
+	Favorite:   "#F5A623", // amber
 }
 
 // Light is for terminals with a light background.
@@ -131,6 +136,7 @@ var Light = Theme{
 	Accent:     "#1A7AB0",
 	BoxBorder:  "#1A7AB0",
 	Dimmed:     "#9A9A9A",
+	Favorite:   "#B8860B", // dark goldenrod for light bg
 }
 
 // ActiveTheme is the theme used by all view functions.

@@ -88,13 +88,13 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 	err := sqlitex.Execute(conn, `
 		INSERT INTO articles (
 			id, title, url, source_type, feed, author, published_at, language,
-			ingested_at, read_at, played_at,
+			ingested_at, read_at, played_at, favorited_at,
 			summary_model, summary_style, flash_model, flashcard_model, flashcard_style,
 			embed_model, quality_score, root_path,
 			agent_run_id, agent_verdict, agent_reason
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?,
+			?, ?, ?, ?,
 			?, ?, ?, ?, ?,
 			?, ?, ?,
 			?, ?, ?
@@ -123,7 +123,7 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 		Args: []any{
 			a.ID, a.Title, a.URL, a.SourceType, a.Feed, a.Author, a.PublishedAt, a.Language,
 			a.IngestedAt.UTC().Format(time.RFC3339),
-			timePtr(a.ReadAt), timePtr(a.PlayedAt),
+			timePtr(a.ReadAt), timePtr(a.PlayedAt), timePtr(a.FavoritedAt),
 			a.SummaryModel, a.SummaryStyle, a.FlashModel, a.FlashcardModel, a.FlashcardStyle,
 			a.EmbedModel, a.QualityScore, a.Files.Root,
 			nullStr(a.AgentRunID), nullStr(a.AgentVerdict), nullStr(a.AgentReason),
@@ -438,6 +438,28 @@ func (s *Store) MarkUnread(ctx context.Context, id string) error {
 		&sqlitex.ExecOptions{Args: []any{id}})
 }
 
+// MarkFavorite sets favorited_at for an article.
+func (s *Store) MarkFavorite(ctx context.Context, id string, t time.Time) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	return sqlitex.Execute(conn, `UPDATE articles SET favorited_at = ? WHERE id = ?`,
+		&sqlitex.ExecOptions{Args: []any{t.UTC().Format(time.RFC3339), id}})
+}
+
+// UnmarkFavorite clears favorited_at for an article.
+func (s *Store) UnmarkFavorite(ctx context.Context, id string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+	return sqlitex.Execute(conn, `UPDATE articles SET favorited_at = NULL WHERE id = ?`,
+		&sqlitex.ExecOptions{Args: []any{id}})
+}
+
 // MarkPlayed sets played_at for an article.
 func (s *Store) MarkPlayed(ctx context.Context, id string, t time.Time) error {
 	conn, err := s.pool.Take(ctx)
@@ -452,20 +474,20 @@ func (s *Store) MarkPlayed(ctx context.Context, id string, t time.Time) error {
 // --- helpers ---
 
 const articleColumns = `id, title, url, source_type, feed, author, published_at, language,
-	ingested_at, read_at, played_at,
+	ingested_at, read_at, played_at, favorited_at,
 	summary_model, summary_style, flash_model, flashcard_model, flashcard_style,
 	embed_model, quality_score, root_path,
 	agent_run_id, agent_verdict, agent_reason`
 
 // articleColumnsQualified is used in JOINs to avoid ambiguous column names.
 const articleColumnsQualified = `a.id, a.title, a.url, a.source_type, a.feed, a.author, a.published_at, a.language,
-	a.ingested_at, a.read_at, a.played_at,
+	a.ingested_at, a.read_at, a.played_at, a.favorited_at,
 	a.summary_model, a.summary_style, a.flash_model, a.flashcard_model, a.flashcard_style,
 	a.embed_model, a.quality_score, a.root_path,
 	a.agent_run_id, a.agent_verdict, a.agent_reason`
 
 // columnCount is the number of columns in articleColumns (for offset calculations in Search).
-const columnCount = 22
+const columnCount = 23
 
 func scanArticle(stmt *sqlite.Stmt) store.Article {
 	a := store.Article{}
@@ -490,18 +512,22 @@ func scanArticle(stmt *sqlite.Stmt) store.Article {
 		t, _ := time.Parse(time.RFC3339, s)
 		a.PlayedAt = &t
 	}
+	if s := stmt.ColumnText(11); s != "" {
+		t, _ := time.Parse(time.RFC3339, s)
+		a.FavoritedAt = &t
+	}
 
-	a.SummaryModel = stmt.ColumnText(11)
-	a.SummaryStyle = stmt.ColumnText(12)
-	a.FlashModel = stmt.ColumnText(13)
-	a.FlashcardModel = stmt.ColumnText(14)
-	a.FlashcardStyle = stmt.ColumnText(15)
-	a.EmbedModel = stmt.ColumnText(16)
-	a.QualityScore = stmt.ColumnFloat(17)
-	a.Files.Root = stmt.ColumnText(18)
-	a.AgentRunID = stmt.ColumnText(19)
-	a.AgentVerdict = stmt.ColumnText(20)
-	a.AgentReason = stmt.ColumnText(21)
+	a.SummaryModel = stmt.ColumnText(12)
+	a.SummaryStyle = stmt.ColumnText(13)
+	a.FlashModel = stmt.ColumnText(14)
+	a.FlashcardModel = stmt.ColumnText(15)
+	a.FlashcardStyle = stmt.ColumnText(16)
+	a.EmbedModel = stmt.ColumnText(17)
+	a.QualityScore = stmt.ColumnFloat(18)
+	a.Files.Root = stmt.ColumnText(19)
+	a.AgentRunID = stmt.ColumnText(20)
+	a.AgentVerdict = stmt.ColumnText(21)
+	a.AgentReason = stmt.ColumnText(22)
 
 	return a
 }
