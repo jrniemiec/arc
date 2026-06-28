@@ -575,9 +575,15 @@ func (m Model) renderContentPane(height, width int) []string {
 	}
 }
 
-// contentHeaderLines is the number of fixed lines above the scrollable content:
-// title + meta1 + meta2 + meta3 + sep + tabs + sep = 7
-const contentHeaderLines = 7
+// contentHeaderLines returns the number of lines above the scrollable content:
+// title + meta1 + meta2 + [collections] + meta3 + sep + tabs + sep
+func contentHeaderLines(item *navItem) int {
+	n := 7 // base: title + meta1 + meta2 + meta3 + sep + tabs + sep
+	if item != nil && len(item.collections) > 0 {
+		n++ // collections line
+	}
+	return n
+}
 
 // selectedCollection returns the navRow when the cursor is on a collection header, or nil.
 func (m Model) selectedCollection() *navRow {
@@ -658,10 +664,14 @@ func (m Model) renderContentLibrary(height, width int) []string {
 
 	// meta line 2: tags
 	if len(item.tags) > 0 {
-		tagStr := strings.Join(item.tags, ", ")
-		lines = append(lines, fg(t.ContentDimmed, "tags: "+truncate(tagStr, width-7)))
+		lines = append(lines, fg(t.ContentDimmed, truncate("tags: "+strings.Join(item.tags, ", "), width-1)))
 	} else {
 		lines = append(lines, "")
+	}
+
+	// meta line 2b: collections (own line, may be long)
+	if len(item.collections) > 0 {
+		lines = append(lines, fg(t.ContentDimmed, truncate("collections: "+strings.Join(item.collections, ", "), width-1)))
 	}
 
 	// meta line 3: available variants
@@ -688,7 +698,7 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
 
 	// ── Scrollable content ────────────────────────────────────────────────────
-	viewH := height - contentHeaderLines
+	viewH := height - contentHeaderLines(item)
 	if viewH < 1 {
 		viewH = 1
 	}

@@ -288,6 +288,10 @@ func (s *Store) Search(ctx context.Context, q store.Query) ([]store.Result, erro
 	if err != nil {
 		return nil, fmt.Errorf("fts search: %w", err)
 	}
+	for i := range results {
+		_ = s.loadTags(conn, &results[i].Article)
+		_ = s.loadCollections(conn, &results[i].Article)
+	}
 	return results, nil
 }
 

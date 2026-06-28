@@ -1477,17 +1477,18 @@ func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
 				summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
 			}
 			items[i] = navItem{
-				id:         a.ID,
-				title:      a.Title,
-				date:       a.IngestedAt,
-				read:       a.ReadAt != nil,
-				favorite:   a.FavoritedAt != nil,
-				root:       a.Files.Root,
-				url:        a.URL,
-				tags:       tags,
-				sourceType: a.SourceType,
-				summary:    summaryLabel,
-				flashModel: a.FlashModel,
+				id:          a.ID,
+				title:       a.Title,
+				date:        a.IngestedAt,
+				read:        a.ReadAt != nil,
+				favorite:    a.FavoritedAt != nil,
+				root:        a.Files.Root,
+				url:         a.URL,
+				tags:        tags,
+				collections: a.Collections,
+				sourceType:  a.SourceType,
+				summary:     summaryLabel,
+				flashModel:  a.FlashModel,
 			}
 		}
 		return cmdDoneMsg{
@@ -1981,7 +1982,7 @@ func (m *Model) navPaneHeight() int {
 // Layout: header (4 lines) + sep + tab strip + sep = 7 fixed lines in content pane.
 func (m *Model) contentViewHeight() int {
 	mainH := m.height - 6 - m.completionCount()
-	h := mainH - contentHeaderLines
+	h := mainH - contentHeaderLines(m.selectedNavItem())
 	if h < 1 {
 		h = 1
 	}

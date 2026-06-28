@@ -132,8 +132,9 @@ type navItem struct {
 	favorite   bool
 	root       string // article directory (Files.Root)
 	url        string // source URL
-	tags       []string
-	sourceType string
+	tags        []string
+	collections []string
+	sourceType  string
 	summary    string // model/style label e.g. "bullets/sonnet"
 	flashModel string // model label e.g. "haiku"
 }
@@ -337,17 +338,18 @@ func loadNav(svc *service.Service) tea.Cmd {
 				summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
 			}
 			items[i] = navItem{
-				id:         a.ID,
-				title:      a.Title,
-				date:       a.IngestedAt,
-				read:       a.ReadAt != nil,
-				favorite:   a.FavoritedAt != nil,
-				root:       a.Files.Root,
-				url:        a.URL,
-				tags:       tags,
-				sourceType: a.SourceType,
-				summary:    summaryLabel,
-				flashModel: a.FlashModel,
+				id:          a.ID,
+				title:       a.Title,
+				date:        a.IngestedAt,
+				read:        a.ReadAt != nil,
+				favorite:    a.FavoritedAt != nil,
+				root:        a.Files.Root,
+				url:         a.URL,
+				tags:        tags,
+				collections: a.Collections,
+				sourceType:  a.SourceType,
+				summary:     summaryLabel,
+				flashModel:  a.FlashModel,
 			}
 		}
 		return navLoadedMsg{items: items}
