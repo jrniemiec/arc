@@ -125,18 +125,23 @@ type navRow struct {
 
 // navItem is one entry in the left navigator.
 type navItem struct {
-	id         string
-	title      string
-	date       time.Time
-	read       bool
-	favorite   bool
-	root       string // article directory (Files.Root)
-	url        string // source URL
-	tags        []string
-	collections []string
-	sourceType  string
-	summary    string // model/style label e.g. "bullets/sonnet"
-	flashModel string // model label e.g. "haiku"
+	id           string
+	title        string
+	date         time.Time
+	read         bool
+	favorite     bool
+	root         string // article directory (Files.Root)
+	url          string // source URL
+	tags         []string
+	collections  []string
+	sourceType   string
+	author       string
+	publishedAt  string
+	feed         string
+	agentReason  string
+	qualityScore float64
+	summary      string // model/style label e.g. "bullets/sonnet"
+	flashModel   string // model label e.g. "haiku"
 }
 
 // Model is the root bubbletea model for the arc TUI.
@@ -338,18 +343,23 @@ func loadNav(svc *service.Service) tea.Cmd {
 				summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
 			}
 			items[i] = navItem{
-				id:          a.ID,
-				title:       a.Title,
-				date:        a.IngestedAt,
-				read:        a.ReadAt != nil,
-				favorite:    a.FavoritedAt != nil,
-				root:        a.Files.Root,
-				url:         a.URL,
-				tags:        tags,
-				collections: a.Collections,
-				sourceType:  a.SourceType,
-				summary:     summaryLabel,
-				flashModel:  a.FlashModel,
+				id:           a.ID,
+				title:        a.Title,
+				date:         a.IngestedAt,
+				read:         a.ReadAt != nil,
+				favorite:     a.FavoritedAt != nil,
+				root:         a.Files.Root,
+				url:          a.URL,
+				tags:         tags,
+				collections:  a.Collections,
+				sourceType:   a.SourceType,
+				author:       a.Author,
+				publishedAt:  a.PublishedAt,
+				feed:         a.Feed,
+				agentReason:  a.AgentReason,
+				qualityScore: a.QualityScore,
+				summary:      summaryLabel,
+				flashModel:   a.FlashModel,
 			}
 		}
 		return navLoadedMsg{items: items}

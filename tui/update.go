@@ -1477,18 +1477,23 @@ func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
 				summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
 			}
 			items[i] = navItem{
-				id:          a.ID,
-				title:       a.Title,
-				date:        a.IngestedAt,
-				read:        a.ReadAt != nil,
-				favorite:    a.FavoritedAt != nil,
-				root:        a.Files.Root,
-				url:         a.URL,
-				tags:        tags,
-				collections: a.Collections,
-				sourceType:  a.SourceType,
-				summary:     summaryLabel,
-				flashModel:  a.FlashModel,
+				id:           a.ID,
+				title:        a.Title,
+				date:         a.IngestedAt,
+				read:         a.ReadAt != nil,
+				favorite:     a.FavoritedAt != nil,
+				root:         a.Files.Root,
+				url:          a.URL,
+				tags:         tags,
+				collections:  a.Collections,
+				sourceType:   a.SourceType,
+				author:       a.Author,
+				publishedAt:  a.PublishedAt,
+				feed:         a.Feed,
+				agentReason:  a.AgentReason,
+				qualityScore: a.QualityScore,
+				summary:      summaryLabel,
+				flashModel:   a.FlashModel,
 			}
 		}
 		return cmdDoneMsg{

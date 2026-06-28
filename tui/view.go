@@ -575,12 +575,20 @@ func (m Model) renderContentPane(height, width int) []string {
 	}
 }
 
-// contentHeaderLines returns the number of lines above the scrollable content:
-// title + meta1 + meta2 + [collections] + meta3 + sep + tabs + sep
+// contentHeaderLines returns the number of lines above the scrollable content.
+// Base: title + slug + meta1 + meta2 + [collections] + [author/feed] + [agent] + meta3 + sep + tabs + sep = 9
 func contentHeaderLines(item *navItem) int {
-	n := 7 // base: title + meta1 + meta2 + meta3 + sep + tabs + sep
-	if item != nil && len(item.collections) > 0 {
-		n++ // collections line
+	n := 9 // base fixed lines
+	if item != nil {
+		if len(item.collections) > 0 {
+			n++
+		}
+		if item.author != "" || item.publishedAt != "" || item.feed != "" {
+			n++
+		}
+		if item.agentReason != "" || item.qualityScore > 0 {
+			n++
+		}
 	}
 	return n
 }
@@ -645,9 +653,16 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	}
 
 	// ── Header ────────────────────────────────────────────────────────────────
-	lines = append(lines, fgBold(titleColor, truncate(oneLine(item.title), width-1)))
+	// title · slug on same line
+	sep := fg(t.ContentDimmed, "  ·  ")
+	slugStr := fg(t.ContentDimmed, item.id)
+	titleMaxW := width - 1 - lipgloss.Width("  ·  "+item.id)
+	if titleMaxW < 10 {
+		titleMaxW = 10
+	}
+	lines = append(lines, fgBold(titleColor, truncate(oneLine(item.title), titleMaxW))+sep+slugStr)
 
-	// meta line 1: date · source type · read status · favorite
+	// meta line 1: ingest date · source type · url · read status · favorite
 	readMark := fg(t.ContentDimmed, "unread")
 	if item.read {
 		readMark = fg(t.NavMark, "✓ read")
@@ -659,23 +674,55 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	if item.sourceType != "" {
 		meta1 += fg(t.ContentDimmed, "  ·  "+item.sourceType)
 	}
+	if item.url != "" {
+		meta1 += fg(t.ContentDimmed, "  ·  "+truncate(item.url, 60))
+	}
 	meta1 += fg(t.ContentDimmed, "  ·  ") + readMark
 	lines = append(lines, meta1)
 
-	// meta line 2: tags
+	// meta line 2: author · published at · feed
+	var provParts []string
+	if item.author != "" {
+		provParts = append(provParts, item.author)
+	}
+	if item.publishedAt != "" {
+		provParts = append(provParts, "published: "+item.publishedAt)
+	}
+	if item.feed != "" {
+		provParts = append(provParts, "feed: "+item.feed)
+	}
+	if len(provParts) > 0 {
+		lines = append(lines, fg(t.ContentDimmed, truncate(strings.Join(provParts, "  ·  "), width-1)))
+	} else {
+		lines = append(lines, "")
+	}
+
+	// meta line 3: tags
 	if len(item.tags) > 0 {
 		lines = append(lines, fg(t.ContentDimmed, truncate("tags: "+strings.Join(item.tags, ", "), width-1)))
 	} else {
 		lines = append(lines, "")
 	}
 
-	// meta line 2b: collections (own line, may be long)
+	// meta line 3b: collections (own line, may be long)
 	if len(item.collections) > 0 {
 		lines = append(lines, fg(t.ContentDimmed, truncate("collections: "+strings.Join(item.collections, ", "), width-1)))
 	}
 
-	// meta line 3: available variants
-	variantParts := []string{}
+	// meta line 4: agent reason · quality score
+	var agentParts []string
+	if item.agentReason != "" {
+		agentParts = append(agentParts, item.agentReason)
+	}
+	if item.qualityScore > 0 {
+		agentParts = append(agentParts, fmt.Sprintf("quality: %.2f", item.qualityScore))
+	}
+	if len(agentParts) > 0 {
+		lines = append(lines, fg(t.ContentDimmed, truncate(strings.Join(agentParts, "  ·  "), width-1)))
+	}
+
+	// meta line 5: available variants
+	var variantParts []string
 	if item.summary != "" {
 		variantParts = append(variantParts, "summary: "+item.summary)
 	}
