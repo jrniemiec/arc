@@ -289,6 +289,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		m.inputValue = "/"
 		m.inputCursor = 1
 		m.updateCompletions()
+	case key.Matches(msg, keys.Help):
+		m.setStatusLines(m.helpLines("keys"))
 	}
 	return nil
 }
@@ -1640,6 +1642,29 @@ var helpGroups = []struct {
 		{"arc collections describe", "<slug> <desc>", "set collection description  (CLI only)"},
 		{"arc collections suggest", "[--apply]", "AI-suggest collections for article  (CLI only)"},
 		{"arc collections read", "<slug>", "read flash/summary across collection  (CLI only)"},
+	}},
+	{"keys", []cmdCompletion{
+		{"j / ↓", "", "move down"},
+		{"k / ↑", "", "move up"},
+		{"PgDn / ctrl+d", "", "page down"},
+		{"PgUp / ctrl+u", "", "page up"},
+		{"g / Home", "", "go to top"},
+		{"G / End", "", "go to bottom"},
+		{"enter", "", "select / open article"},
+		{"space", "", "expand / collapse collection"},
+		{"esc", "", "back / dismiss"},
+		{"tab", "", "next pane"},
+		{"shift+tab", "", "previous pane"},
+		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
+		{"h / ←", "", "previous content tab"},
+		{"r", "", "mark article as read"},
+		{"u", "", "mark article as unread"},
+		{"f", "", "toggle favorite"},
+		{"o", "", "open source URL in browser"},
+		{"D", "", "delete article"},
+		{"/", "", "open command input"},
+		{"?", "", "show key bindings"},
+		{"q / ctrl+c", "", "quit"},
 	}},
 	{"system", []cmdCompletion{
 		{"/tags", "", "list all tags"},
