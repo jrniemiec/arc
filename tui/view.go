@@ -338,7 +338,7 @@ func (m Model) renderNavPane(height int) []string {
 		case navSubTabCollections:
 			lines = append(lines, m.renderNavCollections(height-2)...)
 		case navSubTabWorkspaces:
-			lines = append(lines, fg(t.NavDimmed, "  (coming soon)"))
+			lines = append(lines, m.renderNavWorkspaces(height-2)...)
 		}
 	} else {
 		// Non-Library tabs keep a single label header + content.
@@ -490,6 +490,121 @@ func (m Model) renderNavCollections(maxLines int) []string {
 	return lines
 }
 
+// renderNavWorkspaces renders the workspace foldable tree into the nav pane.
+func (m Model) renderNavWorkspaces(maxLines int) []string {
+	t := ActiveTheme
+
+	if !m.workspacesLoaded {
+		return []string{fg(t.NavDimmed, "  loading…")}
+	}
+	if m.workspacesErr != "" {
+		return []string{fg(t.NavDimmed, "  error: "+truncate(m.workspacesErr, m.navWidth()-4))}
+	}
+	if len(m.workspaceItems) == 0 {
+		return []string{fg(t.NavDimmed, "  (no workspaces — use  arc workspace new)")}
+	}
+
+	w := m.navWidth()
+	var lines []string
+	end := m.wsScroll + maxLines
+	if end > len(m.wsRows) {
+		end = len(m.wsRows)
+	}
+	for i := m.wsScroll; i < end; i++ {
+		row := m.wsRows[i]
+		selected := i == m.wsCursor
+		wsIdx := row.wsIdx
+		var ws workspaceItem
+		if wsIdx >= 0 && wsIdx < len(m.workspaceItems) {
+			ws = m.workspaceItems[wsIdx]
+		}
+
+		var label string
+		switch row.kind {
+		case wsRowWorkspace:
+			arrow := "▶ "
+			if ws.expanded {
+				arrow = "▼ "
+			}
+			flags := ""
+			if ws.hasSystem {
+				flags += " ✎"
+			}
+			if ws.hasHistory {
+				flags += " 💬"
+			}
+			counts := fmt.Sprintf(" (%da %dc)", ws.articleCount, ws.collectionCount)
+			label = truncate(arrow+ws.name+counts+flags, w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fgBold(t.NavGroup, label)
+			}
+
+		case wsRowCollectionsGroup:
+			arrow := "  ▶ "
+			if ws.collectionsExpanded {
+				arrow = "  ▼ "
+			}
+			label = truncate(arrow+fmt.Sprintf("Collections (%d)", row.count), w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, label)
+			}
+
+		case wsRowCollection:
+			arrow := "    ▶ "
+			if ws.expandedCols[row.colSlug] {
+				arrow = "    ▼ "
+			}
+			label = truncate(arrow+row.colSlug+fmt.Sprintf(" (%d)", row.count), w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavText, label)
+			}
+
+		case wsRowArticlesGroup:
+			arrow := "  ▶ "
+			if ws.articlesExpanded {
+				arrow = "  ▼ "
+			}
+			label = truncate(arrow+fmt.Sprintf("Articles (%d)", row.count), w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, label)
+			}
+
+		case wsRowArticle:
+			prefix := "      " // 6 spaces indent
+			if row.colSlug != "" {
+				prefix = "        " // 8 spaces under collection
+			}
+			dot := "• "
+			title := truncate(oneLine(row.title), w-len(prefix)-len(dot))
+			label = prefix + dot + title
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, prefix) + fg(t.NavMark, "•") + " " + fg(t.NavText, title)
+			}
+		}
+		lines = append(lines, label)
+	}
+
+	// Scroll indicator
+	if len(m.wsRows) > maxLines {
+		pct := 0
+		if len(m.wsRows) > 1 {
+			pct = m.wsScroll * 100 / (len(m.wsRows) - maxLines)
+		}
+		lines = append(lines, fg(t.NavDimmed, fmt.Sprintf(" ↕ %d/%d (%d%%)", m.wsCursor+1, len(m.wsRows), pct)))
+	}
+	return lines
+}
+
 // renderNavLibrary renders the article list into the nav pane.
 func (m Model) renderNavLibrary(maxLines int) []string {
 	t := ActiveTheme
@@ -628,6 +743,10 @@ func (m Model) selectedNavItem() *navItem {
 func (m Model) renderContentLibrary(height, width int) []string {
 	t := ActiveTheme
 	var lines []string
+
+	if m.navSubTab == navSubTabWorkspaces {
+		return m.renderContentWorkspace(height, width)
+	}
 
 	if col := m.selectedCollection(); col != nil {
 		return m.renderContentCollection(height, width, col)
@@ -861,6 +980,98 @@ func (m Model) renderContentCollection(height, width int, col *navRow) []string 
 	} else {
 		lines = append(lines, fg(t.ContentDimmed, "(no description)"))
 	}
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
+// renderContentWorkspace renders workspace details in the content pane.
+func (m Model) renderContentWorkspace(height, width int) []string {
+	t := ActiveTheme
+	var lines []string
+
+	titleColor := t.ContentText
+	if m.focus == paneContent {
+		titleColor = t.ContentTitle
+	}
+
+	if !m.workspacesLoaded {
+		lines = append(lines, fg(t.ContentDimmed, "loading…"))
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+
+	if len(m.workspaceItems) == 0 {
+		lines = append(lines, fgBold(t.ContentTitle, "Workspaces"))
+		lines = append(lines, fg(t.ContentDimmed, "No workspaces yet. Use  arc workspace new <name> <title>"))
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+
+	// Find the workspace for the current cursor row.
+	wsIdx := 0
+	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
+		wsIdx = m.wsRows[m.wsCursor].wsIdx
+	}
+	if wsIdx < 0 || wsIdx >= len(m.workspaceItems) {
+		wsIdx = 0
+	}
+	ws := m.workspaceItems[wsIdx]
+
+	// Title · slug
+	sep := fg(t.ContentDimmed, "  ·  ")
+	slugStr := fg(t.ContentDimmed, ws.name)
+	titleMaxW := width - 1 - lipgloss.Width("  ·  "+ws.name)
+	if titleMaxW < 10 {
+		titleMaxW = 10
+	}
+	titleStr := ws.name
+	if ws.description != "" {
+		titleStr = ws.description
+	}
+	lines = append(lines, fgBold(titleColor, truncate(titleStr, titleMaxW))+sep+slugStr)
+
+	// meta line 1: status · created · articles · collections
+	meta1 := fg(t.ContentDimmed, ws.status)
+	if !ws.createdAt.IsZero() {
+		meta1 += fg(t.ContentDimmed, "  ·  created "+ws.createdAt.Format("2006-01-02"))
+	}
+	meta1 += fg(t.ContentDimmed, fmt.Sprintf("  ·  %d articles  ·  %d collections", ws.articleCount, ws.collectionCount))
+	lines = append(lines, meta1)
+
+	// meta line 2: resources · outcomes
+	meta2 := fg(t.ContentDimmed, fmt.Sprintf("%d resources  ·  %d outcomes", ws.resourceCount, ws.outcomeCount))
+	lines = append(lines, meta2)
+
+	// meta line 3: chat config
+	chatParts := []string{}
+	if ws.chatProfile != "" {
+		chatParts = append(chatParts, "profile: "+ws.chatProfile)
+	}
+	if ws.chatStrategy != "" {
+		chatParts = append(chatParts, "strategy: "+ws.chatStrategy)
+	}
+	if ws.hasSystem {
+		chatParts = append(chatParts, "✎ system prompt")
+	}
+	if ws.hasHistory {
+		chatParts = append(chatParts, "💬 chat history")
+	}
+	if len(chatParts) > 0 {
+		lines = append(lines, fg(t.ContentDimmed, truncate(strings.Join(chatParts, "  ·  "), width-1)))
+	} else {
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
+	lines = append(lines, fg(t.ContentDimmed, "arc workspace chat "+ws.name))
+	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
 
 	for len(lines) < height {
 		lines = append(lines, "")
@@ -1141,7 +1352,9 @@ func (m Model) renderStatusLine() string {
 				return fg(t.Dimmed, fmt.Sprintf(" Collections · %d total", n))
 			}
 		case navSubTabWorkspaces:
-			return fg(t.Dimmed, " Workspaces · coming soon")
+			if m.workspacesLoaded {
+				return fg(t.Dimmed, fmt.Sprintf(" Workspaces · %d total", len(m.workspaceItems)))
+			}
 		}
 	}
 	return ""

@@ -419,7 +419,15 @@ Examples:
   arc workspace add myws --article slug1,slug2 --collection ml
   arc workspace add myws --resource ~/papers/paper.pdf
   arc workspace add myws --resource https://youtube.com/watch?v=abc`,
-	Args: cobra.ExactArgs(1),
+	Args: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return fmt.Errorf("workspace name required")
+		}
+		if len(args) > 1 {
+			return fmt.Errorf("unexpected extra arguments: %v\n\nHint: multiple slugs must be comma-separated with no spaces:\n  --article slug1,slug2,slug3\n  --collection col1,col2", args[1:])
+		}
+		return nil
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := resolveWorkspaceName(cmd, args[0])
 		if err != nil {

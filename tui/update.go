@@ -57,6 +57,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.navItemsAll = msg.items
 			m.navCursor = 0
 			m.navScroll = 0
+			// Rebuild wsRows now that article titles are available.
+			if m.workspacesLoaded {
+				m.wsRows = m.buildWsRows()
+			}
 		}
 		m.navLoaded = true
 		// Trigger content load for the first item.
@@ -122,6 +126,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case workspacesLoadedMsg:
+		if msg.err != "" {
+			m.workspacesErr = msg.err
+		} else {
+			m.workspaceItems = msg.items
+			m.wsRows = m.buildWsRows()
+			m.wsCursor = 0
+			m.wsScroll = 0
+		}
+		m.workspacesLoaded = true
+
 	case statsLoadedMsg:
 		if msg.err == "" {
 			m.stats = msg.stats
@@ -152,6 +167,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.reloadNav && m.svc != nil {
 			cmds = append(cmds, loadNav(m.svc))
+		}
+		if msg.reloadCollections && m.svc != nil {
+			m.collectionsLoaded = false
+			m.focus = paneNav
+			cmds = append(cmds, loadCollectionsTree(m.svc))
+		}
+		if msg.reloadWorkspaces && m.svc != nil {
+			m.workspacesLoaded = false
+			m.focus = paneNav
+			cmds = append(cmds, loadWorkspaces(m.svc))
 		}
 
 	case contentLoadedMsg:
@@ -280,7 +305,14 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.ToggleFav):
 		return m.cmdToggleFavorite()
 	case key.Matches(msg, keys.Delete):
-		return m.cmdDeleteArticle()
+		switch m.navSubTab {
+		case navSubTabWorkspaces:
+			return m.cmdDeleteWorkspace()
+		case navSubTabCollections:
+			return m.cmdDeleteCollection()
+		default:
+			return m.cmdDeleteArticle()
+		}
 	case key.Matches(msg, keys.Open):
 		return m.openCurrentURL()
 	case key.Matches(msg, keys.Command):
@@ -328,6 +360,11 @@ func (m *Model) navCursorUp() tea.Cmd {
 			m.clampNavRowScroll()
 			return m.triggerCollectionContentLoad()
 		}
+	case navSubTabWorkspaces:
+		if m.wsCursor > 0 {
+			m.wsCursor--
+			m.clampWsScroll()
+		}
 	}
 	return nil
 }
@@ -346,6 +383,11 @@ func (m *Model) navCursorDown() tea.Cmd {
 			m.navRowCursor++
 			m.clampNavRowScroll()
 			return m.triggerCollectionContentLoad()
+		}
+	case navSubTabWorkspaces:
+		if m.wsCursor < len(m.wsRows)-1 {
+			m.wsCursor++
+			m.clampWsScroll()
 		}
 	}
 	return nil
@@ -369,6 +411,12 @@ func (m *Model) navPageUp() tea.Cmd {
 		}
 		m.clampNavRowScroll()
 		return m.triggerCollectionContentLoad()
+	case navSubTabWorkspaces:
+		m.wsCursor -= h
+		if m.wsCursor < 0 {
+			m.wsCursor = 0
+		}
+		m.clampWsScroll()
 	}
 	return nil
 }
@@ -397,6 +445,15 @@ func (m *Model) navPageDown() tea.Cmd {
 		}
 		m.clampNavRowScroll()
 		return m.triggerCollectionContentLoad()
+	case navSubTabWorkspaces:
+		m.wsCursor += h
+		if m.wsCursor >= len(m.wsRows) {
+			m.wsCursor = len(m.wsRows) - 1
+		}
+		if m.wsCursor < 0 {
+			m.wsCursor = 0
+		}
+		m.clampWsScroll()
 	}
 	return nil
 }
@@ -412,6 +469,9 @@ func (m *Model) navHome() tea.Cmd {
 		m.navRowCursor = 0
 		m.clampNavRowScroll()
 		return m.triggerCollectionContentLoad()
+	case navSubTabWorkspaces:
+		m.wsCursor = 0
+		m.clampWsScroll()
 	}
 	return nil
 }
@@ -431,12 +491,21 @@ func (m *Model) navEnd() tea.Cmd {
 			m.clampNavRowScroll()
 			return m.triggerCollectionContentLoad()
 		}
+	case navSubTabWorkspaces:
+		if len(m.wsRows) > 0 {
+			m.wsCursor = len(m.wsRows) - 1
+			m.clampWsScroll()
+		}
 	}
 	return nil
 }
 
 // navToggleExpand toggles expand/collapse on a collection header (Space key).
 func (m *Model) navToggleExpand() tea.Cmd {
+	if m.navSubTab == navSubTabWorkspaces {
+		m.wsToggleExpand()
+		return nil
+	}
 	if m.navSubTab != navSubTabCollections || m.navRowCursor >= len(m.navRows) {
 		return nil
 	}
@@ -468,6 +537,8 @@ func (m *Model) navSelect() tea.Cmd {
 		if row.kind == rowArticle {
 			m.focus = paneContent
 		}
+	case navSubTabWorkspaces:
+		m.wsToggleExpand()
 	}
 	return nil
 }
@@ -481,6 +552,9 @@ func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 	m.navScroll = 0
 	if sub == navSubTabCollections && !m.collectionsLoaded && m.svc != nil {
 		return loadCollectionsTree(m.svc)
+	}
+	if sub == navSubTabWorkspaces && !m.workspacesLoaded && m.svc != nil {
+		return loadWorkspaces(m.svc)
 	}
 	return nil
 }
@@ -543,6 +617,45 @@ func (m *Model) clampNavRowScroll() {
 	} else if m.navRowCursor >= m.navRowScroll+h {
 		m.navRowScroll = m.navRowCursor - h + 1
 	}
+}
+
+func (m *Model) clampWsScroll() {
+	h := m.navPaneHeight()
+	if h < 1 {
+		h = 1
+	}
+	if m.wsCursor < m.wsScroll {
+		m.wsScroll = m.wsCursor
+	} else if m.wsCursor >= m.wsScroll+h {
+		m.wsScroll = m.wsCursor - h + 1
+	}
+}
+
+// wsToggleExpand toggles expand/collapse for the workspace tree row at wsCursor.
+func (m *Model) wsToggleExpand() {
+	if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
+		return
+	}
+	row := m.wsRows[m.wsCursor]
+	if row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		return
+	}
+	ws := &m.workspaceItems[row.wsIdx]
+	switch row.kind {
+	case wsRowWorkspace:
+		ws.expanded = !ws.expanded
+	case wsRowCollectionsGroup:
+		ws.collectionsExpanded = !ws.collectionsExpanded
+	case wsRowCollection:
+		if ws.expandedCols == nil {
+			ws.expandedCols = make(map[string]bool)
+		}
+		ws.expandedCols[row.colSlug] = !ws.expandedCols[row.colSlug]
+	case wsRowArticlesGroup:
+		ws.articlesExpanded = !ws.articlesExpanded
+	}
+	m.wsRows = m.buildWsRows()
+	m.clampWsScroll()
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
@@ -687,7 +800,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		m.cmdCompleteIdx = -1
 		// Confirmation flow
 		if m.pendingConfirm != nil {
-			if val == "yes" {
+			if val == "y" || val == "yes" {
 				fn := m.pendingConfirm
 				m.pendingConfirm = nil
 				m.pendingConfirmMsg = ""
@@ -959,8 +1072,55 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		}
 		return items
 
+	case "/delete":
+		sub := m.navSubTab
+		if m.activeTab != tabLibrary {
+			sub = navSubTabArticles
+		}
+		switch sub {
+		case navSubTabArticles:
+			items := make([]cmdCompletion, 0, len(m.navItems))
+			for _, item := range m.navItems {
+				items = append(items, cmdCompletion{cmd: item.id, desc: truncate(oneLine(item.title), 40)})
+			}
+			return items
+		case navSubTabCollections:
+			var items []cmdCompletion
+			for _, r := range m.navRows {
+				if r.kind == rowCollection {
+					items = append(items, cmdCompletion{cmd: r.colSlug, desc: fmt.Sprintf("%d articles", r.colCount)})
+				}
+			}
+			return items
+		case navSubTabWorkspaces:
+			items := make([]cmdCompletion, 0, len(m.workspaceItems))
+			for _, ws := range m.workspaceItems {
+				items = append(items, cmdCompletion{cmd: ws.name, desc: fmt.Sprintf("%da %dc", ws.articleCount, ws.collectionCount)})
+			}
+			return items
+		}
+
+	case "/article":
+		return []cmdCompletion{
+			{cmd: "list", desc: "go to Articles sub-tab"},
+			{cmd: "search", desc: "<query>  full-text search"},
+			{cmd: "ingest", desc: "<url>  add a new article"},
+		}
+
 	case "/collection":
-		return nil // user can run /collections to see list
+		return []cmdCompletion{
+			{cmd: "list", desc: "go to Collections sub-tab"},
+			{cmd: "search", desc: "<query>  filter by name/slug"},
+		}
+
+	case "/workspace":
+		return []cmdCompletion{
+			{cmd: "list", desc: "go to Workspaces sub-tab"},
+			{cmd: "new", desc: "<name>  create a new workspace"},
+			{cmd: "delete", desc: "delete selected workspace"},
+			{cmd: "rename", desc: "<name>  rename selected workspace"},
+			{cmd: "describe", desc: "<text>  set workspace description"},
+		}
 
 	case "/help":
 		// Second level: "/help article " → return command entries for that group.
@@ -1048,41 +1208,53 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		arg = strings.Join(parts[1:], " ")
 	}
 
+	// ── Global commands (available in any context) ──────────────────────────
 	switch cmd {
+	case "/stats":
+		return m.cmdStats()
+	case "/log", "/logs":
+		return m.cmdLog()
+	case "/help":
+		m.setStatusLines(m.helpLines(arg))
+		return nil
+	case "/article":
+		return m.dispatchQualified(navSubTabArticles, arg)
+	case "/collection":
+		return m.dispatchQualified(navSubTabCollections, arg)
+	case "/workspace":
+		return m.dispatchQualified(navSubTabWorkspaces, arg)
+	}
+
+	// ── Context-sensitive commands ──────────────────────────────────────────
+	sub := m.navSubTab
+	if m.activeTab != tabLibrary {
+		sub = navSubTabArticles // default context outside Library
+	}
+
+	switch cmd {
+	// ── Shared (multi-context) ──────────────────────────────────────────
 	case "/search":
 		if arg == "" {
-			m.statusMsg = "usage: /search <query> [--limit N]"
+			m.statusMsg = "usage: /search <query>"
 			return nil
 		}
-		if m.navSubTab == navSubTabCollections {
+		switch sub {
+		case navSubTabCollections:
 			m.filterCollections(arg)
 			return nil
+		default: // articles
+			query, limit := parseSearchArg(arg)
+			if m.svc == nil {
+				m.applyNavFilter("search", query)
+				return nil
+			}
+			m.statusMsg = "searching…"
+			return cmdFTSSearch(m.svc, query, limit)
 		}
-		query, limit := parseSearchArg(arg)
-		if m.svc == nil {
-			m.applyNavFilter("search", query)
-			return nil
-		}
-		m.statusMsg = "searching…"
-		return cmdFTSSearch(m.svc, query, limit)
-
-	case "/filter":
-		if arg == "" {
-			m.statusMsg = "usage: /filter <tag>"
-			return nil
-		}
-		m.applyNavFilter("tag", arg)
-		return nil
-
-	case "/collection":
-		if arg == "" {
-			m.statusMsg = "usage: /collection <name>"
-			return nil
-		}
-		return m.filterByCollection(arg)
 
 	case "/clear":
-		if m.navSubTab == navSubTabCollections {
+		switch sub {
+		case navSubTabCollections:
 			m.navRows = m.navRowsAll
 			m.navRowCursor = 0
 			m.navRowScroll = 0
@@ -1090,14 +1262,47 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			m.focus = paneNav
 			m.statusMsg = "✓ filter cleared"
 			return nil
+		default: // articles
+			m.navItems = m.navItemsAll
+			m.navFilter = ""
+			m.navCursor = 0
+			m.navScroll = 0
+			m.focus = paneNav
+			m.statusMsg = "✓ filter cleared"
+			return m.triggerContentLoad()
 		}
-		m.navItems = m.navItemsAll
-		m.navFilter = ""
-		m.navCursor = 0
-		m.navScroll = 0
-		m.focus = paneNav
-		m.statusMsg = "✓ filter cleared"
-		return m.triggerContentLoad()
+
+	case "/delete":
+		switch sub {
+		case navSubTabWorkspaces:
+			if arg != "" {
+				return m.cmdDeleteWorkspaceByName(arg)
+			}
+			return m.cmdDeleteWorkspace()
+		case navSubTabCollections:
+			if arg != "" {
+				return m.cmdDeleteCollectionByName(arg)
+			}
+			return m.cmdDeleteCollection()
+		default: // articles
+			if arg != "" {
+				return m.cmdDeleteArticleBySlug(arg)
+			}
+			return m.cmdDeleteArticle()
+		}
+
+	// ── Article-only ────────────────────────────────────────────────────
+	case "/filter":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /filter is only available in Articles context"
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "usage: /filter <tag>"
+			return nil
+		}
+		m.applyNavFilter("tag", arg)
+		return nil
 
 	case "/tags":
 		return m.cmdTags()
@@ -1106,25 +1311,46 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdCollections()
 
 	case "/favorites":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /favorites is only available in Articles context"
+			return nil
+		}
 		m.applyNavFilter("favorite", "")
 		return nil
 
 	case "/favorite":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /favorite is only available in Articles context"
+			return nil
+		}
 		return m.cmdToggleFavorite()
 
 	case "/open":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /open is only available in Articles context"
+			return nil
+		}
 		return m.openCurrentURL()
 
 	case "/read":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /read is only available in Articles context"
+			return nil
+		}
 		return m.cmdMarkRead()
 
 	case "/unread":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /unread is only available in Articles context"
+			return nil
+		}
 		return m.cmdMarkUnread()
 
-	case "/delete":
-		return m.cmdDeleteArticle()
-
 	case "/reprocess":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /reprocess is only available in Articles context"
+			return nil
+		}
 		return m.cmdReprocess()
 
 	case "/ingest":
@@ -1134,20 +1360,137 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 		return m.cmdIngest(arg)
 
-	case "/stats":
-		return m.cmdStats()
+	// ── Workspace-only ──────────────────────────────────────────────────
+	case "/new":
+		if sub != navSubTabWorkspaces {
+			m.statusMsg = "✗ /new is only available in Workspaces context"
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "usage: /new <name>"
+			return nil
+		}
+		return m.cmdNewWorkspace(arg)
 
-	case "/log", "/logs":
-		return m.cmdLog()
+	case "/rename":
+		if sub != navSubTabWorkspaces {
+			m.statusMsg = "✗ /rename is only available in Workspaces context"
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "usage: /rename <new-name>"
+			return nil
+		}
+		return m.cmdRenameWorkspace(arg)
 
-	case "/help":
-		m.setStatusLines(m.helpLines(arg))
-		return nil
+	case "/describe":
+		if sub != navSubTabWorkspaces {
+			m.statusMsg = "✗ /describe is only available in Workspaces context"
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "usage: /describe <text>"
+			return nil
+		}
+		return m.cmdDescribeWorkspace(arg)
 
 	default:
 		m.statusMsg = "✗ unknown command: " + parts[0]
 		return nil
 	}
+}
+
+// dispatchQualified switches to the given sub-tab then executes the subcommand.
+// subCmd examples: "list", "search foo", "new my-workspace".
+func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
+	// Switch to Library tab and the right sub-tab first.
+	m.activeTab = tabLibrary
+	switchCmd := m.switchNavSubTab(sub)
+
+	subCmd = strings.TrimSpace(strings.ToLower(subCmd))
+	subParts := strings.Fields(subCmd)
+	verb := ""
+	if len(subParts) > 0 {
+		verb = subParts[0]
+	}
+	arg := ""
+	if len(subParts) > 1 {
+		arg = strings.Join(subParts[1:], " ")
+	}
+
+	// After switching context, move focus to nav pane.
+	m.focus = paneNav
+
+	switch sub {
+	case navSubTabArticles:
+		switch verb {
+		case "", "list":
+			// just switching is enough
+		case "search":
+			if arg == "" {
+				m.statusMsg = "usage: /article search <query>"
+			} else {
+				query, limit := parseSearchArg(arg)
+				if m.svc != nil {
+					m.statusMsg = "searching…"
+					return tea.Batch(switchCmd, cmdFTSSearch(m.svc, query, limit))
+				}
+				m.applyNavFilter("search", query)
+			}
+		case "ingest":
+			if arg == "" {
+				m.statusMsg = "usage: /article ingest <url>"
+			} else {
+				return tea.Batch(switchCmd, m.cmdIngest(arg))
+			}
+		default:
+			m.statusMsg = "✗ unknown article command: " + verb
+		}
+
+	case navSubTabCollections:
+		switch verb {
+		case "", "list":
+			// switching is enough
+		case "search":
+			if arg == "" {
+				m.statusMsg = "usage: /collection search <query>"
+			} else {
+				m.filterCollections(arg)
+			}
+		default:
+			m.statusMsg = "✗ unknown collection command: " + verb
+		}
+
+	case navSubTabWorkspaces:
+		switch verb {
+		case "", "list":
+			// switching is enough
+		case "new":
+			if arg == "" {
+				m.statusMsg = "usage: /workspace new <name>"
+			} else {
+				return tea.Batch(switchCmd, m.cmdNewWorkspace(arg))
+			}
+		case "delete":
+			m.cmdDeleteWorkspace()
+		case "rename":
+			if arg == "" {
+				m.statusMsg = "usage: /workspace rename <new-name>"
+			} else {
+				return tea.Batch(switchCmd, m.cmdRenameWorkspace(arg))
+			}
+		case "describe":
+			if arg == "" {
+				m.statusMsg = "usage: /workspace describe <text>"
+			} else {
+				return tea.Batch(switchCmd, m.cmdDescribeWorkspace(arg))
+			}
+		default:
+			m.statusMsg = "✗ unknown workspace command: " + verb
+		}
+	}
+
+	return switchCmd
 }
 
 // filterCollections filters navRowsAll to collections matching query (slug/name/description).
@@ -1319,7 +1662,7 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 		return nil
 	}
 	item := *sel
-	m.pendingConfirmMsg = fmt.Sprintf("delete %q? type yes + Enter to confirm, Esc to cancel", item.title)
+	m.pendingConfirmMsg = fmt.Sprintf("delete %q? (y/n)", item.title)
 	m.focus = paneCommand
 	m.cursorVisible = true
 	m.inputValue = ""
@@ -1616,38 +1959,240 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 	}
 }
 
-// helpGroups defines the command groups for the Library tab.
-// Names match the CLI convention: singular (article, collection, workspace).
+// ── Collection commands ──────────────────────────────────────────────────────
+
+// cmdDeleteCollection deletes the selected collection after confirmation.
+func (m *Model) cmdDeleteCollection() tea.Cmd {
+	col := m.selectedCollection()
+	if col == nil {
+		m.statusMsg = "✗ no collection selected — cursor must be on a collection header"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	slug := col.colSlug
+	svc := m.svc
+	m.pendingConfirmMsg = fmt.Sprintf("delete collection %q? (y/n)", slug)
+	m.pendingConfirm = func() tea.Cmd {
+		return func() tea.Msg {
+			_, err := svc.DeleteCollection(context.Background(), slug, false)
+			if err != nil {
+				return cmdDoneMsg{err: err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: "✓ deleted collection " + slug, reloadCollections: true}
+		}
+	}
+	return nil
+}
+
+// cmdDeleteArticleBySlug deletes an article by slug (from /delete <slug>).
+func (m *Model) cmdDeleteArticleBySlug(slug string) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	svc := m.svc
+	m.pendingConfirmMsg = fmt.Sprintf("delete article %q? (y/n)", slug)
+	m.pendingConfirm = func() tea.Cmd {
+		m.navItems = removeNavItem(m.navItems, slug)
+		m.navItemsAll = removeNavItem(m.navItemsAll, slug)
+		if m.navCursor >= len(m.navItems) {
+			m.navCursor = len(m.navItems) - 1
+		}
+		if m.navCursor < 0 {
+			m.navCursor = 0
+		}
+		m.clampNavScroll()
+		contentCmd := m.triggerContentLoad()
+		return tea.Batch(contentCmd, func() tea.Msg {
+			_ = svc.DeleteArticle(context.Background(), slug)
+			return nil
+		})
+	}
+	return nil
+}
+
+// cmdDeleteCollectionByName deletes a collection by slug (from /delete <slug>).
+func (m *Model) cmdDeleteCollectionByName(slug string) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	svc := m.svc
+	m.pendingConfirmMsg = fmt.Sprintf("delete collection %q? (y/n)", slug)
+	m.pendingConfirm = func() tea.Cmd {
+		return func() tea.Msg {
+			_, err := svc.DeleteCollection(context.Background(), slug, false)
+			if err != nil {
+				return cmdDoneMsg{err: err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: "✓ deleted collection " + slug, reloadCollections: true}
+		}
+	}
+	return nil
+}
+
+// cmdDeleteWorkspaceByName deletes a workspace by name (from /delete <name>).
+func (m *Model) cmdDeleteWorkspaceByName(name string) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	svc := m.svc
+	m.pendingConfirmMsg = fmt.Sprintf("delete workspace %q? (y/n)", name)
+	m.pendingConfirm = func() tea.Cmd {
+		return func() tea.Msg {
+			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
+				return cmdDoneMsg{err: err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true}
+		}
+	}
+	return nil
+}
+
+// ── Workspace commands ───────────────────────────────────────────────────────
+
+// selectedWorkspace returns the workspaceItem under the cursor, or nil.
+func (m *Model) selectedWorkspace() *workspaceItem {
+	if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
+		return nil
+	}
+	idx := m.wsRows[m.wsCursor].wsIdx
+	if idx < 0 || idx >= len(m.workspaceItems) {
+		return nil
+	}
+	return &m.workspaceItems[idx]
+}
+
+// cmdNewWorkspace creates a new workspace.
+func (m *Model) cmdNewWorkspace(name string) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	svc := m.svc
+	m.statusMsg = "⠸ creating workspace " + name + "…"
+	return func() tea.Msg {
+		if err := svc.CreateWorkspace(context.Background(), name, ""); err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ created workspace " + name, reloadWorkspaces: true}
+	}
+}
+
+// cmdDeleteWorkspace deletes the selected workspace after confirmation.
+func (m *Model) cmdDeleteWorkspace() tea.Cmd {
+	ws := m.selectedWorkspace()
+	if ws == nil {
+		m.statusMsg = "✗ no workspace selected"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	name := ws.name
+	svc := m.svc
+	m.pendingConfirmMsg = fmt.Sprintf("delete workspace %q? (y/n)", name)
+	m.pendingConfirm = func() tea.Cmd {
+		return func() tea.Msg {
+			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
+				return cmdDoneMsg{err: err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true}
+		}
+	}
+	return nil
+}
+
+// cmdRenameWorkspace renames the selected workspace.
+func (m *Model) cmdRenameWorkspace(newName string) tea.Cmd {
+	ws := m.selectedWorkspace()
+	if ws == nil {
+		m.statusMsg = "✗ no workspace selected"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	oldName := ws.name
+	svc := m.svc
+	m.statusMsg = "⠸ renaming workspace…"
+	return func() tea.Msg {
+		if err := svc.RenameWorkspace(context.Background(), oldName, newName); err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ renamed %s → %s", oldName, newName), reloadWorkspaces: true}
+	}
+}
+
+// cmdDescribeWorkspace sets the description of the selected workspace.
+func (m *Model) cmdDescribeWorkspace(text string) tea.Cmd {
+	ws := m.selectedWorkspace()
+	if ws == nil {
+		m.statusMsg = "✗ no workspace selected"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	name := ws.name
+	svc := m.svc
+	return func() tea.Msg {
+		if err := svc.SetWorkspaceDescription(context.Background(), name, text); err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ description updated for " + name, reloadWorkspaces: true}
+	}
+}
+
+// helpGroups defines the command groups shown by /help.
+// Names match the context qualifier: article, collection, workspace, keys, system.
 var helpGroups = []struct {
 	name     string
 	commands []cmdCompletion
 }{
 	{"article", []cmdCompletion{
-		{"/search", "<query> [--limit N]", "full-text search (FTS5)"},
-		{"/filter", "<tag>", "filter articles by tag"},
+		{"/search", "<query> [--limit N]", "full-text search — use /article search from any tab"},
+		{"/filter", "<tag>", "filter by tag"},
 		{"/favorites", "", "show only favorited articles"},
 		{"/clear", "", "clear active filter"},
-		{"/open", "", "open source URL in Chrome"},
-		{"/read", "", "mark current article as read"},
-		{"/unread", "", "mark current article as unread"},
-		{"/favorite", "", "toggle favorite on current article"},
+		{"/open", "", "open source URL in browser"},
+		{"/read", "", "mark as read"},
+		{"/unread", "", "mark as unread"},
+		{"/favorite", "", "toggle favorite"},
 		{"/delete", "", "delete current article"},
-		{"/reprocess", "", "regenerate summary/flash for current article"},
-		{"/ingest", "<url>", "add a new article"},
+		{"/reprocess", "", "regenerate summary/flash"},
+		{"/ingest", "<url>", "add a new article — use /article ingest from any tab"},
 	}},
 	{"collection", []cmdCompletion{
-		{"/collections", "", "list all collections"},
-		{"/collection", "<name>", "show articles in a collection"},
-		{"/search", "<query>", "search collections by name/slug  (Collections sub-tab)"},
+		{"/search", "<query>", "filter collections by name/slug"},
 		{"/clear", "", "clear active filter"},
+		{"/delete", "", "delete current collection"},
 		{"arc collections create", "<slug>", "create a new collection  (CLI only)"},
 		{"arc collections add", "<article> <slug>", "add article to collection  (CLI only)"},
-		{"arc collections remove", "<article> <slug>", "remove article from collection  (CLI only)"},
-		{"arc collections rename", "<old> <new>", "rename a collection  (CLI only)"},
-		{"arc collections delete", "<slug>", "delete a collection  (CLI only)"},
-		{"arc collections describe", "<slug> <desc>", "set collection description  (CLI only)"},
-		{"arc collections suggest", "[--apply]", "AI-suggest collections for article  (CLI only)"},
+		{"arc collections remove", "<article> <slug>", "remove article  (CLI only)"},
+		{"arc collections rename", "<old> <new>", "rename  (CLI only)"},
+		{"arc collections describe", "<slug> <desc>", "set description  (CLI only)"},
+		{"arc collections suggest", "[--apply]", "AI-suggest collections  (CLI only)"},
 		{"arc collections read", "<slug>", "read flash/summary across collection  (CLI only)"},
+	}},
+	{"workspace", []cmdCompletion{
+		{"/new", "<name>", "create a new workspace"},
+		{"/delete", "", "delete current workspace"},
+		{"/rename", "<new-name>", "rename current workspace"},
+		{"/describe", "<text>", "set workspace description"},
+		{"arc workspace add", "<slug>", "add articles/collections/resources  (CLI only)"},
+		{"arc workspace remove", "<slug>", "remove articles/collections/resources  (CLI only)"},
+		{"arc workspace chat", "<slug>", "start interactive chat session  (CLI only)"},
+		{"arc workspace archive", "<slug>", "archive a workspace  (CLI only)"},
+		{"arc workspace outcomes", "<slug>", "list or read outcomes  (CLI only)"},
+		{"arc workspace system", "<slug>", "get/set system prompt  (CLI only)"},
 	}},
 	{"keys", []cmdCompletion{
 		{"j / ↓", "", "move down"},
@@ -1656,8 +2201,8 @@ var helpGroups = []struct {
 		{"PgUp / ctrl+u", "", "page up"},
 		{"g / Home", "", "go to top"},
 		{"G / End", "", "go to bottom"},
-		{"enter", "", "select / open article"},
-		{"space", "", "expand / collapse collection"},
+		{"enter", "", "select / expand / collapse"},
+		{"space", "", "expand / collapse"},
 		{"esc", "", "back / dismiss"},
 		{"tab", "", "next pane"},
 		{"shift+tab", "", "previous pane"},
@@ -1667,7 +2212,7 @@ var helpGroups = []struct {
 		{"u", "", "mark article as unread"},
 		{"f", "", "toggle favorite"},
 		{"o", "", "open source URL in browser"},
-		{"D", "", "delete article"},
+		{"D", "", "delete current item"},
 		{"/", "", "open command input"},
 		{"?", "", "show key bindings"},
 		{"q / ctrl+c", "", "quit"},
@@ -1675,21 +2220,7 @@ var helpGroups = []struct {
 	{"system", []cmdCompletion{
 		{"/tags", "", "list all tags"},
 		{"/stats", "", "show library stats"},
-		{"/log", "", "open/close debug log tail in a new terminal window"},
-	}},
-	{"workspace", []cmdCompletion{
-		{"arc workspace new", "<slug> <title>", "create a new workspace  (CLI only)"},
-		{"arc workspace list", "", "list workspaces  (CLI only)"},
-		{"arc workspace show", "<slug>", "show workspace details  (CLI only)"},
-		{"arc workspace add", "<slug>", "add articles/collections/resources  (CLI only)"},
-		{"arc workspace remove", "<slug>", "remove articles/collections/resources  (CLI only)"},
-		{"arc workspace chat", "<slug>", "start interactive chat session  (CLI only)"},
-		{"arc workspace rename", "<old> <new>", "rename a workspace  (CLI only)"},
-		{"arc workspace delete", "<slug>", "delete a workspace  (CLI only)"},
-		{"arc workspace describe", "<slug> <desc>", "set workspace description  (CLI only)"},
-		{"arc workspace archive", "<slug>", "archive a workspace  (CLI only)"},
-		{"arc workspace outcomes", "<slug>", "list or read outcomes  (CLI only)"},
-		{"arc workspace system", "<slug>", "get/set system prompt  (CLI only)"},
+		{"/log", "", "open/close debug log tail"},
 	}},
 }
 
@@ -1705,18 +2236,38 @@ func (m *Model) helpLines(arg string) []string {
 		name     string
 		commands []cmdCompletion
 	}) []string {
-		lines := []string{g.name + ":"}
+		// Check if this group has both TUI and CLI-only entries.
+		hasTUI, hasCLI := false, false
+		for _, c := range g.commands {
+			if strings.HasPrefix(c.cmd, "arc ") {
+				hasCLI = true
+			} else {
+				hasTUI = true
+			}
+		}
+		showLegend := hasTUI && hasCLI
+
+		header := g.name + ":"
+		if showLegend {
+			header += "  (/ = TUI command · no slash = CLI only: arc " + g.name + " <cmd>)"
+		}
+		lines := []string{header}
 		for _, c := range g.commands {
 			displayCmd := c.cmd
 			// For CLI-only entries like "arc collections create", show just the subcommand.
-			if parts := strings.Fields(displayCmd); len(parts) == 3 && parts[0] == "arc" {
+			if parts := strings.Fields(displayCmd); len(parts) >= 3 && parts[0] == "arc" {
 				displayCmd = parts[2]
 			}
 			synopsis := displayCmd
 			if c.arg != "" {
 				synopsis += " " + c.arg
 			}
-			lines = append(lines, fmt.Sprintf("  %-24s  %s", synopsis, c.desc))
+			// Strip "(CLI only)" from desc when legend is shown — it's redundant.
+			desc := c.desc
+			if showLegend {
+				desc = strings.TrimSuffix(strings.TrimSpace(strings.Replace(desc, "  (CLI only)", "", 1)), "(CLI only)")
+			}
+			lines = append(lines, fmt.Sprintf("  %-24s  %s", synopsis, desc))
 		}
 		return lines
 	}
@@ -1752,7 +2303,7 @@ func (m *Model) helpLines(arg string) []string {
 			var lines []string
 			for _, c := range g.commands {
 				displayCmd := c.cmd
-				if parts := strings.Fields(displayCmd); len(parts) == 3 && parts[0] == "arc" {
+				if parts := strings.Fields(displayCmd); len(parts) >= 3 && parts[0] == "arc" {
 					displayCmd = parts[2]
 				}
 				if strings.HasPrefix(displayCmd, cmdFilter) {

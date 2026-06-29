@@ -64,6 +64,11 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 	_, hasSystemErr := os.Stat(filepath.Join(wsDir, "system.txt"))
 	_, hasHistoryErr := os.Stat(filepath.Join(wsDir, "chat", "history.json"))
 
+	colSlugs := make([]string, len(cols))
+	for i, c := range cols {
+		colSlugs[i] = c
+	}
+
 	return WorkspaceInfo{
 		Name:            m.Name,
 		Description:     m.Description,
@@ -76,6 +81,8 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 		HasSystem:       hasSystemErr == nil,
 		HasHistory:      hasHistoryErr == nil,
 		ChatConfig:      chatCfg,
+		Articles:        articles,
+		CollectionSlugs: colSlugs,
 	}, nil
 }
 

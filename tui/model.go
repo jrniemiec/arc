@@ -123,6 +123,51 @@ type navRow struct {
 	expanded      bool
 }
 
+// workspaceItem is one entry in the Workspaces nav list.
+type workspaceItem struct {
+	name            string
+	description     string
+	status          string // "active" | "archived"
+	createdAt       time.Time
+	articleCount    int
+	collectionCount int
+	resourceCount   int
+	outcomeCount    int
+	hasSystem       bool
+	hasHistory      bool
+	chatProfile     string
+	chatStrategy    string
+	articles        []string          // slugs
+	collectionSlugs []string          // slugs
+
+	// expand state
+	expanded            bool
+	collectionsExpanded bool
+	articlesExpanded    bool
+	expandedCols        map[string]bool // collection slug → expanded
+}
+
+// wsRowKind distinguishes row types in the workspace tree.
+type wsRowKind int
+
+const (
+	wsRowWorkspace        wsRowKind = iota
+	wsRowCollectionsGroup           // "▶ Collections (N)"
+	wsRowCollection                 // one collection under Collections group
+	wsRowArticlesGroup              // "▶ Articles (N)"
+	wsRowArticle                    // one article (leaf)
+)
+
+// wsRow is one display row in the workspace foldable tree.
+type wsRow struct {
+	kind   wsRowKind
+	wsIdx  int    // index into workspaceItems
+	colSlug string // wsRowCollection rows
+	slug   string // wsRowArticle rows
+	title  string // article title (looked up from navItemsAll)
+	count  int    // article count for wsRowCollection
+}
+
 // navItem is one entry in the left navigator.
 type navItem struct {
 	id           string
@@ -193,6 +238,14 @@ type Model struct {
 	collectionsLoaded bool
 	collectionsErr    string
 
+	// Library nav — Workspaces sub-tab
+	workspaceItems   []workspaceItem
+	wsRows           []wsRow // flat tree rows rebuilt on expand/collapse
+	wsCursor         int
+	wsScroll         int
+	workspacesLoaded bool
+	workspacesErr    string
+
 	// Content pane — single concatenated document: Flash → Summary → Body → Cards
 	contentScroll   int
 	contentLines    []string        // all sections joined
@@ -247,33 +300,67 @@ type cmdCompletion struct {
 	desc string // e.g. "filter articles by text"
 }
 
-// libraryCommands is the command set for the Library tab.
-var libraryCommands = []cmdCompletion{
+// globalCommands are available from any tab/sub-tab.
+// They switch context before acting.
+var globalCommands = []cmdCompletion{
+	{"/article", "<cmd>", "article commands (list, search, ingest, …)"},
+	{"/collection", "<cmd>", "collection commands (list, show, …)"},
+	{"/workspace", "<cmd>", "workspace commands (list, new, delete, …)"},
+	{"/help", "[group]", "show command reference"},
+	{"/stats", "", "show library stats"},
+	{"/log", "", "open/close debug log tail"},
+}
+
+// articleCommands are available when the Articles sub-tab is active.
+var articleCommands = []cmdCompletion{
 	{"/search", "<query> [--limit N]", "full-text search (FTS5)"},
-	{"/filter", "<tag>", "filter articles by tag"},
-	{"/collection", "<name>", "filter articles by collection"},
+	{"/filter", "<tag>", "filter by tag"},
+	{"/favorites", "", "show only favorited articles"},
 	{"/clear", "", "clear active filter"},
 	{"/tags", "", "list all tags"},
 	{"/collections", "", "list all collections"},
-	{"/open", "", "open source URL in Chrome"},
-	{"/read", "", "mark current article as read"},
-	{"/unread", "", "mark current article as unread"},
-	{"/delete", "", "delete current article"},
-	{"/reprocess", "", "regenerate summary/flash for current article"},
+	{"/open", "", "open source URL in browser"},
+	{"/read", "", "mark as read"},
+	{"/unread", "", "mark as unread"},
+	{"/favorite", "", "toggle favorite"},
+	{"/delete", "[slug]", "delete article (selected or by name)"},
+	{"/reprocess", "", "regenerate summary/flash"},
 	{"/ingest", "<url>", "add a new article"},
-	{"/stats", "", "show library stats"},
-	{"/log", "", "open/close debug log tail in a new terminal window"},
-	{"/help", "", "show command reference"},
 }
 
-// allCommands returns commands relevant to the active tab.
+// collectionCommands are available when the Collections sub-tab is active.
+var collectionCommands = []cmdCompletion{
+	{"/search", "<query>", "filter collections by name/slug"},
+	{"/clear", "", "clear active filter"},
+	{"/delete", "[slug]", "delete collection (selected or by name)"},
+}
+
+// workspaceCommands are available when the Workspaces sub-tab is active.
+var workspaceCommands = []cmdCompletion{
+	{"/new", "<name>", "create a new workspace"},
+	{"/delete", "[name]", "delete workspace (selected or by name)"},
+	{"/rename", "<new-name>", "rename current workspace"},
+	{"/describe", "<text>", "set workspace description"},
+}
+
+// allCommands returns global commands plus context-specific commands for the active sub-tab.
 func (m *Model) allCommands() []cmdCompletion {
-	switch m.activeTab {
-	case tabLibrary:
-		return libraryCommands
-	default:
-		return nil
+	if m.activeTab != tabLibrary {
+		return globalCommands
 	}
+	var ctx []cmdCompletion
+	switch m.navSubTab {
+	case navSubTabArticles:
+		ctx = articleCommands
+	case navSubTabCollections:
+		ctx = collectionCommands
+	case navSubTabWorkspaces:
+		ctx = workspaceCommands
+	}
+	out := make([]cmdCompletion, 0, len(ctx)+len(globalCommands))
+	out = append(out, ctx...)
+	out = append(out, globalCommands...)
+	return out
 }
 
 // ── Bubbletea message types ───────────────────────────────────────────────────
@@ -302,6 +389,11 @@ type collectionsLoadedMsg struct {
 	err         string
 }
 
+type workspacesLoadedMsg struct {
+	items []workspaceItem
+	err   string
+}
+
 type collectionArticlesLoadedMsg struct {
 	slug   string
 	items  []navItem
@@ -310,12 +402,14 @@ type collectionArticlesLoadedMsg struct {
 }
 
 type cmdDoneMsg struct {
-	statusMsg   string
-	statusLines []string
-	err         string
-	reloadNav   bool      // true = reload nav after completion
-	navItems    []navItem // non-nil = replace navItems with this
-	navFilter   string    // non-empty = set navFilter
+	statusMsg         string
+	statusLines       []string
+	err               string
+	reloadNav         bool      // true = reload article nav after completion
+	reloadCollections bool      // true = reload collections tree after completion
+	reloadWorkspaces  bool      // true = reload workspace list after completion
+	navItems          []navItem // non-nil = replace navItems with this
+	navFilter         string    // non-empty = set navFilter
 }
 
 // ── Cmds ─────────────────────────────────────────────────────────────────────
@@ -383,6 +477,36 @@ func loadCollectionsTree(svc *service.Service) tea.Cmd {
 			return collectionsLoadedMsg{err: err.Error()}
 		}
 		return collectionsLoadedMsg{collections: cols}
+	}
+}
+
+func loadWorkspaces(svc *service.Service) tea.Cmd {
+	return func() tea.Msg {
+		infos, err := svc.ListWorkspaces(context.Background(), false)
+		if err != nil {
+			return workspacesLoadedMsg{err: err.Error()}
+		}
+		items := make([]workspaceItem, len(infos))
+		for i, w := range infos {
+			items[i] = workspaceItem{
+				name:            w.Name,
+				description:     w.Description,
+				status:          w.Status,
+				createdAt:       w.CreatedAt,
+				articleCount:    w.ArticleCount,
+				collectionCount: w.CollectionCount,
+				resourceCount:   w.ResourceCount,
+				outcomeCount:    w.OutcomeCount,
+				hasSystem:       w.HasSystem,
+				hasHistory:      w.HasHistory,
+				chatProfile:     w.ChatConfig.Profile,
+				chatStrategy:    w.ChatConfig.Strategy,
+				articles:        w.Articles,
+				collectionSlugs: w.CollectionSlugs,
+				expandedCols:    make(map[string]bool),
+			}
+		}
+		return workspacesLoadedMsg{items: items}
 	}
 }
 
@@ -461,6 +585,70 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 // SaveHistory persists the command history to disk. Call after p.Run() exits.
 func (m Model) SaveHistory() {
 	saveCommandHistory(historyPath(m.cfg.DataRoot), m.inputHistory)
+}
+
+// buildWsRows rebuilds the flat workspace tree from workspaceItems expand state.
+// Article titles are looked up from navItemsAll. Call after any expand/collapse
+// or after workspaceItems is set.
+func (m Model) buildWsRows() []wsRow {
+	// Build slug→title map from navItemsAll.
+	titleOf := make(map[string]string, len(m.navItemsAll))
+	for _, item := range m.navItemsAll {
+		titleOf[item.id] = item.title
+	}
+
+	var rows []wsRow
+	for i, ws := range m.workspaceItems {
+		arrow := "▶ "
+		if ws.expanded {
+			arrow = "▼ "
+		}
+		_ = arrow // used in view, not here — just drive expansion
+		rows = append(rows, wsRow{kind: wsRowWorkspace, wsIdx: i})
+		if !ws.expanded {
+			continue
+		}
+
+		// Collections group — each collection shows ALL its articles globally (not intersected with ws.articles).
+		rows = append(rows, wsRow{kind: wsRowCollectionsGroup, wsIdx: i, count: len(ws.collectionSlugs)})
+		if ws.collectionsExpanded {
+			for _, colSlug := range ws.collectionSlugs {
+				// Gather all articles in this collection globally.
+				var colArticles []navItem
+				for _, item := range m.navItemsAll {
+					for _, c := range item.collections {
+						if c == colSlug {
+							colArticles = append(colArticles, item)
+							break
+						}
+					}
+				}
+				rows = append(rows, wsRow{kind: wsRowCollection, wsIdx: i, colSlug: colSlug, count: len(colArticles)})
+				if ws.expandedCols[colSlug] {
+					for _, item := range colArticles {
+						title := item.title
+						if title == "" {
+							title = item.id
+						}
+						rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, colSlug: colSlug, slug: item.id, title: title})
+					}
+				}
+			}
+		}
+
+		// Articles group
+		rows = append(rows, wsRow{kind: wsRowArticlesGroup, wsIdx: i, count: len(ws.articles)})
+		if ws.articlesExpanded {
+			for _, slug := range ws.articles {
+				title := titleOf[slug]
+				if title == "" {
+					title = slug
+				}
+				rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, slug: slug, title: title})
+			}
+		}
+	}
+	return rows
 }
 
 // Init implements tea.Model.

@@ -202,6 +202,8 @@ type WorkspaceInfo struct {
 	HasSystem       bool
 	HasHistory      bool
 	ChatConfig      config.ChatConfig
+	Articles        []string // article slugs
+	CollectionSlugs []string // collection slugs
 }
 
 // CollectionInfo describes a collection with article count.
