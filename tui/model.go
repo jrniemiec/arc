@@ -8,6 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jrniemiec/arc/chat"
+	chatengine "github.com/jrniemiec/arc/chat/engine"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/service"
 	"github.com/jrniemiec/arc/store"
@@ -288,6 +290,24 @@ type Model struct {
 	// Pending confirmation (/delete)
 	pendingConfirm    func() tea.Cmd // action to run on "yes"
 	pendingConfirmMsg string         // message shown while waiting
+
+	// Chat mode
+	chatMode           bool                  // true when workspace chat is active
+	chatEngine         *chatengine.Engine    // nil until first message is sent (lazy init)
+	chatWorkspace      string                // name of the workspace being chatted with
+	chatDisplayLines   []chatLine            // rendered conversation lines (for display)
+	chatScroll         int                   // scroll offset into chatDisplayLines
+	chatStreaming       bool                  // true while LLM response is in flight
+	chatStreamBuf      string                // accumulated streaming response text
+	chatCancelStream   context.CancelFunc    // cancels the in-flight chat request
+	chatLastUsage      *chat.Usage           // per-turn token counts (nil until first response)
+	chatLastElapsed    time.Duration         // per-turn elapsed time
+	chatAutoScroll     bool                  // auto-scroll to bottom (true unless user scrolled up)
+	chatPendingPrompt  string                // prompt queued before engine is initialized
+	chatRawMsgs        []chat.Message        // history msgs for display before engine is ready
+	chatArticleCount   int                   // total articles in workspace (populated by loadChatHistoryCmd)
+	chatRagMode        string                // effective RAG mode for this workspace ("open"/"strict"/"hybrid")
+	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
 }
 
 // cmdCompletion is one entry in the command completion popup.
@@ -342,8 +362,21 @@ var workspaceCommands = []cmdCompletion{
 	{"/describe", "<text>", "set workspace description"},
 }
 
+// chatCommands are available when workspace chat mode is active.
+var chatCommands = []cmdCompletion{
+	{"/clear", "", "clear conversation history"},
+	{"/stats", "", "show session token usage and cost"},
+	{"/system", "", "print system prompt (includes RAG + knowledge base)"},
+	{"/meta", "", "show workspace details"},
+	{"/save", "[filename]", "save session to outcomes/<filename>.md"},
+	{"/help", "", "show chat commands"},
+}
+
 // allCommands returns global commands plus context-specific commands for the active sub-tab.
 func (m *Model) allCommands() []cmdCompletion {
+	if m.chatMode {
+		return chatCommands
+	}
 	if m.activeTab != tabLibrary {
 		return globalCommands
 	}
@@ -398,6 +431,33 @@ type collectionArticlesLoadedMsg struct {
 	items  []navItem
 	err    string
 	rowIdx int // index of the header row that triggered this load
+}
+
+// chatHistoryLoadedMsg signals that workspace chat history has been read from disk.
+type chatHistoryLoadedMsg struct {
+	workspace    string
+	msgs         []chat.Message
+	err          string
+	focus        bool   // true = user explicitly selected this workspace (Enter/click), switch focus to command pane
+	articleCount int    // total articles in workspace (direct + via collections)
+	ragMode      string // effective RAG mode ("open" / "strict" / "hybrid")
+}
+
+// chatReadyMsg signals that the chat engine has been constructed.
+type chatReadyMsg struct {
+	engine    *chatengine.Engine
+	workspace string
+	err       string
+}
+
+// chatStreamDeltaMsg delivers a token fragment from the streaming LLM response.
+type chatStreamDeltaMsg string
+
+// chatStreamDoneMsg signals that the streaming response is complete.
+type chatStreamDoneMsg struct {
+	usage   chat.Usage
+	elapsed time.Duration
+	err     string
 }
 
 type cmdDoneMsg struct {
@@ -566,6 +626,7 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 	ApplyTheme(themeMode)
 	AdjustThemeForTerminal()
 
+	sendFn := func(tea.Msg) {} // placeholder, overwritten by SetProgramSend
 	m := Model{
 		activeTab:       tabLibrary,
 		focus:           paneNav,
@@ -577,8 +638,18 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		inputHistoryIdx: -1,
 		cmdCompleteIdx:  -1,
 		paramIdx:        -1,
+		chatAutoScroll:  true,
+		programSend:     &sendFn,
 	}
 	return m
+}
+
+// SetProgramSend stores a closure that sends messages into the tea.Program.
+// Must be called after tea.NewProgram but before p.Run() so async goroutines
+// (streaming) can deliver messages. Uses a shared pointer so the value is
+// visible inside bubbletea's copy of the Model.
+func (m *Model) SetProgramSend(send func(tea.Msg)) {
+	*m.programSend = send
 }
 
 // SaveHistory persists the command history to disk. Call after p.Run() exits.

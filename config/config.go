@@ -83,6 +83,16 @@ type ChatConfig struct {
 	// messages in the summarize strategy. The remainder is covered by the summary.
 	// Default: 0.4 (40% verbatim, 60% summary).
 	VerbatimRatio float64 `json:"verbatim_ratio"`
+
+	// RAGMode controls how the LLM uses the injected knowledge base.
+	// Options: "open" (default — no instruction), "strict", "hybrid".
+	// Use `arc workspace chat-config --list-rag-modes` to see all modes and their instructions.
+	RAGMode string `json:"rag_mode"`
+
+	// RAGInstruction overrides the default instruction text for the selected RAGMode.
+	// When set, this text is used instead of the built-in instruction for the mode.
+	// When empty, the built-in instruction for RAGMode is used.
+	RAGInstruction string `json:"rag_instruction,omitempty"`
 }
 
 // Profile describes one LLM provider+model combination.
@@ -429,6 +439,7 @@ func Default() Config {
 			MaxOutputTokens: 0,
 			MaxUserMessages: 50,
 			VerbatimRatio:   0.4,
+			RAGMode:         "open",
 		},
 		AgentPath: filepath.Join(dataRoot, "agent"),
 		LogPath:   filepath.Join(dataRoot, "arc.log"),
@@ -571,6 +582,12 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Chat.VerbatimRatio != 0 {
 		cfg.Chat.VerbatimRatio = overlay.Chat.VerbatimRatio
+	}
+	if overlay.Chat.RAGMode != "" {
+		cfg.Chat.RAGMode = overlay.Chat.RAGMode
+	}
+	if overlay.Chat.RAGInstruction != "" {
+		cfg.Chat.RAGInstruction = overlay.Chat.RAGInstruction
 	}
 	if overlay.LogPath != "" {
 		cfg.LogPath = overlay.LogPath

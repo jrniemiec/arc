@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,20 @@ func New(cfg config.Config, workspaceName, profileName string) (*Engine, error) 
 	systemPrompt, err := st.LoadSystem()
 	if err != nil {
 		return nil, fmt.Errorf("load system: %w", err)
+	}
+
+	// Build RAG prefix from workspace corpus and prepend to system prompt.
+	ragInstruction := chat.RAGModeInstruction(chatCfg.RAGMode, chatCfg.RAGInstruction)
+	ragPrefix, err := chat.BuildRAGContext(cfg, workspaceName, ragInstruction)
+	if err != nil {
+		return nil, fmt.Errorf("build RAG context: %w", err)
+	}
+	if ragPrefix != "" {
+		if systemPrompt != "" {
+			systemPrompt = strings.TrimSpace(systemPrompt) + "\n\n" + ragPrefix
+		} else {
+			systemPrompt = ragPrefix
+		}
 	}
 
 	return &Engine{

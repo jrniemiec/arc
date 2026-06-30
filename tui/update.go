@@ -39,7 +39,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case spinnerTickMsg:
-		m.spinnerFrame = (m.spinnerFrame + 1) % 10
+		m.spinnerFrame++
 		// Blink cursor at ~400ms (every 4 ticks of 100ms), only when command pane focused.
 		if m.spinnerFrame%4 == 0 {
 			if m.focus == paneCommand {
@@ -47,6 +47,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.cursorVisible = false
 			}
+		}
+		// During streaming, rebuild chat lines on each tick to animate wave + show new content.
+		if m.chatMode && m.chatStreaming {
+			rightW := m.width - m.navWidth() - 1
+			m.rebuildChatLines(rightW)
+			chatViewH := m.height - 6 - m.completionCount() - 2
+			m.chatAutoScrollToBottom(chatViewH)
 		}
 		cmds = append(cmds, spinnerTick())
 
@@ -138,6 +145,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.wsScroll = 0
 		}
 		m.workspacesLoaded = true
+		// Auto-load history for first workspace if on Workspaces sub-tab.
+		if m.navSubTab == navSubTabWorkspaces {
+			cmds = append(cmds, m.triggerWorkspaceChatLoad())
+		}
 
 	case statsLoadedMsg:
 		if msg.err == "" {
@@ -189,6 +200,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.contentScroll = 0
 		m.contentLoading = false
 
+	case chatHistoryLoadedMsg:
+		if msg.err != "" {
+			m.statusMsg = "✗ " + msg.err
+		} else {
+			// Cancel any in-flight stream from a previous workspace.
+			if m.chatCancelStream != nil {
+				m.chatCancelStream()
+				m.chatCancelStream = nil
+			}
+			m.chatMode = true
+			m.chatEngine = nil       // lazy — engine init deferred to first message
+			m.chatPendingPrompt = "" // clear any pending prompt from previous workspace
+			m.chatWorkspace = msg.workspace
+			m.chatRawMsgs = msg.msgs
+			m.chatArticleCount = msg.articleCount
+			m.chatRagMode = msg.ragMode
+			m.chatAutoScroll = true
+			m.chatStreaming = false
+			m.chatStreamBuf = ""
+			m.chatLastUsage = nil
+			m.chatLastElapsed = 0
+			if msg.focus {
+				m.focus = paneCommand
+				m.cursorVisible = true
+			}
+			rightW := m.width - m.navWidth() - 1
+			m.rebuildChatLines(rightW)
+			chatViewH := m.height - 6 - m.completionCount() - 2
+			m.chatAutoScrollToBottom(chatViewH)
+			m.statusMsg = ""
+		}
+
+	case chatReadyMsg:
+		if msg.err != "" {
+			// Only show error if still on the same workspace.
+			if m.chatWorkspace == msg.workspace {
+				m.statusMsg = "✗ chat: " + msg.err
+				m.setStatusLines([]string{"Chat initialization failed:", msg.err})
+			}
+		} else if m.chatMode && m.chatWorkspace == msg.workspace {
+			// Only apply if user hasn't navigated away.
+			m.chatEngine = msg.engine
+			// Sync raw msgs from engine history.
+			m.chatRawMsgs = msg.engine.History().Msgs
+			rightW := m.width - m.navWidth() - 1
+			m.rebuildChatLines(rightW)
+			m.statusMsg = ""
+			// If a prompt was queued for this workspace, send it now.
+			if m.chatPendingPrompt != "" {
+				prompt := m.chatPendingPrompt
+				m.chatPendingPrompt = ""
+				cmds = append(cmds, m.sendChatMsg(prompt))
+			}
+		}
+
+	case chatStreamDeltaMsg:
+		m.chatStreamBuf += string(msg)
+		rightW := m.width - m.navWidth() - 1
+		m.rebuildChatLines(rightW)
+		chatViewH := m.height - 6 - m.completionCount() - 2 // -2 for chat header+sep
+		m.chatAutoScrollToBottom(chatViewH)
+
+	case chatStreamDoneMsg:
+		m.chatStreaming = false
+		m.chatStreamBuf = ""
+		if m.chatCancelStream != nil {
+			m.chatCancelStream = nil
+		}
+		if msg.err != "" {
+			m.statusMsg = "✗ " + msg.err
+		} else {
+			usage := msg.usage
+			m.chatLastUsage = &usage
+			m.chatLastElapsed = msg.elapsed
+		}
+		rightW := m.width - m.navWidth() - 1
+		m.rebuildChatLines(rightW)
+		chatViewH := m.height - 6 - m.completionCount() - 2
+		m.chatAutoScrollToBottom(chatViewH)
+
 	case tea.KeyMsg:
 		cmds = append(cmds, m.handleKey(msg))
 
@@ -208,7 +299,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.selectionMode = true
 		// One final redraw shows the status message, then screen freezes.
 		return tea.DisableMouse
-	case key.Matches(msg, keys.Quit):
+	case key.Matches(msg, keys.Quit) && !(m.focus == paneCommand && msg.String() == "q"):
 		return tea.Quit
 	case key.Matches(msg, keys.Back):
 		m.cmdComplete = nil
@@ -221,6 +312,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.pendingConfirmMsg = ""
 		m.inputValue = ""
 		m.inputCursor = 0
+		// In chat mode, Esc always returns focus to command input — never exits chat.
+		// Use /exit or q to leave chat.
 		m.focus = paneCommand
 		m.cursorVisible = true
 		return nil
@@ -269,8 +362,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, keys.ContentTabPrev):
+		if m.chatMode {
+			m.exitChatMode()
+		}
 		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
 	case key.Matches(msg, keys.ContentTabNext):
+		if m.chatMode {
+			m.exitChatMode()
+		}
 		m.activeTab = (m.activeTab + 1) % tabCount
 	case key.Matches(msg, keys.NavDown), key.Matches(msg, keys.Select):
 		m.focus = paneNav
@@ -368,6 +467,7 @@ func (m *Model) navCursorUp() tea.Cmd {
 		if m.wsCursor > 0 {
 			m.wsCursor--
 			m.clampWsScroll()
+			return m.triggerWorkspaceChatLoad()
 		}
 	}
 	return nil
@@ -392,6 +492,7 @@ func (m *Model) navCursorDown() tea.Cmd {
 		if m.wsCursor < len(m.wsRows)-1 {
 			m.wsCursor++
 			m.clampWsScroll()
+			return m.triggerWorkspaceChatLoad()
 		}
 	}
 	return nil
@@ -542,16 +643,31 @@ func (m *Model) navSelect() tea.Cmd {
 			m.focus = paneContent
 		}
 	case navSubTabWorkspaces:
-		if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) && m.wsRows[m.wsCursor].kind == wsRowArticle {
-			return m.cmdViewArticle()
+		if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
+			return nil
 		}
-		m.wsToggleExpand()
+		row := m.wsRows[m.wsCursor]
+		switch row.kind {
+		case wsRowWorkspace:
+			// Enter on workspace → load history (engine init deferred to first message).
+			if row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+				ws := m.workspaceItems[row.wsIdx]
+				return m.loadChatHistoryCmd(ws.name, true)
+			}
+		case wsRowArticle:
+			return m.cmdViewArticle()
+		case wsRowCollection:
+			m.wsToggleExpand()
+		}
 	}
 	return nil
 }
 
 // switchNavSubTab switches to the given Library nav sub-tab.
 func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
+	if m.chatMode && sub != navSubTabWorkspaces {
+		m.exitChatMode()
+	}
 	m.navSubTab = sub
 	m.navRowCursor = 0
 	m.navRowScroll = 0
@@ -560,8 +676,12 @@ func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 	if sub == navSubTabCollections && !m.collectionsLoaded && m.svc != nil {
 		return loadCollectionsTree(m.svc)
 	}
-	if sub == navSubTabWorkspaces && !m.workspacesLoaded && m.svc != nil {
-		return loadWorkspaces(m.svc)
+	if sub == navSubTabWorkspaces && m.svc != nil {
+		if !m.workspacesLoaded {
+			return loadWorkspaces(m.svc)
+		}
+		// Already loaded — trigger history load for first workspace immediately.
+		return m.triggerWorkspaceChatLoad()
 	}
 	return nil
 }
@@ -600,6 +720,21 @@ func (m *Model) collapseCollection(rowIdx int) tea.Cmd {
 
 
 // triggerCollectionContentLoad loads content for the article under navRowCursor.
+// triggerWorkspaceChatLoad loads chat history if cursor is on a workspace row.
+func (m *Model) triggerWorkspaceChatLoad() tea.Cmd {
+	if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
+		return nil
+	}
+	row := m.wsRows[m.wsCursor]
+	if row.kind != wsRowWorkspace {
+		return nil
+	}
+	if row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		return nil
+	}
+	return m.loadChatHistoryCmd(m.workspaceItems[row.wsIdx].name, false)
+}
+
 func (m *Model) triggerCollectionContentLoad() tea.Cmd {
 	if m.navRowCursor < 0 || m.navRowCursor >= len(m.navRows) {
 		return nil
@@ -662,6 +797,9 @@ func (m *Model) wsToggleExpand() {
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
+	if m.chatMode {
+		return m.handleChatContentKey(msg)
+	}
 	switch {
 	case key.Matches(msg, keys.NavUp):
 		if m.contentScroll > 0 {
@@ -705,6 +843,53 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		return m.openCurrentURL()
 	case key.Matches(msg, keys.ToggleFav):
 		return m.cmdToggleFavorite()
+	}
+	return nil
+}
+
+// handleChatContentKey handles j/k/PgUp/PgDn in the content pane during chat mode.
+func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
+	chatViewH := m.height - 6 - m.completionCount() - 2
+	if chatViewH < 1 {
+		chatViewH = 1
+	}
+	maxScroll := len(m.chatDisplayLines) - chatViewH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	switch {
+	case key.Matches(msg, keys.NavUp):
+		if m.chatScroll > 0 {
+			m.chatScroll--
+			m.chatAutoScroll = false
+		}
+	case key.Matches(msg, keys.NavDown):
+		if m.chatScroll < maxScroll {
+			m.chatScroll++
+		}
+		if m.chatScroll >= maxScroll {
+			m.chatAutoScroll = true
+		}
+	case key.Matches(msg, keys.PageUp):
+		m.chatScroll -= chatViewH
+		if m.chatScroll < 0 {
+			m.chatScroll = 0
+		}
+		m.chatAutoScroll = false
+	case key.Matches(msg, keys.PageDown):
+		m.chatScroll += chatViewH
+		if m.chatScroll > maxScroll {
+			m.chatScroll = maxScroll
+		}
+		if m.chatScroll >= maxScroll {
+			m.chatAutoScroll = true
+		}
+	case key.Matches(msg, keys.Home):
+		m.chatScroll = 0
+		m.chatAutoScroll = false
+	case key.Matches(msg, keys.End):
+		m.chatScroll = maxScroll
+		m.chatAutoScroll = true
 	}
 	return nil
 }
@@ -761,6 +946,12 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			if m.cmdCompleteIdx > 0 {
 				m.cmdCompleteIdx--
 			}
+		} else if m.chatMode {
+			// Scroll chat up from command pane.
+			if m.chatScroll > 0 {
+				m.chatScroll--
+				m.chatAutoScroll = false
+			}
 		} else {
 			m.inputHistoryPrev()
 		}
@@ -773,8 +964,49 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			if m.cmdCompleteIdx < len(m.cmdComplete)-1 {
 				m.cmdCompleteIdx++
 			}
+		} else if m.chatMode {
+			// Scroll chat down from command pane.
+			chatViewH := m.height - 6 - m.completionCount() - 2
+			maxScroll := len(m.chatDisplayLines) - chatViewH
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.chatScroll < maxScroll {
+				m.chatScroll++
+			}
+			if m.chatScroll >= maxScroll {
+				m.chatAutoScroll = true
+			}
 		} else {
 			m.inputHistoryNext()
+		}
+	case tea.KeyPgUp:
+		if m.chatMode {
+			chatViewH := m.height - 6 - m.completionCount() - 2
+			if chatViewH < 1 {
+				chatViewH = 1
+			}
+			m.chatScroll -= chatViewH
+			if m.chatScroll < 0 {
+				m.chatScroll = 0
+			}
+			m.chatAutoScroll = false
+		}
+	case tea.KeyPgDown:
+		if m.chatMode {
+			chatViewH := m.height - 6 - m.completionCount() - 2
+			if chatViewH < 1 {
+				chatViewH = 1
+			}
+			maxScroll := len(m.chatDisplayLines) - chatViewH
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			m.chatScroll += chatViewH
+			if m.chatScroll > maxScroll {
+				m.chatScroll = maxScroll
+			}
+			m.chatAutoScroll = true
 		}
 	case tea.KeyEnter:
 		// Param picker: Enter fills selected value into input but does not execute.
@@ -815,6 +1047,22 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		if val != "" {
+			if m.chatMode {
+				if strings.HasPrefix(val, "/") {
+					return m.dispatchChatCommand(val)
+				}
+				if m.chatStreaming {
+					m.statusMsg = "waiting for response…"
+					return nil
+				}
+				if m.chatEngine == nil {
+					// Lazy init: queue prompt, start engine.
+					m.chatPendingPrompt = val
+					m.statusMsg = "initializing…"
+					return m.startChatCmd(m.chatWorkspace)
+				}
+				return m.sendChatMsg(val)
+			}
 			return m.dispatchCommand(val)
 		}
 	}
@@ -2549,6 +2797,25 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 		// Content pane wheel (right of divider).
 		if msg.X > m.dividerCol() {
+			if m.chatMode {
+				chatViewH := m.height - 6 - m.completionCount() - 2
+				if chatViewH < 1 {
+					chatViewH = 1
+				}
+				m.chatScroll += delta
+				if m.chatScroll < 0 {
+					m.chatScroll = 0
+				}
+				maxScroll := len(m.chatDisplayLines) - chatViewH
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.chatScroll > maxScroll {
+					m.chatScroll = maxScroll
+				}
+				m.chatAutoScroll = m.chatScroll >= maxScroll
+				return nil
+			}
 			m.contentScroll += delta
 			if m.contentScroll < 0 {
 				m.contentScroll = 0
@@ -2655,7 +2922,13 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 			m.wsCursor = idx
 			row := m.wsRows[idx]
 			switch row.kind {
-			case wsRowWorkspace, wsRowCollection:
+			case wsRowWorkspace:
+				// Click on workspace → load history (engine init deferred to first message).
+				if row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+					ws := m.workspaceItems[row.wsIdx]
+					return m.loadChatHistoryCmd(ws.name, true)
+				}
+			case wsRowCollection:
 				m.wsToggleExpand()
 			}
 		}

@@ -656,6 +656,9 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 
 // renderContentPane returns lines for the right content pane.
 func (m Model) renderContentPane(height, width int) []string {
+	if m.chatMode {
+		return m.renderChatPane(height, width)
+	}
 	switch m.activeTab {
 	case tabLibrary:
 		return m.renderContentLibrary(height, width)
@@ -1153,7 +1156,10 @@ func wordWrap(text string, maxWidth int) []string {
 // renderCommandInput renders the command input line with real text and cursor.
 func (m Model) renderCommandInput() string {
 	t := ActiveTheme
-	const promptStr = "> "
+	promptStr := "> "
+	if m.chatMode {
+		promptStr = m.chatWorkspace + "> "
+	}
 	prompt := fg(t.InputPrompt, promptStr)
 	promptW := len([]rune(promptStr))
 	availW := m.width - promptW
@@ -1300,9 +1306,12 @@ func (m Model) renderCompletionLines() []string {
 }
 
 // renderStatusLine renders the bottom status bar line.
-// Priority: selectionMode > pendingConfirmMsg > navFilter > statusMsg > empty.
+// Priority: selectionMode > chatMode > pendingConfirmMsg > navFilter > statusMsg > empty.
 func (m Model) renderStatusLine() string {
 	t := ActiveTheme
+	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
+		return m.renderChatStatusLine()
+	}
 	if m.selectionMode {
 		return fgBold(t.Accent, truncate(" selection mode — drag to select · Cmd+C to copy · Ctrl+\\ or Esc to exit", m.width))
 	}

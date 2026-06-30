@@ -50,6 +50,16 @@ type Theme struct {
 
 	// Favorite star
 	Favorite lipgloss.Color
+
+	// Streaming / chat activity
+	StreamingText lipgloss.Color
+
+	// Chat
+	ChatUser      lipgloss.Color // "you:" prefix
+	ChatAssistant lipgloss.Color // assistant message text
+	ChatHeader    lipgloss.Color // markdown heading text
+	ChatQuote     lipgloss.Color // blockquote text
+	ChatCode      lipgloss.Color // inline/block code text
 }
 
 // Nord is a cool-blues dark theme based on the Nord palette.
@@ -79,6 +89,13 @@ var Nord = Theme{
 	BoxBorder:  "#88C0D0", // nord8
 	Dimmed:     "#4C566A", // nord3
 	Favorite:   "#F5A623", // amber
+
+	StreamingText: "#88C0D0", // nord8 — light cyan
+	ChatUser:      "#A3BE8C", // nord14 — green
+	ChatAssistant: "#D8DEE9", // nord4 — soft white
+	ChatHeader:    "#88C0D0", // nord8 — cyan for headings
+	ChatQuote:     "#4C566A", // nord3 — dimmed for blockquotes
+	ChatCode:      "#EBCB8B", // nord13 — yellow for code
 }
 
 // ClaudeCode approximates the color palette used by Claude Code's TUI.
@@ -108,6 +125,13 @@ var ClaudeCode = Theme{
 	BoxBorder:  "#6598FF",
 	Dimmed:     "#505050",
 	Favorite:   "#F5A623", // amber
+
+	StreamingText: "#6598FF",
+	ChatUser:      "#88C0D0",
+	ChatAssistant: "#D7D7D7",
+	ChatHeader:    "#7AB4E8", // steel blue for headings
+	ChatQuote:     "#505050", // dimmed for blockquotes
+	ChatCode:      "#E5C07B", // warm yellow for code
 }
 
 // Light is for terminals with a light background.
@@ -137,6 +161,13 @@ var Light = Theme{
 	BoxBorder:  "#1A7AB0",
 	Dimmed:     "#9A9A9A",
 	Favorite:   "#B8860B", // dark goldenrod for light bg
+
+	StreamingText: "#1A7AB0",
+	ChatUser:      "#2D7A2D",
+	ChatAssistant: "#2E2E2E",
+	ChatHeader:    "#1A5E8A", // dark blue for headings
+	ChatQuote:     "#9A9A9A", // muted for blockquotes
+	ChatCode:      "#8A5E00", // dark amber for code
 }
 
 // ActiveTheme is the theme used by all view functions.

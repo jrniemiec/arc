@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jrniemiec/arc/chat"
 	chatengine "github.com/jrniemiec/arc/chat/engine"
 	"github.com/jrniemiec/arc/store/fs"
 )
@@ -59,6 +60,9 @@ func init() {
 	workspaceChatConfigCmd.Flags().Int("max-user-messages", 0, "tail strategy: past user turns to keep (0 = default 50)")
 	workspaceChatConfigCmd.Flags().String("summarizer-profile", "", "profile for history compaction in summarize strategy")
 	workspaceChatConfigCmd.Flags().Float64("verbatim-ratio", 0, "summarize strategy: fraction of budget kept verbatim (0 = default 0.4)")
+	workspaceChatConfigCmd.Flags().String("rag-mode", "", "set RAG mode: open|strict|hybrid")
+	workspaceChatConfigCmd.Flags().String("rag-instruction", "", "override the default instruction text for the selected RAG mode")
+	workspaceChatConfigCmd.Flags().Bool("list-rag-modes", false, "list available RAG modes and their default instructions")
 }
 
 var workspaceCmd = &cobra.Command{
@@ -596,6 +600,14 @@ var workspaceChatCmd = &cobra.Command{
 The system prompt is loaded from workspace system.txt. History persists across
 sessions in chat/history.json. Use /help inside the session for available commands.
 
+RAG modes control how the LLM uses the injected knowledge base:
+  open       No instruction — model freely blends corpus and own knowledge (default)
+  strict     Answer ONLY from the articles; say so if not covered
+  hybrid     Prioritize articles; explicitly label outside knowledge
+
+Set via: arc workspace chat-config <name> --rag-mode <mode>
+List all: arc workspace chat-config <name> --list-rag-modes
+
 Examples:
   arc workspace chat production-agents
   arc workspace chat myws --profile opus
@@ -776,11 +788,16 @@ Examples:
 const chatHelp = `Commands:
   /exit, /quit   end session
   /clear         clear conversation history
-  /system        print system prompt
+  /system        print system prompt (includes RAG instruction + knowledge base)
   /history       print conversation history
   /stats         show session token usage and cost
   /save [file]   save session to outcomes/<file>.md
   /help          show this help
+
+RAG modes (set via: arc workspace chat-config <name> --rag-mode <mode>):
+  open           no instruction — model freely blends corpus and own knowledge
+  strict         answer ONLY from the articles; say so if not covered
+  hybrid         prioritize articles; explicitly label outside knowledge
 `
 
 // saveChatOutcome writes the conversation history as a markdown file to outcomes/.
@@ -843,6 +860,21 @@ Examples:
   arc workspace chat-config myws --strategy token-budget --context-limit 8000`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Handle --list-rag-modes before anything else (doesn't need a workspace).
+		if listModes, _ := cmd.Flags().GetBool("list-rag-modes"); listModes {
+			w := cmd.OutOrStdout()
+			fmt.Fprintln(w, "Available RAG modes:")
+			fmt.Fprintln(w)
+			for _, m := range chat.ListRAGModes() {
+				instruction := "(no instruction — model freely blends corpus and own knowledge)"
+				if m.Instruction != "" {
+					instruction = m.Instruction
+				}
+				fmt.Fprintf(w, "  %-10s %s\n", m.Name, instruction)
+			}
+			return nil
+		}
+
 		name, err := resolveWorkspaceName(cmd, args[0])
 		if err != nil {
 			return err
@@ -856,10 +888,13 @@ Examples:
 		maxUserFlag, _ := cmd.Flags().GetInt("max-user-messages")
 		summProfileFlag, _ := cmd.Flags().GetString("summarizer-profile")
 		verbatimFlag, _ := cmd.Flags().GetFloat64("verbatim-ratio")
+		ragModeFlag, _ := cmd.Flags().GetString("rag-mode")
+		ragInstrFlag, _ := cmd.Flags().GetString("rag-instruction")
 		anySet := cmd.Flags().Changed("profile") || cmd.Flags().Changed("strategy") ||
 			cmd.Flags().Changed("context-limit") || cmd.Flags().Changed("max-output-tokens") ||
 			cmd.Flags().Changed("max-user-messages") || cmd.Flags().Changed("summarizer-profile") ||
-			cmd.Flags().Changed("verbatim-ratio")
+			cmd.Flags().Changed("verbatim-ratio") || cmd.Flags().Changed("rag-mode") ||
+			cmd.Flags().Changed("rag-instruction")
 
 		if anySet {
 			chatCfg, _ := fs.ReadChatConfig(cfg.DataRoot, name)
@@ -883,6 +918,12 @@ Examples:
 			}
 			if cmd.Flags().Changed("verbatim-ratio") {
 				chatCfg.VerbatimRatio = verbatimFlag
+			}
+			if cmd.Flags().Changed("rag-mode") {
+				chatCfg.RAGMode = ragModeFlag
+			}
+			if cmd.Flags().Changed("rag-instruction") {
+				chatCfg.RAGInstruction = ragInstrFlag
 			}
 			if err := fs.WriteChatConfig(cfg.DataRoot, name, chatCfg); err != nil {
 				return fmt.Errorf("write chat config: %w", err)
@@ -968,6 +1009,22 @@ Examples:
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "  %-22s %s\n", "verbatim_ratio", verbatimLine)
 		fmt.Fprintf(w, "  %-22s %s\n", "", "summarize strategy: fraction of budget kept as verbatim recent turns")
+		fmt.Fprintln(w)
+
+		ragModeLine := chatCfg.RAGMode
+		if ragModeLine == "" {
+			ragModeLine = "open  (default)"
+		}
+		fmt.Fprintf(w, "  %-22s %s\n", "rag_mode", ragModeLine)
+		fmt.Fprintf(w, "  %-22s %s\n", "", "open | strict | hybrid — use --list-rag-modes to see instructions")
+		fmt.Fprintln(w)
+
+		ragInstrLine := "(using default for mode)"
+		if chatCfg.RAGInstruction != "" {
+			ragInstrLine = chatCfg.RAGInstruction
+		}
+		fmt.Fprintf(w, "  %-22s %s\n", "rag_instruction", ragInstrLine)
+		fmt.Fprintf(w, "  %-22s %s\n", "", "custom instruction override — leave empty to use the mode default")
 		return nil
 	},
 }

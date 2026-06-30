@@ -27,6 +27,7 @@ var tuiCmd = &cobra.Command{
 		cleanup := arctui.SetupTerminal()
 		defer cleanup()
 		p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+		m.SetProgramSend(p.Send)
 
 		final, err := p.Run()
 		if fm, ok := final.(arctui.Model); ok {
