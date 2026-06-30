@@ -23,6 +23,7 @@ type keyMap struct {
 	Command    key.Binding // / — activate command input
 	Help       key.Binding // ? — help overlay
 	Open       key.Binding // o — open source URL in browser
+	View       key.Binding // v — view article in external terminal
 	MarkRead     key.Binding // r — mark article as read
 	MarkUnread   key.Binding // u — mark article as unread
 	ToggleFav    key.Binding // f — toggle favorite
@@ -94,6 +95,10 @@ var keys = keyMap{
 	Open: key.NewBinding(
 		key.WithKeys("o"),
 		key.WithHelp("o", "open in browser"),
+	),
+	View: key.NewBinding(
+		key.WithKeys("v"),
+		key.WithHelp("v", "view article in terminal"),
 	),
 	MarkRead: key.NewBinding(
 		key.WithKeys("r"),

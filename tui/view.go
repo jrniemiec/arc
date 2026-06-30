@@ -541,22 +541,10 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				label = fgBold(t.NavGroup, label)
 			}
 
-		case wsRowCollectionsGroup:
-			arrow := "  ▶ "
-			if ws.collectionsExpanded {
-				arrow = "  ▼ "
-			}
-			label = truncate(arrow+fmt.Sprintf("Collections (%d)", row.count), w-1)
-			if selected {
-				label = reverse(label)
-			} else {
-				label = fg(t.NavDimmed, label)
-			}
-
 		case wsRowCollection:
-			arrow := "    ▶ "
+			arrow := "  ▶ "
 			if ws.expandedCols[row.colSlug] {
-				arrow = "    ▼ "
+				arrow = "  ▼ "
 			}
 			label = truncate(arrow+row.colSlug+fmt.Sprintf(" (%d)", row.count), w-1)
 			if selected {
@@ -565,22 +553,10 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				label = fg(t.NavText, label)
 			}
 
-		case wsRowArticlesGroup:
-			arrow := "  ▶ "
-			if ws.articlesExpanded {
-				arrow = "  ▼ "
-			}
-			label = truncate(arrow+fmt.Sprintf("Articles (%d)", row.count), w-1)
-			if selected {
-				label = reverse(label)
-			} else {
-				label = fg(t.NavDimmed, label)
-			}
-
 		case wsRowArticle:
-			prefix := "      " // 6 spaces indent
+			prefix := "  " // 2 spaces indent (direct child)
 			if row.colSlug != "" {
-				prefix = "        " // 8 spaces under collection
+				prefix = "    " // 4 spaces under collection
 			}
 			dot := "• "
 			title := truncate(oneLine(row.title), w-len(prefix)-len(dot))
@@ -734,6 +710,17 @@ func (m Model) selectedNavItem() *navItem {
 			r := m.navRows[m.navRowCursor]
 			if r.kind == rowArticle && r.item != nil {
 				return r.item
+			}
+		}
+	case navSubTabWorkspaces:
+		if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
+			row := m.wsRows[m.wsCursor]
+			if row.kind == wsRowArticle && row.slug != "" {
+				for i := range m.navItemsAll {
+					if m.navItemsAll[i].id == row.slug {
+						return &m.navItemsAll[i]
+					}
+				}
 			}
 		}
 	}

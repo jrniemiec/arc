@@ -141,21 +141,17 @@ type workspaceItem struct {
 	collectionSlugs []string          // slugs
 
 	// expand state
-	expanded            bool
-	collectionsExpanded bool
-	articlesExpanded    bool
-	expandedCols        map[string]bool // collection slug → expanded
+	expanded     bool
+	expandedCols map[string]bool // collection slug → expanded
 }
 
 // wsRowKind distinguishes row types in the workspace tree.
 type wsRowKind int
 
 const (
-	wsRowWorkspace        wsRowKind = iota
-	wsRowCollectionsGroup           // "▶ Collections (N)"
-	wsRowCollection                 // one collection under Collections group
-	wsRowArticlesGroup              // "▶ Articles (N)"
-	wsRowArticle                    // one article (leaf)
+	wsRowWorkspace  wsRowKind = iota
+	wsRowCollection           // collection under workspace
+	wsRowArticle              // article (leaf)
 )
 
 // wsRow is one display row in the workspace foldable tree.
@@ -599,53 +595,41 @@ func (m Model) buildWsRows() []wsRow {
 
 	var rows []wsRow
 	for i, ws := range m.workspaceItems {
-		arrow := "▶ "
-		if ws.expanded {
-			arrow = "▼ "
-		}
-		_ = arrow // used in view, not here — just drive expansion
 		rows = append(rows, wsRow{kind: wsRowWorkspace, wsIdx: i})
 		if !ws.expanded {
 			continue
 		}
 
-		// Collections group — each collection shows ALL its articles globally (not intersected with ws.articles).
-		rows = append(rows, wsRow{kind: wsRowCollectionsGroup, wsIdx: i, count: len(ws.collectionSlugs)})
-		if ws.collectionsExpanded {
-			for _, colSlug := range ws.collectionSlugs {
-				// Gather all articles in this collection globally.
-				var colArticles []navItem
-				for _, item := range m.navItemsAll {
-					for _, c := range item.collections {
-						if c == colSlug {
-							colArticles = append(colArticles, item)
-							break
-						}
+		// Collections first — each collection shows ALL its articles globally.
+		for _, colSlug := range ws.collectionSlugs {
+			var colArticles []navItem
+			for _, item := range m.navItemsAll {
+				for _, c := range item.collections {
+					if c == colSlug {
+						colArticles = append(colArticles, item)
+						break
 					}
 				}
-				rows = append(rows, wsRow{kind: wsRowCollection, wsIdx: i, colSlug: colSlug, count: len(colArticles)})
-				if ws.expandedCols[colSlug] {
-					for _, item := range colArticles {
-						title := item.title
-						if title == "" {
-							title = item.id
-						}
-						rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, colSlug: colSlug, slug: item.id, title: title})
+			}
+			rows = append(rows, wsRow{kind: wsRowCollection, wsIdx: i, colSlug: colSlug, count: len(colArticles)})
+			if ws.expandedCols[colSlug] {
+				for _, item := range colArticles {
+					title := item.title
+					if title == "" {
+						title = item.id
 					}
+					rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, colSlug: colSlug, slug: item.id, title: title})
 				}
 			}
 		}
 
-		// Articles group
-		rows = append(rows, wsRow{kind: wsRowArticlesGroup, wsIdx: i, count: len(ws.articles)})
-		if ws.articlesExpanded {
-			for _, slug := range ws.articles {
-				title := titleOf[slug]
-				if title == "" {
-					title = slug
-				}
-				rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, slug: slug, title: title})
+		// Then articles directly.
+		for _, slug := range ws.articles {
+			title := titleOf[slug]
+			if title == "" {
+				title = slug
 			}
+			rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, slug: slug, title: title})
 		}
 	}
 	return rows

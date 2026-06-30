@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jrniemiec/arc/service"
+	storefs "github.com/jrniemiec/arc/store/fs"
 )
 
 // Update implements tea.Model.
@@ -315,6 +316,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case key.Matches(msg, keys.Open):
 		return m.openCurrentURL()
+	case key.Matches(msg, keys.View):
+		return m.cmdViewArticle()
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
@@ -538,6 +541,9 @@ func (m *Model) navSelect() tea.Cmd {
 			m.focus = paneContent
 		}
 	case navSubTabWorkspaces:
+		if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) && m.wsRows[m.wsCursor].kind == wsRowArticle {
+			return m.cmdViewArticle()
+		}
 		m.wsToggleExpand()
 	}
 	return nil
@@ -644,15 +650,11 @@ func (m *Model) wsToggleExpand() {
 	switch row.kind {
 	case wsRowWorkspace:
 		ws.expanded = !ws.expanded
-	case wsRowCollectionsGroup:
-		ws.collectionsExpanded = !ws.collectionsExpanded
 	case wsRowCollection:
 		if ws.expandedCols == nil {
 			ws.expandedCols = make(map[string]bool)
 		}
 		ws.expandedCols[row.colSlug] = !ws.expandedCols[row.colSlug]
-	case wsRowArticlesGroup:
-		ws.articlesExpanded = !ws.articlesExpanded
 	}
 	m.wsRows = m.buildWsRows()
 	m.clampWsScroll()
@@ -1905,6 +1907,93 @@ func (m *Model) cmdLog() tea.Cmd {
 	return nil
 }
 
+// cmdViewArticle opens the selected article's flash/summary/body in an external
+// terminal window using less. The viewer auto-exits when arc exits (PID poll).
+func (m *Model) cmdViewArticle() tea.Cmd {
+	item := m.selectedNavItem()
+	if item == nil {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	if item.root == "" {
+		m.statusMsg = "✗ article has no local files"
+		return nil
+	}
+
+	// Resolve file paths.
+	files := storefs.ProbeFiles(item.root)
+	files.Summary = storefs.ResolveSummary(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	files.Flash = storefs.ResolveFlash(item.root, m.cfg.PreferredModels)
+
+	// Collect files in display order: Flash → Summary → Body.
+	type viewPart struct {
+		label string
+		path  string
+	}
+	var parts []viewPart
+	if files.Flash != "" {
+		parts = append(parts, viewPart{"Flash", files.Flash})
+	}
+	if files.Summary != "" {
+		parts = append(parts, viewPart{"Summary", files.Summary})
+	}
+	if files.Body != "" {
+		parts = append(parts, viewPart{"Body", files.Body})
+	}
+	if len(parts) == 0 {
+		m.statusMsg = "✗ no content files available"
+		return nil
+	}
+
+	pid := os.Getpid()
+	scriptPath := fmt.Sprintf("%s/arc-view-%d-%s.sh", os.TempDir(), pid, item.id)
+
+	// Build a script that concatenates files with labeled dividers, pipes to less,
+	// and exits when the parent arc process dies.
+	var catParts string
+	for i, p := range parts {
+		if i > 0 {
+			catParts += "echo ''; "
+		}
+		// ── Label ────────────────────────────────
+		pad := 60 - 4 - len(p.label) - 1 // 4 = "── ", 1 = " "
+		if pad < 3 {
+			pad = 3
+		}
+		catParts += fmt.Sprintf("echo '── %s %s'; echo ''; ", p.label, strings.Repeat("─", pad))
+		catParts += fmt.Sprintf("cat %q; ", p.path)
+	}
+
+	script := fmt.Sprintf(
+		"#!/bin/bash\ntrap 'rm -f %q' EXIT\n"+
+			"# Background watcher: exit when parent arc process dies.\n"+
+			"(while kill -0 %d 2>/dev/null; do sleep 1; done; kill $$ 2>/dev/null) &\n"+
+			"{ %s } | less -R\n",
+		scriptPath, pid, catParts,
+	)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		m.statusMsg = fmt.Sprintf("✗ view: could not write script: %v", err)
+		return nil
+	}
+
+	var appleScript string
+	switch ActiveTerminal {
+	case TermITerm2:
+		appleScript = fmt.Sprintf(
+			`tell application "iTerm2" to create window with default profile command %q`,
+			scriptPath,
+		)
+	default:
+		appleScript = fmt.Sprintf(
+			`tell application "Terminal" to do script %q`,
+			scriptPath,
+		)
+	}
+	go exec.Command("osascript", "-e", appleScript).Run() //nolint:errcheck
+	m.statusMsg = "opened viewer for " + item.id
+	return nil
+}
+
 // cmdReprocess regenerates summary/flash for the current article.
 func (m *Model) cmdReprocess() tea.Cmd {
 	sel := m.selectedNavItem()
@@ -2212,6 +2301,7 @@ var helpGroups = []struct {
 		{"u", "", "mark article as unread"},
 		{"f", "", "toggle favorite"},
 		{"o", "", "open source URL in browser"},
+		{"v", "", "view article in external terminal"},
 		{"D", "", "delete current item"},
 		{"/", "", "open command input"},
 		{"?", "", "show key bindings"},
@@ -2512,6 +2602,16 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 		if idx >= 0 && idx < len(m.navRows) {
 			m.navRowCursor = idx
 			return m.triggerCollectionContentLoad()
+		}
+	case navSubTabWorkspaces:
+		idx := m.wsScroll + (y - contentStartRow)
+		if idx >= 0 && idx < len(m.wsRows) {
+			m.wsCursor = idx
+			row := m.wsRows[idx]
+			switch row.kind {
+			case wsRowWorkspace, wsRowCollection:
+				m.wsToggleExpand()
+			}
 		}
 	}
 	return nil
