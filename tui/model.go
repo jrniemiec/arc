@@ -610,6 +610,28 @@ func (m *Model) setStatusLines(lines []string) {
 }
 
 // completionCount returns the number of lines currently expanding the status area.
+// chatBuildWidth returns the width to use when rebuilding chat display lines.
+// In boxed mode (paneContent focus) 4 chars are reserved for "│ " and " │".
+func (m *Model) chatBuildWidth() int {
+	w := m.width - m.navWidth() - 1
+	if m.focus == paneContent {
+		w -= 4
+	}
+	if w < 10 {
+		w = 10
+	}
+	return w
+}
+
+// chatTotalLines returns the number of scrollable lines for the chat pane.
+// In boxed mode (paneContent focus) this includes the virtual box border lines.
+func (m *Model) chatTotalLines() int {
+	if vlines := m.buildChatVLines(); vlines != nil {
+		return len(vlines)
+	}
+	return len(m.chatDisplayLines)
+}
+
 func (m *Model) completionCount() int {
 	if len(m.cmdComplete) > 0 {
 		return len(m.cmdComplete)

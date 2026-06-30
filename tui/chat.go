@@ -362,6 +362,85 @@ func (m *Model) rebuildChatLines(width int) {
 
 // ── Rendering ───────────────────────────────────────────────────────────────
 
+// colorChatLine applies color/bold to a plain-text chatLine.
+// text must already be truncated to the desired display width before calling.
+func colorChatLine(cl chatLine, t Theme) string {
+	switch cl.role {
+	case chatLineUser:
+		return fgBold(t.ChatUser, cl.text)
+	case chatLineAssistant:
+		return fg(t.ChatAssistant, cl.text)
+	case chatLineHeader:
+		return fgBold(t.ChatHeader, cl.text)
+	case chatLineQuote:
+		return fg(t.ChatQuote, "│ ") + fg(t.ChatAssistant, cl.text)
+	case chatLineCode:
+		return fg(t.ChatCode, cl.text)
+	case chatLineNote:
+		return fg(t.ContentDimmed, cl.text)
+	default:
+		return ""
+	}
+}
+
+// chatVirtualLines builds the virtual display list when in boxed mode
+// (focus == paneContent). Each exchange is wrapped in a rounded box.
+// Returns nil when not in boxed mode.
+type chatVLine struct {
+	isBoxTop    bool
+	isBoxBottom bool
+	isSep       bool // blank line between boxes
+	contentIdx  int  // index into chatDisplayLines; -1 for non-content lines
+}
+
+func (m Model) buildChatVLines() []chatVLine {
+	if !(m.focus == paneContent) {
+		return nil
+	}
+	dl := m.chatDisplayLines
+	n := len(dl)
+	if n == 0 {
+		return nil
+	}
+
+	// Find the start index of each exchange (each run of chatLineUser).
+	var starts []int
+	for i, cl := range dl {
+		if cl.role == chatLineUser && (i == 0 || dl[i-1].role != chatLineUser) {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) == 0 {
+		return nil
+	}
+
+	var vlines []chatVLine
+	for e, start := range starts {
+		var end int
+		if e+1 < len(starts) {
+			end = starts[e+1]
+		} else {
+			end = n
+		}
+		// Trim trailing blank lines from this exchange's content.
+		trimEnd := end
+		for trimEnd > start && dl[trimEnd-1].role == chatLineBlank {
+			trimEnd--
+		}
+
+		vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1})
+		for i := start; i < trimEnd; i++ {
+			vlines = append(vlines, chatVLine{contentIdx: i})
+		}
+		vlines = append(vlines, chatVLine{isBoxBottom: true, contentIdx: -1})
+		// Blank separator between boxes (not after the last one).
+		if e < len(starts)-1 {
+			vlines = append(vlines, chatVLine{isSep: true, contentIdx: -1})
+		}
+	}
+	return vlines
+}
+
 // renderChatPane renders the chat conversation in the right content pane.
 func (m Model) renderChatPane(height, width int) []string {
 	t := ActiveTheme
@@ -400,7 +479,81 @@ func (m Model) renderChatPane(height, width int) []string {
 		return lines[:height]
 	}
 
-	// Render visible portion of chatDisplayLines with scroll.
+	// Boxed mode (focus == paneContent): wrap each exchange in a rounded box.
+	// Layout: │ {content padded to innerW} │
+	// innerW = width - 4  ("│ " = 2 left, " │" = 2 right)
+	if vlines := m.buildChatVLines(); vlines != nil {
+		innerW := width - 4
+		if innerW < 4 {
+			innerW = 4
+		}
+		topRule := fg(t.BoxBorder, "╭"+strings.Repeat("─", width-2)+"╮")
+		botRule := fg(t.BoxBorder, "╰"+strings.Repeat("─", width-2)+"╯")
+		borderL := fg(t.BoxBorder, "│ ")
+		borderR := fg(t.BoxBorder, " │")
+
+		total := len(vlines)
+		start := m.chatScroll
+		if start > total-chatH {
+			start = total - chatH
+		}
+		if start < 0 {
+			start = 0
+		}
+		end := start + chatH
+		if end > total {
+			end = total
+		}
+
+		for _, vl := range vlines[start:end] {
+			switch {
+			case vl.isBoxTop:
+				lines = append(lines, topRule)
+			case vl.isBoxBottom:
+				lines = append(lines, botRule)
+			case vl.isSep:
+				lines = append(lines, "")
+			default:
+				cl := m.chatDisplayLines[vl.contentIdx]
+				// For blank lines just emit an empty padded row.
+				if cl.role == chatLineBlank || cl.text == "" {
+					lines = append(lines, borderL+strings.Repeat(" ", innerW)+borderR)
+					continue
+				}
+				// colorChatLine for chatLineQuote prepends "│ " (2 visual cols),
+				// so the text budget is innerW-2.
+				budget := innerW
+				if cl.role == chatLineQuote {
+					budget = innerW - 2
+					if budget < 2 {
+						budget = 2
+					}
+				}
+				text := cl.text
+				// Use visual width (handles wide chars, emoji) for truncation/padding.
+				visW := lipgloss.Width(text)
+				if visW > budget {
+					// Trim runes until visual width fits.
+					runes := []rune(text)
+					for len(runes) > 0 && lipgloss.Width(string(runes)) > budget-1 {
+						runes = runes[:len(runes)-1]
+					}
+					text = string(runes) + "…"
+				} else if visW < budget {
+					text = text + strings.Repeat(" ", budget-visW)
+				}
+				colored := colorChatLine(chatLine{role: cl.role, text: text}, t)
+				lines = append(lines, borderL+colored+borderR)
+			}
+		}
+
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+
+	// Flat mode (no boxes): plain scroll over chatDisplayLines.
 	totalLines := len(m.chatDisplayLines)
 	start := m.chatScroll
 	if start > totalLines-chatH {
@@ -415,23 +568,7 @@ func (m Model) renderChatPane(height, width int) []string {
 	}
 
 	for i := start; i < end; i++ {
-		cl := m.chatDisplayLines[i]
-		switch cl.role {
-		case chatLineUser:
-			lines = append(lines, fgBold(t.ChatUser, cl.text))
-		case chatLineAssistant:
-			lines = append(lines, fg(t.ChatAssistant, cl.text))
-		case chatLineHeader:
-			lines = append(lines, fgBold(t.ChatHeader, cl.text))
-		case chatLineQuote:
-			lines = append(lines, fg(t.ChatQuote, "│ ")+fg(t.ChatAssistant, cl.text))
-		case chatLineCode:
-			lines = append(lines, fg(t.ChatCode, cl.text))
-		case chatLineNote:
-			lines = append(lines, fg(t.ContentDimmed, cl.text))
-		default:
-			lines = append(lines, "")
-		}
+		lines = append(lines, colorChatLine(m.chatDisplayLines[i], t))
 	}
 
 	for len(lines) < height {
@@ -705,7 +842,11 @@ func (m *Model) chatAutoScrollToBottom(viewH int) {
 	if !m.chatAutoScroll {
 		return
 	}
-	maxScroll := len(m.chatDisplayLines) - viewH
+	total := len(m.chatDisplayLines)
+	if vlines := m.buildChatVLines(); vlines != nil {
+		total = len(vlines)
+	}
+	maxScroll := total - viewH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}

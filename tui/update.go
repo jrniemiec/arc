@@ -50,8 +50,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// During streaming, rebuild chat lines on each tick to animate wave + show new content.
 		if m.chatMode && m.chatStreaming {
-			rightW := m.width - m.navWidth() - 1
-			m.rebuildChatLines(rightW)
+			m.rebuildChatLines(m.chatBuildWidth())
 			chatViewH := m.height - 6 - m.completionCount() - 2
 			m.chatAutoScrollToBottom(chatViewH)
 		}
@@ -225,8 +224,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = paneCommand
 				m.cursorVisible = true
 			}
-			rightW := m.width - m.navWidth() - 1
-			m.rebuildChatLines(rightW)
+			m.rebuildChatLines(m.chatBuildWidth())
 			chatViewH := m.height - 6 - m.completionCount() - 2
 			m.chatAutoScrollToBottom(chatViewH)
 			m.statusMsg = ""
@@ -244,8 +242,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatEngine = msg.engine
 			// Sync raw msgs from engine history.
 			m.chatRawMsgs = msg.engine.History().Msgs
-			rightW := m.width - m.navWidth() - 1
-			m.rebuildChatLines(rightW)
+			m.rebuildChatLines(m.chatBuildWidth())
 			m.statusMsg = ""
 			// If a prompt was queued for this workspace, send it now.
 			if m.chatPendingPrompt != "" {
@@ -257,8 +254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatStreamDeltaMsg:
 		m.chatStreamBuf += string(msg)
-		rightW := m.width - m.navWidth() - 1
-		m.rebuildChatLines(rightW)
+		m.rebuildChatLines(m.chatBuildWidth())
 		chatViewH := m.height - 6 - m.completionCount() - 2 // -2 for chat header+sep
 		m.chatAutoScrollToBottom(chatViewH)
 
@@ -275,8 +271,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatLastUsage = &usage
 			m.chatLastElapsed = msg.elapsed
 		}
-		rightW := m.width - m.navWidth() - 1
-		m.rebuildChatLines(rightW)
+		m.rebuildChatLines(m.chatBuildWidth())
 		chatViewH := m.height - 6 - m.completionCount() - 2
 		m.chatAutoScrollToBottom(chatViewH)
 
@@ -332,11 +327,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		if m.focus == paneCommand {
 			m.cursorVisible = true
 		}
+		if m.chatMode {
+			m.rebuildChatLines(m.chatBuildWidth())
+		}
 		return nil
 	case key.Matches(msg, keys.PanePrev):
 		m.focus = (m.focus + 3) % 4 // +3 mod 4 = -1 mod 4
 		if m.focus == paneCommand {
 			m.cursorVisible = true
+		}
+		if m.chatMode {
+			m.rebuildChatLines(m.chatBuildWidth())
 		}
 		return nil
 	}
@@ -853,7 +854,7 @@ func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 	if chatViewH < 1 {
 		chatViewH = 1
 	}
-	maxScroll := len(m.chatDisplayLines) - chatViewH
+	maxScroll := m.chatTotalLines() - chatViewH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -967,7 +968,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		} else if m.chatMode {
 			// Scroll chat down from command pane.
 			chatViewH := m.height - 6 - m.completionCount() - 2
-			maxScroll := len(m.chatDisplayLines) - chatViewH
+			maxScroll := m.chatTotalLines() - chatViewH
 			if maxScroll < 0 {
 				maxScroll = 0
 			}
@@ -998,7 +999,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			if chatViewH < 1 {
 				chatViewH = 1
 			}
-			maxScroll := len(m.chatDisplayLines) - chatViewH
+			maxScroll := m.chatTotalLines() - chatViewH
 			if maxScroll < 0 {
 				maxScroll = 0
 			}
@@ -2806,7 +2807,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if m.chatScroll < 0 {
 					m.chatScroll = 0
 				}
-				maxScroll := len(m.chatDisplayLines) - chatViewH
+				maxScroll := m.chatTotalLines() - chatViewH
 				if maxScroll < 0 {
 					maxScroll = 0
 				}
@@ -2874,6 +2875,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			// Click in content pane.
 			m.focus = paneContent
+			if m.chatMode {
+				m.rebuildChatLines(m.chatBuildWidth())
+			}
 		}
 
 	case tea.MouseActionMotion:
