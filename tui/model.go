@@ -235,12 +235,13 @@ type Model struct {
 	collectionsErr    string
 
 	// Library nav — Workspaces sub-tab
-	workspaceItems   []workspaceItem
-	wsRows           []wsRow // flat tree rows rebuilt on expand/collapse
-	wsCursor         int
-	wsScroll         int
-	workspacesLoaded bool
-	workspacesErr    string
+	workspaceItems    []workspaceItem    // current (possibly filtered) list
+	workspaceItemsAll []workspaceItem    // unfiltered copy
+	wsRows            []wsRow            // flat tree rows rebuilt on expand/collapse
+	wsCursor          int
+	wsScroll          int
+	workspacesLoaded  bool
+	workspacesErr     string
 
 	// Content pane — single concatenated document: Flash → Summary → Body → Cards
 	contentScroll   int
@@ -333,6 +334,8 @@ var collectionCommands = []cmdCompletion{
 
 // workspaceCommands are available when the Workspaces sub-tab is active.
 var workspaceCommands = []cmdCompletion{
+	{"/search", "<query>", "filter workspaces by name/description"},
+	{"/clear", "", "clear active filter"},
 	{"/new", "<name>", "create a new workspace"},
 	{"/delete", "[name]", "delete workspace (selected or by name)"},
 	{"/rename", "<new-name>", "rename current workspace"},

@@ -131,6 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != "" {
 			m.workspacesErr = msg.err
 		} else {
+			m.workspaceItemsAll = msg.items
 			m.workspaceItems = msg.items
 			m.wsRows = m.buildWsRows()
 			m.wsCursor = 0
@@ -1241,6 +1242,9 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		switch sub {
+		case navSubTabWorkspaces:
+			m.filterWorkspaces(arg)
+			return nil
 		case navSubTabCollections:
 			m.filterCollections(arg)
 			return nil
@@ -1256,6 +1260,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	case "/clear":
 		switch sub {
+		case navSubTabWorkspaces:
+			m.workspaceItems = m.workspaceItemsAll
+			m.wsRows = m.buildWsRows()
+			m.wsCursor = 0
+			m.wsScroll = 0
+			m.navFilter = ""
+			m.focus = paneNav
+			m.statusMsg = "✓ filter cleared"
+			return nil
 		case navSubTabCollections:
 			m.navRows = m.navRowsAll
 			m.navRowCursor = 0
@@ -1496,6 +1509,37 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 }
 
 // filterCollections filters navRowsAll to collections matching query (slug/name/description).
+func (m *Model) filterWorkspaces(query string) {
+	q := strings.ToLower(query)
+	var filtered []workspaceItem
+	for _, ws := range m.workspaceItemsAll {
+		// Build searchable text: name, description, collection slugs, article slugs (split by -).
+		searchable := strings.ToLower(ws.name + " " + ws.description)
+		for _, col := range ws.collectionSlugs {
+			searchable += " " + strings.ToLower(strings.ReplaceAll(col, "-", " "))
+		}
+		for _, slug := range ws.articles {
+			searchable += " " + strings.ToLower(strings.ReplaceAll(slug, "-", " "))
+		}
+		if strings.Contains(searchable, q) {
+			filtered = append(filtered, ws)
+		}
+	}
+	m.workspaceItems = filtered
+	m.wsRows = m.buildWsRows()
+	m.wsCursor = 0
+	m.wsScroll = 0
+	m.focus = paneNav
+	n := len(filtered)
+	if n == 0 {
+		m.statusMsg = fmt.Sprintf("no workspaces matching %q", query)
+		m.navFilter = ""
+	} else {
+		m.navFilter = fmt.Sprintf("workspaces: %q · %d results  ·  /clear to reset", query, n)
+		m.statusMsg = ""
+	}
+}
+
 func (m *Model) filterCollections(query string) {
 	q := strings.ToLower(query)
 	var filtered []navRow
@@ -2272,6 +2316,8 @@ var helpGroups = []struct {
 		{"arc collections read", "<slug>", "read flash/summary across collection  (CLI only)"},
 	}},
 	{"workspace", []cmdCompletion{
+		{"/search", "<query>", "filter workspaces by name/description"},
+		{"/clear", "", "clear active filter"},
 		{"/new", "<name>", "create a new workspace"},
 		{"/delete", "", "delete current workspace"},
 		{"/rename", "<new-name>", "rename current workspace"},
