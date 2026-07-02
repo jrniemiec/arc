@@ -13,9 +13,11 @@ import (
 //
 // Layout:
 //
-//	<dataRoot>/workspaces/<name>/system.txt         ← workspace system prompt
-//	<dataRoot>/workspaces/<name>/chat/history.json  ← conversation history
-//	<dataRoot>/workspaces/<name>/chat/summary.txt   ← summarize strategy cache
+//	<dataRoot>/workspaces/<name>/system.txt         ← workspace system prompt (persona/instructions)
+//	<dataRoot>/workspaces/<name>/chat/history.json  ← conversation history (user + assistant turns)
+//	<dataRoot>/workspaces/<name>/chat/summary.txt   ← summarize strategy cache (compacted history)
+//
+// See local/CHAT_ARCHITECTURE.md for full details on how these files are used.
 type ChatStore struct {
 	dataRoot      string
 	workspaceName string

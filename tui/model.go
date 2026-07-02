@@ -365,6 +365,7 @@ var workspaceCommands = []cmdCompletion{
 // chatCommands are available when workspace chat mode is active.
 var chatCommands = []cmdCompletion{
 	{"/clear", "", "clear conversation history"},
+	{"/reload", "", "reset engine to pick up new articles/collections"},
 	{"/stats", "", "show session token usage and cost"},
 	{"/system", "", "print system prompt (includes RAG + knowledge base)"},
 	{"/meta", "", "show workspace details"},
@@ -461,14 +462,16 @@ type chatStreamDoneMsg struct {
 }
 
 type cmdDoneMsg struct {
-	statusMsg         string
-	statusLines       []string
-	err               string
-	reloadNav         bool      // true = reload article nav after completion
-	reloadCollections bool      // true = reload collections tree after completion
-	reloadWorkspaces  bool      // true = reload workspace list after completion
-	navItems          []navItem // non-nil = replace navItems with this
-	navFilter         string    // non-empty = set navFilter
+	statusMsg          string
+	statusLines        []string
+	err                string
+	reloadNav          bool      // true = reload article nav after completion
+	reloadCollections  bool      // true = reload collections tree after completion
+	reloadWorkspaces   bool      // true = reload workspace list after completion
+	navItems           []navItem // non-nil = replace navItems with this
+	navFilter          string    // non-empty = set navFilter
+	resetChatEngine    bool      // true = drop chatEngine for resetChatWorkspace (force re-init on next message)
+	resetChatWorkspace string    // workspace name whose engine should be reset
 }
 
 // ── Cmds ─────────────────────────────────────────────────────────────────────

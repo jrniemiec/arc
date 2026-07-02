@@ -190,6 +190,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = paneNav
 			cmds = append(cmds, loadWorkspaces(m.svc))
 		}
+		if msg.resetChatEngine && msg.resetChatWorkspace != "" &&
+			m.chatMode && m.chatWorkspace == msg.resetChatWorkspace {
+			m.chatEngine = nil
+			if m.statusMsg == "" {
+				m.statusMsg = "✓ context reloaded — engine will reinitialise on next message"
+			}
+		}
 
 	case contentLoadedMsg:
 		m.contentFiles = msg.files
@@ -1368,10 +1375,25 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 	case "/workspace":
 		return []cmdCompletion{
 			{cmd: "list", desc: "go to Workspaces sub-tab"},
-			{cmd: "new", desc: "<name>  create a new workspace"},
+			{cmd: "new", arg: "<name>", desc: "create a new workspace"},
 			{cmd: "delete", desc: "delete selected workspace"},
-			{cmd: "rename", desc: "<name>  rename selected workspace"},
-			{cmd: "describe", desc: "<text>  set workspace description"},
+			{cmd: "rename", arg: "<name>", desc: "rename selected workspace"},
+			{cmd: "describe", arg: "<text>", desc: "set workspace description"},
+			{cmd: "add", arg: "article|collection <slug>", desc: "add article or collection; resets chat engine"},
+			{cmd: "remove", arg: "article|collection <slug>", desc: "remove article or collection; resets chat engine"},
+			{cmd: "reload", desc: "reset chat engine to pick up corpus changes"},
+		}
+
+	case "/workspace add":
+		return []cmdCompletion{
+			{cmd: "article", arg: "<slug>", desc: "add article to selected workspace"},
+			{cmd: "collection", arg: "<slug>", desc: "add collection to selected workspace"},
+		}
+
+	case "/workspace remove":
+		return []cmdCompletion{
+			{cmd: "article", arg: "<slug>", desc: "remove article from selected workspace"},
+			{cmd: "collection", arg: "<slug>", desc: "remove collection from selected workspace"},
 		}
 
 	case "/help":
@@ -1749,6 +1771,10 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 			} else {
 				return tea.Batch(switchCmd, m.cmdDescribeWorkspace(arg))
 			}
+		case "add", "remove":
+			return tea.Batch(switchCmd, m.cmdWorkspaceMembership(verb, arg))
+		case "reload":
+			return tea.Batch(switchCmd, m.cmdWorkspaceReload())
 		default:
 			m.statusMsg = "✗ unknown workspace command: " + verb
 		}
@@ -2531,6 +2557,87 @@ func (m *Model) cmdDescribeWorkspace(text string) tea.Cmd {
 		}
 		return cmdDoneMsg{statusMsg: "✓ description updated for " + name, reloadWorkspaces: true}
 	}
+}
+
+// cmdWorkspaceMembership handles /workspace add|remove article|collection <slug>.
+// On success it resets the chat engine for the affected workspace so the next
+// message picks up the updated corpus. See local/CHAT_ARCHITECTURE.md.
+func (m *Model) cmdWorkspaceMembership(verb, arg string) tea.Cmd {
+	ws := m.selectedWorkspace()
+	if ws == nil {
+		m.statusMsg = "✗ no workspace selected"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	parts := strings.Fields(arg)
+	if len(parts) < 2 {
+		m.statusMsg = "usage: /workspace " + verb + " article|collection <slug>"
+		return nil
+	}
+	kind := strings.ToLower(parts[0])
+	slug := parts[1]
+	if kind != "article" && kind != "collection" {
+		m.statusMsg = "✗ specify 'article' or 'collection'"
+		return nil
+	}
+
+	wsName := ws.name
+	svc := m.svc
+	adding := verb == "add"
+
+	return func() tea.Msg {
+		var err error
+		var statusMsg string
+		switch {
+		case kind == "article" && adding:
+			err = svc.AddArticlesToWorkspace(context.Background(), wsName, []string{slug})
+			statusMsg = "✓ added article " + slug + " → " + wsName
+		case kind == "article" && !adding:
+			err = svc.RemoveArticlesFromWorkspace(context.Background(), wsName, []string{slug})
+			statusMsg = "✓ removed article " + slug + " from " + wsName
+		case kind == "collection" && adding:
+			err = svc.AddCollectionsToWorkspace(context.Background(), wsName, []string{slug})
+			statusMsg = "✓ added collection " + slug + " → " + wsName
+		case kind == "collection" && !adding:
+			err = svc.RemoveCollectionsFromWorkspace(context.Background(), wsName, []string{slug})
+			statusMsg = "✓ removed collection " + slug + " from " + wsName
+		}
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{
+			statusMsg:          statusMsg,
+			reloadWorkspaces:   true,
+			resetChatEngine:    true,
+			resetChatWorkspace: wsName,
+		}
+	}
+}
+
+// cmdWorkspaceReload drops the chat engine for the selected workspace so the
+// next message triggers a fresh engine init (rebuilding the RAG context).
+func (m *Model) cmdWorkspaceReload() tea.Cmd {
+	ws := m.selectedWorkspace()
+	if ws == nil {
+		// In chat mode, fall back to the active chat workspace.
+		if m.chatMode && m.chatWorkspace != "" {
+			m.chatEngine = nil
+			m.statusMsg = "✓ engine reset — will reinitialise on next message"
+			return nil
+		}
+		m.statusMsg = "✗ no workspace selected"
+		return nil
+	}
+	wsName := ws.name
+	// Apply immediately if this is the active chat workspace.
+	if m.chatMode && m.chatWorkspace == wsName {
+		m.chatEngine = nil
+	}
+	m.statusMsg = "✓ engine reset for " + wsName + " — will reinitialise on next message"
+	return nil
 }
 
 // helpGroups defines the command groups shown by /help.

@@ -73,6 +73,9 @@ type ChatResult struct {
 
 // New creates an Engine for the given workspace, loading history and system prompt.
 // profileName may be empty — falls back to chatCfg.Profile, then cfg.Ingest.FlashProfile.
+//
+// The system prompt is assembled once at init (system.txt + RAG instruction + knowledge base)
+// and sent unchanged on every LLM call. See local/CHAT_ARCHITECTURE.md for full details.
 func New(cfg config.Config, workspaceName, profileName string) (*Engine, error) {
 	// Resolve chat config (apply in-code defaults for fields missing from file).
 	rawChatCfg, _ := fs.ReadChatConfig(cfg.DataRoot, workspaceName)

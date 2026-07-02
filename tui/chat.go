@@ -390,7 +390,9 @@ type chatVLine struct {
 	isBoxTop    bool
 	isBoxBottom bool
 	isSep       bool // blank line between boxes
-	contentIdx  int  // index into chatDisplayLines; -1 for non-content lines
+	isMeta      bool // gray date/model line above box
+	metaText    string
+	contentIdx  int // index into chatDisplayLines; -1 for non-content lines
 }
 
 func (m Model) buildChatVLines() []chatVLine {
@@ -414,6 +416,43 @@ func (m Model) buildChatVLines() []chatVLine {
 		return nil
 	}
 
+	// Build exchange metadata (timestamp + model) from message history.
+	// Each pair of consecutive user+assistant messages is one exchange.
+	msgs := m.chatRawMsgs
+	if m.chatEngine != nil {
+		msgs = m.chatEngine.History().Msgs
+	}
+	type exchangeMeta struct {
+		ts      string
+		profile string
+	}
+	var metas []exchangeMeta
+	userIdx := 0
+	for i := 0; i < len(msgs); i++ {
+		if msgs[i].Role == chat.RoleUser {
+			meta := exchangeMeta{}
+			if !msgs[i].Time.IsZero() {
+				meta.ts = msgs[i].Time.Format("Jan 2, 2006 · 15:04")
+			}
+			// Look ahead for the assistant reply's profile.
+			for j := i + 1; j < len(msgs); j++ {
+				if msgs[j].Role == chat.RoleAssistant {
+					if msgs[j].Profile != "" {
+						meta.profile = msgs[j].Profile
+					}
+					break
+				}
+				if msgs[j].Role == chat.RoleUser {
+					break
+				}
+			}
+			if userIdx < len(starts) {
+				metas = append(metas, meta)
+			}
+			userIdx++
+		}
+	}
+
 	var vlines []chatVLine
 	for e, start := range starts {
 		var end int
@@ -429,6 +468,20 @@ func (m Model) buildChatVLines() []chatVLine {
 		}
 
 		vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1})
+
+		// Meta line (date · model) as first line inside the box.
+		if e < len(metas) {
+			meta := metas[e]
+			var parts []string
+			if meta.ts != "" {
+				parts = append(parts, meta.ts)
+			}
+			if meta.profile != "" {
+				parts = append(parts, meta.profile)
+			}
+			metaText := strings.Join(parts, "  ·  ")
+			vlines = append(vlines, chatVLine{isMeta: true, metaText: metaText, contentIdx: -1})
+		}
 		for i := start; i < trimEnd; i++ {
 			vlines = append(vlines, chatVLine{contentIdx: i})
 		}
@@ -454,14 +507,12 @@ func (m Model) renderChatPane(height, width int) []string {
 	header := fgBold(t.ContentTitle, m.chatWorkspace)
 	if m.chatEngine != nil {
 		header += fg(t.ContentDimmed, "  ·  "+m.chatEngine.Profile().Model)
-	} else {
-		header += fg(t.ContentDimmed, "  ·  type to start")
+		if m.chatRagMode != "" {
+			header += fg(t.ContentDimmed, "  ·  mode: "+m.chatRagMode)
+		}
 	}
 	header += fg(t.ContentDimmed, fmt.Sprintf("  ·  %d msgs", msgCount))
 	header += fg(t.ContentDimmed, fmt.Sprintf("  ·  %d articles", m.chatArticleCount))
-	if m.chatRagMode != "" {
-		header += fg(t.ContentDimmed, "  ·  "+m.chatRagMode)
-	}
 	lines = append(lines, truncate(header, width-1))
 	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
 
@@ -507,6 +558,15 @@ func (m Model) renderChatPane(height, width int) []string {
 
 		for _, vl := range vlines[start:end] {
 			switch {
+			case vl.isMeta:
+				text := vl.metaText
+				visW := lipgloss.Width(text)
+				if visW > innerW {
+					text = truncate(text, innerW)
+					visW = innerW
+				}
+				text = text + strings.Repeat(" ", innerW-visW)
+				lines = append(lines, borderL+fg(t.ContentDimmed, text)+borderR)
 			case vl.isBoxTop:
 				lines = append(lines, topRule)
 			case vl.isBoxBottom:
@@ -725,6 +785,11 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 			arg = parts[1]
 		}
 		return m.chatSave(arg)
+
+	case "/reload":
+		m.chatEngine = nil
+		m.statusMsg = "✓ engine reset — will reinitialise on next message"
+		return nil
 
 	case "/help":
 		var lines []string
