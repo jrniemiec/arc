@@ -162,8 +162,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cmdDoneMsg:
 		if msg.err != "" {
-			m.statusMsg = "✗ " + msg.err
+			m.setStatusError("✗ " + msg.err)
 		} else {
+			m.statusErr = false
 			m.statusMsg = msg.statusMsg
 			m.setStatusLines(msg.statusLines)
 		}
@@ -234,6 +235,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rebuildChatLines(m.chatBuildWidth())
 			chatViewH := m.height - 6 - m.completionCount() - 2
 			m.chatAutoScrollToBottom(chatViewH)
+			m.chatBoxCursor = 0
 			m.statusMsg = ""
 		}
 
@@ -280,6 +282,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildChatLines(m.chatBuildWidth())
 		chatViewH := m.height - 6 - m.completionCount() - 2
+		// Keep chatBoxCursor on the newest exchange when auto-scrolling.
+		if m.chatAutoScroll {
+			if n := m.chatBoxCount(); n > 0 {
+				m.chatBoxCursor = n - 1
+			}
+		}
 		m.chatAutoScrollToBottom(chatViewH)
 
 	case tea.KeyMsg:
@@ -336,6 +344,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		if m.chatMode {
 			m.rebuildChatLines(m.chatBuildWidth())
+			if m.focus == paneContent {
+				m.chatBoxCursor = 0
+			}
 		}
 		return nil
 	case key.Matches(msg, keys.PanePrev):
@@ -345,6 +356,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		if m.chatMode {
 			m.rebuildChatLines(m.chatBuildWidth())
+			if m.focus == paneContent {
+				m.chatBoxCursor = 0
+			}
 		}
 		return nil
 	}
@@ -855,29 +869,57 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// handleChatContentKey handles j/k/PgUp/PgDn in the content pane during chat mode.
+// handleChatContentKey handles keys in the content pane during chat mode.
+// j/k navigate between boxes; v/x/s act on the selected box.
+// PgUp/PgDn/Home/End scroll the view.
 func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 	chatViewH := m.height - 6 - m.completionCount() - 2
 	if chatViewH < 1 {
 		chatViewH = 1
 	}
+
+	numBoxes := m.chatBoxCount()
+
+	// Box navigation and per-box operations (boxed view is always active here).
+	switch {
+	case msg.Type == tea.KeyRunes:
+		switch msg.String() {
+		case "v":
+			if numBoxes > 0 {
+				m.cmdChatCollapseBox(m.chatBoxCursor)
+			}
+			return nil
+		case "x":
+			if numBoxes > 0 {
+				return m.cmdChatDeleteBox(m.chatBoxCursor)
+			}
+			return nil
+		case "s":
+			m.statusMsg = "TTS: not yet implemented"
+			return nil
+		}
+	case key.Matches(msg, keys.NavUp):
+		if m.chatBoxCursor > 0 {
+			m.chatBoxCursor--
+			m.chatAutoScroll = false
+			m.scrollToChatBox(m.chatBoxCursor, chatViewH)
+		}
+		return nil
+	case key.Matches(msg, keys.NavDown):
+		if m.chatBoxCursor < numBoxes-1 {
+			m.chatBoxCursor++
+			m.chatAutoScroll = m.chatBoxCursor >= numBoxes-1
+			m.scrollToChatBox(m.chatBoxCursor, chatViewH)
+		}
+		return nil
+	}
+
+	// Scroll operations.
 	maxScroll := m.chatTotalLines() - chatViewH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
 	switch {
-	case key.Matches(msg, keys.NavUp):
-		if m.chatScroll > 0 {
-			m.chatScroll--
-			m.chatAutoScroll = false
-		}
-	case key.Matches(msg, keys.NavDown):
-		if m.chatScroll < maxScroll {
-			m.chatScroll++
-		}
-		if m.chatScroll >= maxScroll {
-			m.chatAutoScroll = true
-		}
 	case key.Matches(msg, keys.PageUp):
 		m.chatScroll -= chatViewH
 		if m.chatScroll < 0 {
@@ -894,9 +936,13 @@ func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case key.Matches(msg, keys.Home):
 		m.chatScroll = 0
+		m.chatBoxCursor = 0
 		m.chatAutoScroll = false
 	case key.Matches(msg, keys.End):
 		m.chatScroll = maxScroll
+		if numBoxes > 0 {
+			m.chatBoxCursor = numBoxes - 1
+		}
 		m.chatAutoScroll = true
 	}
 	return nil
@@ -1056,6 +1102,11 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		if val != "" {
 			if m.chatMode {
+				// "//" prefix → note: stored in history, never sent to LLM.
+				// Must be checked before the "/" command prefix.
+				if strings.HasPrefix(val, "//") {
+					return m.addChatNote(strings.TrimSpace(val[2:]))
+				}
 				if strings.HasPrefix(val, "/") {
 					return m.dispatchChatCommand(val)
 				}
@@ -1469,6 +1520,7 @@ func (m *Model) acceptCompletion() {
 func (m *Model) dispatchCommand(val string) tea.Cmd {
 	m.statusLines = nil
 	m.statusMsg = ""
+	m.statusErr = false
 	m.pendingConfirm = nil
 	m.pendingConfirmMsg = ""
 
@@ -2984,6 +3036,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			m.focus = paneContent
 			if m.chatMode {
 				m.rebuildChatLines(m.chatBuildWidth())
+				m.chatBoxCursor = 0
 			}
 		}
 

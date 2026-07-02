@@ -79,20 +79,20 @@ func (c contentTab) String() string {
 type navSubTab int
 
 const (
-	navSubTabArticles    navSubTab = iota
+	navSubTabWorkspaces  navSubTab = iota
 	navSubTabCollections
-	navSubTabWorkspaces
+	navSubTabArticles
 	navSubTabCount
 )
 
 func (n navSubTab) String() string {
 	switch n {
-	case navSubTabArticles:
-		return "Articles"
-	case navSubTabCollections:
-		return "Collections"
 	case navSubTabWorkspaces:
 		return "Workspaces"
+	case navSubTabCollections:
+		return "Collections"
+	case navSubTabArticles:
+		return "Articles"
 	default:
 		return "?"
 	}
@@ -284,6 +284,7 @@ type Model struct {
 
 	// Status bar
 	statusMsg    string   // ephemeral 1-line command feedback
+	statusErr    bool     // true = render statusMsg in error red
 	statusLines  []string // multi-line status area (/help, /tags, command output)
 	statusScroll int      // scroll offset into statusLines
 
@@ -307,6 +308,8 @@ type Model struct {
 	chatRawMsgs        []chat.Message        // history msgs for display before engine is ready
 	chatArticleCount   int                   // total articles in workspace (populated by loadChatHistoryCmd)
 	chatRagMode        string                // effective RAG mode for this workspace ("open"/"strict"/"hybrid")
+	chatBoxCursor      int                   // selected box index in boxed view (focus==paneContent)
+	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
 }
 
@@ -610,6 +613,15 @@ func (m Model) ChromeWindowID() string {
 func (m *Model) setStatusLines(lines []string) {
 	m.statusLines = lines
 	m.statusScroll = 0
+}
+
+func (m *Model) setStatusError(msg string) {
+	m.statusMsg = msg
+	m.statusErr = true
+}
+
+func (m *Model) clearStatusError() {
+	m.statusErr = false
 }
 
 // completionCount returns the number of lines currently expanding the status area.

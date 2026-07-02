@@ -383,20 +383,115 @@ func colorChatLine(cl chatLine, t Theme) string {
 	}
 }
 
-// chatVirtualLines builds the virtual display list when in boxed mode
-// (focus == paneContent). Each exchange is wrapped in a rounded box.
-// Returns nil when not in boxed mode.
+// chatVLine is one line in the virtual boxed display (focus == paneContent).
 type chatVLine struct {
 	isBoxTop    bool
 	isBoxBottom bool
-	isSep       bool // blank line between boxes
-	isMeta      bool // gray date/model line above box
-	metaText    string
-	contentIdx  int // index into chatDisplayLines; -1 for non-content lines
+	isSep       bool   // blank line between boxes
+	isHeader    bool   // time · model + hints line, first line inside the selected box
+	isEllipsis  bool   // collapsed indicator (… N more lines)
+	metaText    string // left side of header: "time  model"
+	contentIdx  int    // index into chatDisplayLines; -1 for non-content lines
+	boxIdx      int    // which logical box (0-based) this line belongs to
+	isSelected  bool   // true when boxIdx == chatBoxCursor
 }
 
+// chatBoxInfo holds per-box metadata derived from message history.
+type chatBoxInfo struct {
+	role     chatLineRole
+	ts       string
+	profile  string
+	msgStart int // inclusive index into msgs
+	msgEnd   int // exclusive index into msgs
+}
+
+// chatBoxInfos walks message history and returns one entry per logical box.
+// A box is either a user→assistant exchange or a standalone note.
+func (m *Model) chatBoxInfos() []chatBoxInfo {
+	msgs := m.chatRawMsgs
+	if m.chatEngine != nil {
+		msgs = m.chatEngine.History().Msgs
+	}
+	var infos []chatBoxInfo
+	for i, msg := range msgs {
+		switch msg.Role {
+		case chat.RoleUser:
+			ts := ""
+			if !msg.Time.IsZero() {
+				ts = msg.Time.Format("Jan 2, 2006 · 15:04")
+			}
+			infos = append(infos, chatBoxInfo{role: chatLineUser, ts: ts, msgStart: i, msgEnd: i + 1})
+		case chat.RoleAssistant:
+			if len(infos) > 0 && infos[len(infos)-1].role == chatLineUser {
+				infos[len(infos)-1].msgEnd = i + 1
+				if msg.Profile != "" && infos[len(infos)-1].profile == "" {
+					infos[len(infos)-1].profile = msg.Profile
+				}
+			}
+		case chat.RoleNote:
+			ts := ""
+			if !msg.Time.IsZero() {
+				ts = msg.Time.Format("Jan 2, 2006 · 15:04")
+			}
+			infos = append(infos, chatBoxInfo{role: chatLineNote, ts: ts, msgStart: i, msgEnd: i + 1})
+		}
+	}
+	return infos
+}
+
+// chatBoxCount returns the number of logical boxes in the current display.
+func (m *Model) chatBoxCount() int {
+	dl := m.chatDisplayLines
+	count := 0
+	for i, cl := range dl {
+		if cl.role == chatLineUser && (i == 0 || dl[i-1].role != chatLineUser) {
+			count++
+		} else if cl.role == chatLineNote && (i == 0 || dl[i-1].role != chatLineNote) {
+			count++
+		}
+	}
+	return count
+}
+
+// scrollToChatBox adjusts chatScroll so that box boxIdx is visible.
+func (m *Model) scrollToChatBox(boxIdx, viewH int) {
+	vlines := m.buildChatVLines()
+	if len(vlines) == 0 {
+		return
+	}
+	first, last := -1, -1
+	for i, vl := range vlines {
+		if vl.boxIdx == boxIdx {
+			if first == -1 {
+				first = i
+			}
+			last = i
+		}
+	}
+	if first == -1 {
+		return
+	}
+	// Already fully visible.
+	if first >= m.chatScroll && last < m.chatScroll+viewH {
+		return
+	}
+	// Scroll to show the top of the box.
+	m.chatScroll = first
+	maxScroll := len(vlines) - viewH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.chatScroll > maxScroll {
+		m.chatScroll = maxScroll
+	}
+}
+
+// buildChatVLines builds the virtual display list when in boxed mode
+// (focus == paneContent). Only the selected box is wrapped in a border;
+// all other exchanges render as plain text. This matches c2's behaviour.
+// Returns nil when not in boxed mode.
 func (m Model) buildChatVLines() []chatVLine {
-	if !(m.focus == paneContent) {
+	if m.focus != paneContent {
 		return nil
 	}
 	dl := m.chatDisplayLines
@@ -405,93 +500,201 @@ func (m Model) buildChatVLines() []chatVLine {
 		return nil
 	}
 
-	// Find the start index of each exchange (each run of chatLineUser).
-	var starts []int
+	// Detect box boundaries from display lines.
+	type boxStart struct {
+		idx  int
+		role chatLineRole
+	}
+	var boxes []boxStart
 	for i, cl := range dl {
 		if cl.role == chatLineUser && (i == 0 || dl[i-1].role != chatLineUser) {
-			starts = append(starts, i)
+			boxes = append(boxes, boxStart{i, chatLineUser})
+		} else if cl.role == chatLineNote && (i == 0 || dl[i-1].role != chatLineNote) {
+			boxes = append(boxes, boxStart{i, chatLineNote})
 		}
 	}
-	if len(starts) == 0 {
+	if len(boxes) == 0 {
 		return nil
 	}
 
-	// Build exchange metadata (timestamp + model) from message history.
-	// Each pair of consecutive user+assistant messages is one exchange.
-	msgs := m.chatRawMsgs
-	if m.chatEngine != nil {
-		msgs = m.chatEngine.History().Msgs
-	}
-	type exchangeMeta struct {
-		ts      string
-		profile string
-	}
-	var metas []exchangeMeta
-	userIdx := 0
-	for i := 0; i < len(msgs); i++ {
-		if msgs[i].Role == chat.RoleUser {
-			meta := exchangeMeta{}
-			if !msgs[i].Time.IsZero() {
-				meta.ts = msgs[i].Time.Format("Jan 2, 2006 · 15:04")
-			}
-			// Look ahead for the assistant reply's profile.
-			for j := i + 1; j < len(msgs); j++ {
-				if msgs[j].Role == chat.RoleAssistant {
-					if msgs[j].Profile != "" {
-						meta.profile = msgs[j].Profile
-					}
-					break
-				}
-				if msgs[j].Role == chat.RoleUser {
-					break
-				}
-			}
-			if userIdx < len(starts) {
-				metas = append(metas, meta)
-			}
-			userIdx++
-		}
-	}
+	// Per-box metadata from message history.
+	infos := m.chatBoxInfos()
 
 	var vlines []chatVLine
-	for e, start := range starts {
+	for e, box := range boxes {
+		selected := e == m.chatBoxCursor
+		collapsed := m.chatCollapsed != nil && m.chatCollapsed[e]
+
 		var end int
-		if e+1 < len(starts) {
-			end = starts[e+1]
+		if e+1 < len(boxes) {
+			end = boxes[e+1].idx
 		} else {
 			end = n
 		}
-		// Trim trailing blank lines from this exchange's content.
+		// Trim trailing blanks.
 		trimEnd := end
-		for trimEnd > start && dl[trimEnd-1].role == chatLineBlank {
+		for trimEnd > box.idx && dl[trimEnd-1].role == chatLineBlank {
 			trimEnd--
 		}
 
-		vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1})
+		// Total content line count — used for the ellipsis "N more lines" label.
+		totalContent := trimEnd - box.idx
 
-		// Meta line (date · model) as first line inside the box.
-		if e < len(metas) {
-			meta := metas[e]
-			var parts []string
-			if meta.ts != "" {
-				parts = append(parts, meta.ts)
+		if selected {
+			// Focused box: full border + header line with hints.
+			vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1, boxIdx: e, isSelected: true})
+
+			// Header line: "time  model" on left, hints on right.
+			var leftParts []string
+			if e < len(infos) {
+				info := infos[e]
+				if info.ts != "" {
+					leftParts = append(leftParts, info.ts)
+				}
+				if info.profile != "" {
+					leftParts = append(leftParts, info.profile)
+				}
 			}
-			if meta.profile != "" {
-				parts = append(parts, meta.profile)
+			metaLeft := strings.Join(leftParts, "  ")
+			vlines = append(vlines, chatVLine{isHeader: true, metaText: metaLeft, contentIdx: -1, boxIdx: e, isSelected: true})
+
+			// Content lines (possibly collapsed).
+			if collapsed {
+				limit := box.idx + 3
+				if limit > trimEnd {
+					limit = trimEnd
+				}
+				for i := box.idx; i < limit; i++ {
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true})
+				}
+				if limit < trimEnd {
+					remaining := totalContent - (limit - box.idx)
+					vlines = append(vlines, chatVLine{
+						isEllipsis: true,
+						metaText:   fmt.Sprintf("... (%d more lines)", remaining),
+						contentIdx: -1, boxIdx: e, isSelected: true,
+					})
+				}
+			} else {
+				for i := box.idx; i < trimEnd; i++ {
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true})
+				}
 			}
-			metaText := strings.Join(parts, "  ·  ")
-			vlines = append(vlines, chatVLine{isMeta: true, metaText: metaText, contentIdx: -1})
+
+			vlines = append(vlines, chatVLine{isBoxBottom: true, contentIdx: -1, boxIdx: e, isSelected: true})
+		} else {
+			// Non-focused: plain content, no border.
+			// Collapse state still applies — show only first 3 lines + ellipsis.
+			if collapsed {
+				limit := box.idx + 3
+				if limit > trimEnd {
+					limit = trimEnd
+				}
+				for i := box.idx; i < limit; i++ {
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: false})
+				}
+				if limit < trimEnd {
+					remaining := totalContent - (limit - box.idx)
+					vlines = append(vlines, chatVLine{
+						isEllipsis: true,
+						metaText:   fmt.Sprintf("... (%d more lines)", remaining),
+						contentIdx: -1, boxIdx: e, isSelected: false,
+					})
+				}
+			} else {
+				for i := box.idx; i < trimEnd; i++ {
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: false})
+				}
+			}
 		}
-		for i := start; i < trimEnd; i++ {
-			vlines = append(vlines, chatVLine{contentIdx: i})
-		}
-		vlines = append(vlines, chatVLine{isBoxBottom: true, contentIdx: -1})
-		// Blank separator between boxes (not after the last one).
-		if e < len(starts)-1 {
-			vlines = append(vlines, chatVLine{isSep: true, contentIdx: -1})
+
+		if e < len(boxes)-1 {
+			vlines = append(vlines, chatVLine{isSep: true, contentIdx: -1, boxIdx: e})
 		}
 	}
 	return vlines
+}
+
+// cmdChatCollapseBox toggles the collapsed state of box at boxIdx.
+func (m *Model) cmdChatCollapseBox(boxIdx int) {
+	if m.chatCollapsed == nil {
+		m.chatCollapsed = make(map[int]bool)
+	}
+	m.chatCollapsed[boxIdx] = !m.chatCollapsed[boxIdx]
+}
+
+// cmdChatDeleteBox removes the exchange at boxIdx from memory and persists.
+func (m *Model) cmdChatDeleteBox(boxIdx int) tea.Cmd {
+	infos := m.chatBoxInfos()
+	if boxIdx < 0 || boxIdx >= len(infos) {
+		m.setStatusError("nothing to delete")
+		return nil
+	}
+	info := infos[boxIdx]
+
+	// Remove from the active message source.
+	deleteFromSlice := func(msgs []chat.Message) []chat.Message {
+		start, end := info.msgStart, info.msgEnd
+		if start < 0 || end > len(msgs) || start >= end {
+			return msgs
+		}
+		out := make([]chat.Message, 0, len(msgs)-(end-start))
+		out = append(out, msgs[:start]...)
+		out = append(out, msgs[end:]...)
+		return out
+	}
+
+	if m.chatEngine != nil {
+		m.chatEngine.History().Msgs = deleteFromSlice(m.chatEngine.History().Msgs)
+	} else {
+		m.chatRawMsgs = deleteFromSlice(m.chatRawMsgs)
+	}
+
+	// Shift collapsed keys: entries above boxIdx stay, those below shift down by 1.
+	if m.chatCollapsed != nil {
+		newCollapsed := make(map[int]bool)
+		for k, v := range m.chatCollapsed {
+			if k < boxIdx {
+				newCollapsed[k] = v
+			} else if k > boxIdx {
+				newCollapsed[k-1] = v
+			}
+		}
+		m.chatCollapsed = newCollapsed
+	}
+
+	// Rebuild display.
+	m.rebuildChatLines(m.chatBuildWidth())
+
+	// Clamp cursor.
+	numBoxes := m.chatBoxCount()
+	if numBoxes == 0 {
+		m.chatBoxCursor = 0
+	} else if m.chatBoxCursor >= numBoxes {
+		m.chatBoxCursor = numBoxes - 1
+	}
+
+	// Collect messages to save.
+	cfg := m.cfg
+	ws := m.chatWorkspace
+	var toSave []chat.Message
+	if m.chatEngine != nil {
+		src := m.chatEngine.History().Msgs
+		toSave = make([]chat.Message, len(src))
+		copy(toSave, src)
+	} else {
+		toSave = make([]chat.Message, len(m.chatRawMsgs))
+		copy(toSave, m.chatRawMsgs)
+	}
+
+	return func() tea.Msg {
+		st := chat.NewChatStore(cfg.DataRoot, ws)
+		h := &chat.History{Msgs: toSave}
+		if err := st.SaveHistory(h); err != nil {
+			return cmdDoneMsg{err: "delete: " + err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ exchange deleted"}
+	}
 }
 
 // renderChatPane renders the chat conversation in the right content pane.
@@ -530,18 +733,19 @@ func (m Model) renderChatPane(height, width int) []string {
 		return lines[:height]
 	}
 
-	// Boxed mode (focus == paneContent): wrap each exchange in a rounded box.
-	// Layout: │ {content padded to innerW} │
-	// innerW = width - 4  ("│ " = 2 left, " │" = 2 right)
+	// Boxed mode (focus == paneContent).
+	// Only the selected box gets a border; all others render as plain text.
+	// This matches c2's renderConversation behaviour.
 	if vlines := m.buildChatVLines(); vlines != nil {
+		// innerW = content width inside a box border ("│ " + content + " │").
 		innerW := width - 4
 		if innerW < 4 {
 			innerW = 4
 		}
 		topRule := fg(t.BoxBorder, "╭"+strings.Repeat("─", width-2)+"╮")
 		botRule := fg(t.BoxBorder, "╰"+strings.Repeat("─", width-2)+"╯")
-		borderL := fg(t.BoxBorder, "│ ")
-		borderR := fg(t.BoxBorder, " │")
+		bL := fg(t.BoxBorder, "│ ")
+		bR := fg(t.BoxBorder, " │")
 
 		total := len(vlines)
 		start := m.chatScroll
@@ -558,52 +762,85 @@ func (m Model) renderChatPane(height, width int) []string {
 
 		for _, vl := range vlines[start:end] {
 			switch {
-			case vl.isMeta:
-				text := vl.metaText
-				visW := lipgloss.Width(text)
-				if visW > innerW {
-					text = truncate(text, innerW)
-					visW = innerW
-				}
-				text = text + strings.Repeat(" ", innerW-visW)
-				lines = append(lines, borderL+fg(t.ContentDimmed, text)+borderR)
 			case vl.isBoxTop:
 				lines = append(lines, topRule)
+
 			case vl.isBoxBottom:
 				lines = append(lines, botRule)
+
 			case vl.isSep:
 				lines = append(lines, "")
+
+			case vl.isHeader:
+				// Header line inside the selected box:
+				// left = "time  model", right = "v expand/collapse · s speak · x delete"
+				// All in t.Dimmed — identical to c2.
+				expandHint := "v expand"
+				if m.chatCollapsed != nil && m.chatCollapsed[vl.boxIdx] {
+					expandHint = "v collapse"
+				}
+				hintsStr := expandHint + " · s speak · x delete"
+				left := vl.metaText
+				leftW := lipgloss.Width(left)
+				hintsW := lipgloss.Width(hintsStr)
+				pad := innerW - leftW - hintsW
+				if pad < 1 {
+					pad = 1
+				}
+				headerContent := fg(t.ContentDimmed, left) +
+					strings.Repeat(" ", pad) +
+					fg(t.ContentDimmed, hintsStr)
+				// Pad to full innerW if total is short.
+				total := leftW + pad + hintsW
+				if total < innerW {
+					headerContent += strings.Repeat(" ", innerW-total)
+				}
+				lines = append(lines, bL+headerContent+bR)
+
+			case vl.isEllipsis:
+				if vl.isSelected {
+					text := fg(t.ContentDimmed, vl.metaText)
+					visW := lipgloss.Width(vl.metaText)
+					if visW < innerW {
+						text += strings.Repeat(" ", innerW-visW)
+					}
+					lines = append(lines, bL+text+bR)
+				} else {
+					lines = append(lines, fg(t.ContentDimmed, vl.metaText))
+				}
+
 			default:
 				cl := m.chatDisplayLines[vl.contentIdx]
-				// For blank lines just emit an empty padded row.
-				if cl.role == chatLineBlank || cl.text == "" {
-					lines = append(lines, borderL+strings.Repeat(" ", innerW)+borderR)
-					continue
-				}
-				// colorChatLine for chatLineQuote prepends "│ " (2 visual cols),
-				// so the text budget is innerW-2.
-				budget := innerW
-				if cl.role == chatLineQuote {
-					budget = innerW - 2
-					if budget < 2 {
-						budget = 2
+				if vl.isSelected {
+					// Inside the box border: pad to innerW.
+					if cl.role == chatLineBlank || cl.text == "" {
+						lines = append(lines, bL+strings.Repeat(" ", innerW)+bR)
+						continue
 					}
-				}
-				text := cl.text
-				// Use visual width (handles wide chars, emoji) for truncation/padding.
-				visW := lipgloss.Width(text)
-				if visW > budget {
-					// Trim runes until visual width fits.
-					runes := []rune(text)
-					for len(runes) > 0 && lipgloss.Width(string(runes)) > budget-1 {
-						runes = runes[:len(runes)-1]
+					budget := innerW
+					if cl.role == chatLineQuote {
+						budget = innerW - 2
+						if budget < 2 {
+							budget = 2
+						}
 					}
-					text = string(runes) + "…"
-				} else if visW < budget {
-					text = text + strings.Repeat(" ", budget-visW)
+					text := cl.text
+					visW := lipgloss.Width(text)
+					if visW > budget {
+						runes := []rune(text)
+						for len(runes) > 0 && lipgloss.Width(string(runes)) > budget-1 {
+							runes = runes[:len(runes)-1]
+						}
+						text = string(runes) + "…"
+					} else if visW < budget {
+						text = text + strings.Repeat(" ", budget-visW)
+					}
+					colored := colorChatLine(chatLine{role: cl.role, text: text}, t)
+					lines = append(lines, bL+colored+bR)
+				} else {
+					// Plain text — no box border.
+					lines = append(lines, colorChatLine(cl, t))
 				}
-				colored := colorChatLine(chatLine{role: cl.role, text: text}, t)
-				lines = append(lines, borderL+colored+borderR)
 			}
 		}
 
@@ -647,7 +884,11 @@ func (m Model) renderChatStatusLine() string {
 	if m.chatStreaming {
 		left = renderWaveIndicator(m.spinnerFrame, "streaming", t.StreamingText, t.Dimmed)
 	} else if m.statusMsg != "" {
-		left = fg(t.StatusText, " "+m.statusMsg)
+		if m.statusErr {
+			left = fgBold(t.StatusError, " "+m.statusMsg)
+		} else {
+			left = fg(t.StatusText, " "+m.statusMsg)
+		}
 	}
 
 	// Center: per-turn stats (if available).
@@ -731,6 +972,7 @@ func lerpColor(c1, c2 lipgloss.Color, t float64) lipgloss.Color {
 // dispatchChatCommand handles commands in chat mode.
 // Returns a tea.Cmd if an async operation is needed.
 func (m *Model) dispatchChatCommand(val string) tea.Cmd {
+	m.statusErr = false
 	parts := strings.Fields(val)
 	if len(parts) == 0 {
 		return nil
@@ -804,8 +1046,8 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		return nil
 
 	default:
-		m.statusMsg = "✗ unknown chat command: " + cmd
-		return nil
+		// Fall through to global command dispatcher so /log, /stats, /help etc. work.
+		return m.dispatchCommand(val)
 	}
 }
 
@@ -878,6 +1120,49 @@ func (m *Model) chatSave(filename string) tea.Cmd {
 	}
 }
 
+// addChatNote stores text as a RoleNote message — visible in chat history
+// but never sent to the LLM. Triggered by the "//" prefix in the input.
+func (m *Model) addChatNote(text string) tea.Cmd {
+	if text == "" {
+		m.setStatusError("comment cannot be empty — use //your note text")
+		return nil
+	}
+	ws := m.chatWorkspace
+	cfg := m.cfg
+
+	// Append to in-memory raw msgs for display (engine may not be init yet).
+	m.chatRawMsgs = append(m.chatRawMsgs, chat.Message{
+		Role:    chat.RoleNote,
+		Content: text,
+		Time:    time.Now(),
+	})
+	// If engine is live, keep its history in sync too.
+	if m.chatEngine != nil {
+		m.chatEngine.History().Append(chat.RoleNote, text)
+	}
+	rightW := m.chatBuildWidth()
+	m.rebuildChatLines(rightW)
+	chatViewH := m.height - 6 - m.completionCount() - 2
+	m.chatAutoScrollToBottom(chatViewH)
+
+	// Persist to history.json asynchronously.
+	// Load current history from disk and append the note, so we don't
+	// overwrite turns that were added by the engine after it was initialised.
+	noteText := text
+	return func() tea.Msg {
+		st := chat.NewChatStore(cfg.DataRoot, ws)
+		h, err := st.LoadHistory()
+		if err != nil {
+			return cmdDoneMsg{err: "note: " + err.Error()}
+		}
+		h.Append(chat.RoleNote, noteText)
+		if err := st.SaveHistory(h); err != nil {
+			return cmdDoneMsg{err: "note: " + err.Error()}
+		}
+		return cmdDoneMsg{}
+	}
+}
+
 // exitChatMode returns to the workspace nav view.
 func (m *Model) exitChatMode() {
 	if m.chatCancelStream != nil {
@@ -897,6 +1182,8 @@ func (m *Model) exitChatMode() {
 	m.chatPendingPrompt = ""
 	m.chatArticleCount = 0
 	m.chatRagMode = ""
+	m.chatBoxCursor = 0
+	m.chatCollapsed = nil
 	m.focus = paneNav
 	m.statusMsg = ""
 	m.statusLines = nil
