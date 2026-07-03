@@ -1330,7 +1330,7 @@ func (m Model) renderStatusSep() string {
 	if strings.HasPrefix(m.inputValue, "!") {
 		return shellBorderColor + strings.Repeat("─", m.width) + "\033[0m"
 	}
-	if m.focus == paneCommand {
+	if m.focus == paneCommand || m.focus == paneStatus {
 		return fg(t.Accent, strings.Repeat("─", m.width))
 	}
 	return fg(t.Dimmed, strings.Repeat("─", m.width))
@@ -1403,7 +1403,11 @@ func (m Model) renderCompletionLines() []string {
 		visible := m.statusLines[start:end]
 		lines := make([]string, len(visible))
 		for i, l := range visible {
-			lines[i] = fg(t.ContentText, " "+truncate(l, m.width-1))
+			if m.statusErr {
+				lines[i] = fg(lipgloss.Color("#FF6B6B"), " "+truncate(l, m.width-1))
+			} else {
+				lines[i] = fg(t.ContentText, " "+truncate(l, m.width-1))
+			}
 		}
 		return lines
 	}

@@ -47,6 +47,7 @@ const (
 	paneNav                      // left navigator
 	paneContent                  // right content pane
 	paneCommand                  // command input line
+	paneStatus                   // status/output area (shell results, etc.)
 	paneResource                 // full-screen resource file overlay
 )
 

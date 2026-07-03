@@ -224,12 +224,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case shellDoneMsg:
-		lines := strings.Split(strings.TrimRight(msg.output, "\n"), "\n")
+		m.statusErr = false
+		header := "! " + msg.cmd
+		output := strings.Split(strings.TrimRight(msg.output, "\n"), "\n")
+		lines := make([]string, 0, 1+len(output)+1)
+		lines = append(lines, header)
+		lines = append(lines, output...)
 		if msg.exitCode != 0 {
 			lines = append(lines, fmt.Sprintf("[exit %d]", msg.exitCode))
 			m.statusErr = true
 		}
 		m.setStatusLines(lines)
+		m.focus = paneStatus
 
 	case resourceReloadMsg:
 		// Re-read the file after external editor exits.
@@ -455,6 +461,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleContentKey(msg)
 	case paneCommand:
 		return m.handleCommandKey(msg)
+	case paneStatus:
+		return m.handleStatusKey(msg)
 	case paneResource:
 		return m.handleResourceKey(msg)
 	}
@@ -1548,12 +1556,54 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// handleStatusKey handles keys when the status output pane has focus.
+// j/k/↑/↓ scroll, Esc returns to command input.
+func (m *Model) handleStatusKey(msg tea.KeyMsg) tea.Cmd {
+	maxVisible := m.height * 30 / 100
+	if maxVisible < 3 {
+		maxVisible = 3
+	}
+	maxScroll := len(m.statusLines) - maxVisible
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+
+	switch {
+	case key.Matches(msg, keys.NavDown):
+		m.statusScroll++
+		if m.statusScroll > maxScroll {
+			m.statusScroll = maxScroll
+		}
+	case key.Matches(msg, keys.NavUp):
+		m.statusScroll--
+		if m.statusScroll < 0 {
+			m.statusScroll = 0
+		}
+	case key.Matches(msg, keys.PageDown):
+		m.statusScroll += maxVisible
+		if m.statusScroll > maxScroll {
+			m.statusScroll = maxScroll
+		}
+	case key.Matches(msg, keys.PageUp):
+		m.statusScroll -= maxVisible
+		if m.statusScroll < 0 {
+			m.statusScroll = 0
+		}
+	}
+	return nil
+}
+
 // inputInsert inserts runes at the cursor position.
 func (m *Model) inputInsert(runes []rune) {
 	r := []rune(m.inputValue)
 	r = append(r[:m.inputCursor], append(runes, r[m.inputCursor:]...)...)
 	m.inputValue = string(r)
 	m.inputCursor += len(runes)
+	// Auto-insert space after '!' so the command reads "! cmd" not "!cmd".
+	if m.inputValue == "!" {
+		m.inputValue = "! "
+		m.inputCursor = 2
+	}
 }
 
 // pasteFromClipboard reads the system clipboard and pastes into the input.
