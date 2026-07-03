@@ -35,6 +35,11 @@ func chatCfgWithDefaults(chatCfg config.ChatConfig) config.ChatConfig {
 const defaultMaxUserMessages = 50
 const defaultTokenBudget = 8000
 
+// defaultDensityInstruction is prepended to every workspace system prompt unless
+// the user's system.txt already contains it. It instructs the model to produce
+// concise, information-dense responses rather than verbose prose.
+const defaultDensityInstruction = `Be concise and information-dense. Skip preamble, summaries of what you're about to say, and filler transitions. Prefer structured lists and short paragraphs over long prose. Omit obvious caveats. Get to the point immediately.`
+
 // Engine manages a workspace chat session.
 type Engine struct {
 	cfg           config.Config
@@ -117,6 +122,17 @@ func New(cfg config.Config, workspaceName, profileName string) (*Engine, error) 
 	systemPrompt, err := st.LoadSystem()
 	if err != nil {
 		return nil, fmt.Errorf("load system: %w", err)
+	}
+
+	// Prepend default density instruction unless system.txt already contains it.
+	// This ensures responses are concise and information-dense by default.
+	// Users can override or extend this in system.txt.
+	if !strings.Contains(systemPrompt, defaultDensityInstruction) {
+		if systemPrompt != "" {
+			systemPrompt = defaultDensityInstruction + "\n\n" + strings.TrimSpace(systemPrompt)
+		} else {
+			systemPrompt = defaultDensityInstruction
+		}
 	}
 
 	// Build RAG prefix from workspace corpus and prepend to system prompt.

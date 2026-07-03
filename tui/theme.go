@@ -51,6 +51,9 @@ type Theme struct {
 	// Favorite star
 	Favorite lipgloss.Color
 
+	// Status
+	StatusError lipgloss.Color // error messages in status bar
+
 	// Streaming / chat activity
 	StreamingText lipgloss.Color
 
@@ -90,6 +93,8 @@ var Nord = Theme{
 	Dimmed:     "#4C566A", // nord3
 	Favorite:   "#F5A623", // amber
 
+	StatusError: "#BF616A", // nord11 — red
+
 	StreamingText: "#88C0D0", // nord8 — light cyan
 	ChatUser:      "#A3BE8C", // nord14 — green
 	ChatAssistant: "#D8DEE9", // nord4 — soft white
@@ -126,6 +131,8 @@ var ClaudeCode = Theme{
 	Dimmed:     "#505050",
 	Favorite:   "#F5A623", // amber
 
+	StatusError: "#E06C75", // red
+
 	StreamingText: "#6598FF",
 	ChatUser:      "#88C0D0",
 	ChatAssistant: "#D7D7D7",
@@ -161,6 +168,8 @@ var Light = Theme{
 	BoxBorder:  "#1A7AB0",
 	Dimmed:     "#9A9A9A",
 	Favorite:   "#B8860B", // dark goldenrod for light bg
+
+	StatusError: "#CC0000", // red for light bg
 
 	StreamingText: "#1A7AB0",
 	ChatUser:      "#2D7A2D",
