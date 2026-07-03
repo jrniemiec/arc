@@ -374,6 +374,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		// One final redraw shows the status message, then screen freezes.
 		return tea.DisableMouse
+	case msg.String() == "ctrl+c" && m.focus == paneCommand && m.inputValue != "":
+		m.copyToClipboard(m.inputValue)
+		return nil
 	case key.Matches(msg, keys.Quit) && !(m.focus == paneCommand && msg.String() == "q"):
 		return tea.Quit
 	case key.Matches(msg, keys.Back):
@@ -1546,6 +1549,19 @@ func (m *Model) pasteFromClipboard() {
 		return
 	}
 	m.pasteContent(string(out))
+}
+
+// copyToClipboard writes text to the system clipboard via pbcopy.
+func (m *Model) copyToClipboard(text string) {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Run(); err != nil {
+		m.statusMsg = "copy failed: " + err.Error()
+		m.statusErr = true
+		return
+	}
+	m.statusMsg = "copied to clipboard"
+	m.statusErr = false
 }
 
 // pasteContent handles pasted text: single-line goes inline, multi-line is buffered.
