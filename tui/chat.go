@@ -495,9 +495,6 @@ func (m *Model) scrollToChatBox(boxIdx, viewH int) {
 // all other exchanges render as plain text. This matches c2's behaviour.
 // Returns nil when not in boxed mode.
 func (m Model) buildChatVLines() []chatVLine {
-	if m.focus != paneContent {
-		return nil
-	}
 	dl := m.chatDisplayLines
 	n := len(dl)
 	if n == 0 {
@@ -526,7 +523,7 @@ func (m Model) buildChatVLines() []chatVLine {
 
 	var vlines []chatVLine
 	for e, box := range boxes {
-		selected := e == m.chatBoxCursor
+		selected := e == m.chatBoxCursor && m.focus == paneContent
 		collapsed := m.chatCollapsed != nil && m.chatCollapsed[e]
 
 		var end int
@@ -619,11 +616,11 @@ func (m Model) buildChatVLines() []chatVLine {
 	return vlines
 }
 
-// collapseAllBoxes marks every logical box as collapsed.
+// collapseAllBoxes marks every logical box as collapsed except the last one.
 func (m *Model) collapseAllBoxes() {
 	n := m.chatBoxCount()
 	m.chatCollapsed = make(map[int]bool, n)
-	for i := 0; i < n; i++ {
+	for i := 0; i < n-1; i++ {
 		m.chatCollapsed[i] = true
 	}
 }
