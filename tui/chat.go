@@ -312,13 +312,19 @@ func (m *Model) rebuildChatLines(width int) {
 		if prevHadContent {
 			lines = append(lines, chatLine{chatLineBlank, ""})
 		}
+		first := true
 		for _, rl := range strings.Split(content, "\n") {
 			rl = strings.TrimRight(rl, " \t")
 			if rl == "" {
 				continue
 			}
+			prefix := "   "
+			if first {
+				prefix = "📌 "
+				first = false
+			}
 			for _, wl := range wordWrap(rl, contW) {
-				lines = append(lines, chatLine{chatLineNote, "📌 " + wl})
+				lines = append(lines, chatLine{chatLineNote, prefix + wl})
 			}
 		}
 		prevHadContent = true

@@ -280,6 +280,7 @@ type Model struct {
 	inputHistory      []string // oldest first, max 128
 	inputHistoryIdx   int      // -1 = live editing; ≥0 = browsing history
 	inputHistorySaved string   // draft saved when history browsing starts
+	pastedBlob        string   // buffered paste content; submitted on Enter instead of inputValue
 
 	// Command completions (first level: /prefix with no space)
 	cmdComplete    []cmdCompletion // filtered completions (nil = none)
@@ -794,6 +795,7 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		spinnerTick(),
 		tea.EnableMouseCellMotion,
+		tea.EnableBracketedPaste,
 		tea.HideCursor, // we manage the cursor via fake reverse-video rendering
 	}
 	// On iTerm2: downgrade to basic click-only mouse mode after bubbletea

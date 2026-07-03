@@ -329,6 +329,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey routes key events based on active focus pane.
 func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
+	// Paste: skip global keys, route directly to command handler.
+	if msg.Paste || (msg.String() == "ctrl+v" && m.focus == paneCommand) {
+		return m.handleCommandKey(msg)
+	}
+
 	// Global keys — always active
 	switch {
 	case msg.String() == "ctrl+\\":
@@ -353,6 +358,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.pendingConfirmMsg = ""
 		m.inputValue = ""
 		m.inputCursor = 0
+		m.pastedBlob = ""
 		// In chat mode, Esc always returns focus to command input — never exits chat.
 		// Use /exit or q to leave chat.
 		m.focus = paneCommand
@@ -1223,6 +1229,16 @@ func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
+	// Ctrl+V: read clipboard and paste.
+	if msg.String() == "ctrl+v" {
+		m.pasteFromClipboard()
+		return nil
+	}
+	// Bracketed paste: buffer multi-line content.
+	if msg.Paste {
+		m.pasteContent(string(msg.Runes))
+		return nil
+	}
 	switch msg.Type {
 	case tea.KeyRunes:
 		m.inputExitHistory()
@@ -1361,6 +1377,11 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		m.inputSubmit()
 		m.cmdComplete = nil
 		m.cmdCompleteIdx = -1
+		// Resolve buffered paste: use blob as the actual value.
+		if m.pastedBlob != "" {
+			val = strings.TrimSpace(m.pastedBlob)
+			m.pastedBlob = ""
+		}
 		// Confirmation flow
 		if m.pendingConfirm != nil {
 			if val == "y" || val == "yes" {
@@ -1379,7 +1400,8 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 				// "//" prefix → note: stored in history, never sent to LLM.
 				// Must be checked before the "/" command prefix.
 				if strings.HasPrefix(val, "//") {
-					return m.addChatNote(strings.TrimSpace(val[2:]))
+					raw := strings.TrimSpace(val[2:])
+					return m.addChatNote(raw)
 				}
 				if strings.HasPrefix(val, "/") {
 					return m.dispatchChatCommand(val)
@@ -1408,6 +1430,41 @@ func (m *Model) inputInsert(runes []rune) {
 	r = append(r[:m.inputCursor], append(runes, r[m.inputCursor:]...)...)
 	m.inputValue = string(r)
 	m.inputCursor += len(runes)
+}
+
+// pasteFromClipboard reads the system clipboard and pastes into the input.
+func (m *Model) pasteFromClipboard() {
+	out, err := exec.Command("pbpaste").Output()
+	if err != nil || len(out) == 0 {
+		return
+	}
+	m.pasteContent(string(out))
+}
+
+// pasteContent handles pasted text: single-line goes inline, multi-line is buffered.
+func (m *Model) pasteContent(raw string) {
+	m.inputExitHistory()
+	content := strings.ReplaceAll(raw, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+	content = strings.TrimRight(content, "\n")
+	lines := strings.Split(content, "\n")
+	if len(lines) > 1 || len([]rune(content)) > 256 {
+		pre := m.inputValue
+		blob := pre
+		if blob != "" && !strings.HasSuffix(blob, "\n") {
+			blob += "\n"
+		}
+		blob += content
+		m.pastedBlob = blob
+		lineCount := len(lines)
+		kb := float64(len(content)) / 1024.0
+		label := fmt.Sprintf("[pasted: %d lines · %.1f KB]", lineCount, kb)
+		m.inputValue = pre + label
+		m.inputCursor = len([]rune(m.inputValue))
+	} else {
+		m.inputInsert([]rune(content))
+	}
+	m.updateCompletions()
 }
 
 // inputDeleteBefore deletes the rune immediately before the cursor (backspace).
