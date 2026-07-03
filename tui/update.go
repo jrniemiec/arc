@@ -338,6 +338,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Quit) && !(m.focus == paneCommand && msg.String() == "q"):
 		return tea.Quit
 	case key.Matches(msg, keys.Back):
+		// Resource overlay: Esc closes and restores previous focus.
+		if m.focus == paneResource {
+			m.closeResourceOverlay()
+			return nil
+		}
 		m.cmdComplete = nil
 		m.cmdCompleteIdx = -1
 		m.paramItems = nil
@@ -465,8 +470,20 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			return m.cmdDeleteArticle()
 		}
 	case key.Matches(msg, keys.Open):
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome) {
+				return m.openWsFileExternal()
+			}
+		}
 		return m.openCurrentURL()
 	case key.Matches(msg, keys.View):
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome) {
+				return m.viewWsFileInTerminal()
+			}
+		}
 		return m.cmdViewArticle()
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
@@ -679,7 +696,7 @@ func (m *Model) navSelect() tea.Cmd {
 	switch m.navSubTab {
 	case navSubTabArticles:
 		if len(m.navItems) > 0 {
-			m.focus = paneContent
+			return m.openArticleOverlay(m.selectedNavItem())
 		}
 	case navSubTabCollections:
 		if m.navRowCursor >= len(m.navRows) {
@@ -690,7 +707,7 @@ func (m *Model) navSelect() tea.Cmd {
 			return m.navToggleExpand()
 		}
 		if row.kind == rowArticle {
-			m.focus = paneContent
+			return m.openArticleOverlay(m.selectedNavItem())
 		}
 	case navSubTabWorkspaces:
 		if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
@@ -705,7 +722,7 @@ func (m *Model) navSelect() tea.Cmd {
 				return m.loadChatHistoryCmd(ws.name, true)
 			}
 		case wsRowArticle:
-			return m.cmdViewArticle()
+			return m.openArticleOverlay(m.selectedNavItem())
 		case wsRowCollection:
 			m.wsToggleExpand()
 		case wsRowResourceGroup, wsRowOutcomeGroup:
@@ -882,6 +899,147 @@ func (m *Model) openWorkspaceFile(wsIdx int, subdir, filename string) tea.Cmd {
 		data = append(data[:maxBytes], []byte("\n[file truncated at 200 KB]")...)
 	}
 	m.openResourceOverlay(filename, string(data))
+	return nil
+}
+
+// openArticleOverlay assembles article content (flash/summary/body) and opens the overlay.
+func (m *Model) openArticleOverlay(item *navItem) tea.Cmd {
+	if item == nil || item.root == "" {
+		return nil
+	}
+	files := storefs.ProbeFiles(item.root)
+	files.Summary = storefs.ResolveSummary(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	files.Flash = storefs.ResolveFlash(item.root, m.cfg.PreferredModels)
+
+	type part struct {
+		label string
+		path  string
+	}
+	var parts []part
+	if files.Flash != "" {
+		parts = append(parts, part{"Flash", files.Flash})
+	}
+	if files.Summary != "" {
+		parts = append(parts, part{"Summary", files.Summary})
+	}
+	if files.Body != "" {
+		parts = append(parts, part{"Body", files.Body})
+	}
+	if len(parts) == 0 {
+		m.setStatusError("no content files available")
+		return nil
+	}
+
+	var sb strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		pad := 60 - 4 - len(p.label) - 1
+		if pad < 3 {
+			pad = 3
+		}
+		sb.WriteString(fmt.Sprintf("── %s %s\n\n", p.label, strings.Repeat("─", pad)))
+		data, err := os.ReadFile(p.path)
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("[error reading %s: %v]", p.label, err))
+		} else {
+			sb.WriteString(strings.TrimSpace(string(data)))
+		}
+	}
+
+	title := item.title
+	if title == "" {
+		title = item.id
+	}
+	m.openResourceOverlay(title, sb.String())
+	return nil
+}
+
+// selectedWsRow returns the currently selected workspace row, or nil.
+func (m *Model) selectedWsRow() *wsRow {
+	if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
+		return nil
+	}
+	return &m.wsRows[m.wsCursor]
+}
+
+// wsFilePathForRow returns the filesystem path for a resource or outcome row.
+func (m *Model) wsFilePathForRow(row *wsRow) string {
+	if row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		return ""
+	}
+	ws := m.workspaceItems[row.wsIdx]
+	switch row.kind {
+	case wsRowResource:
+		return filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, ws.name), "resources", row.resourceName)
+	case wsRowOutcome:
+		return filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, ws.name), "outcomes", row.outcomeName)
+	}
+	return ""
+}
+
+// openWsFileExternal opens the selected resource/outcome with the system default app.
+func (m *Model) openWsFileExternal() tea.Cmd {
+	row := m.selectedWsRow()
+	if row == nil {
+		return nil
+	}
+	path := m.wsFilePathForRow(row)
+	if path == "" {
+		return nil
+	}
+	cmd := exec.Command("open", path)
+	cmd.Start()
+	return nil
+}
+
+// viewWsFileInTerminal opens the selected resource/outcome in an external terminal window.
+func (m *Model) viewWsFileInTerminal() tea.Cmd {
+	row := m.selectedWsRow()
+	if row == nil {
+		return nil
+	}
+	path := m.wsFilePathForRow(row)
+	if path == "" {
+		return nil
+	}
+	name := row.resourceName
+	if row.kind == wsRowOutcome {
+		name = row.outcomeName
+	}
+
+	pid := os.Getpid()
+	scriptPath := fmt.Sprintf("%s/arc-view-%d-%s.sh", os.TempDir(), pid, name)
+
+	script := fmt.Sprintf(
+		"#!/bin/bash\ntrap 'rm -f %q' EXIT\n"+
+			"# Background watcher: exit when parent arc process dies.\n"+
+			"(while kill -0 %d 2>/dev/null; do sleep 1; done; kill $$ 2>/dev/null) &\n"+
+			"cat %q\necho ''\nread -n1 -s -r -p '(press any key to close)'\n",
+		scriptPath, pid, path,
+	)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		m.setStatusError(fmt.Sprintf("view: could not write script: %v", err))
+		return nil
+	}
+
+	var appleScript string
+	switch ActiveTerminal {
+	case TermITerm2:
+		appleScript = fmt.Sprintf(
+			`tell application "iTerm2" to create window with default profile command %q`,
+			scriptPath,
+		)
+	default:
+		appleScript = fmt.Sprintf(
+			`tell application "Terminal" to do script %q`,
+			scriptPath,
+		)
+	}
+
+	cmd := exec.Command("osascript", "-e", appleScript)
+	cmd.Start()
 	return nil
 }
 
@@ -2455,7 +2613,7 @@ func (m *Model) cmdViewArticle() tea.Cmd {
 		"#!/bin/bash\ntrap 'rm -f %q' EXIT\n"+
 			"# Background watcher: exit when parent arc process dies.\n"+
 			"(while kill -0 %d 2>/dev/null; do sleep 1; done; kill $$ 2>/dev/null) &\n"+
-			"{ %s } | less -R\n",
+			"{ %s }\necho ''\nread -n1 -s -r -p '(press any key to close)'\n",
 		scriptPath, pid, catParts,
 	)
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
