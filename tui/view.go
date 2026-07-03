@@ -539,7 +539,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			if ws.hasHistory {
 				flags += " 💬"
 			}
-			counts := fmt.Sprintf(" (%da %dc)", ws.articleCount, ws.collectionCount)
+			counts := fmt.Sprintf(" (%da %dc %dr)", ws.articleCount, ws.collectionCount, ws.resourceCount)
 			label = truncate(arrow+ws.name+counts+flags, w-1)
 			if selected {
 				label = reverse(label)
@@ -571,6 +571,52 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				label = reverse(label)
 			} else {
 				label = fg(t.NavDimmed, prefix) + fg(t.NavMark, "•") + " " + fg(t.NavText, title)
+			}
+
+		case wsRowResourceGroup:
+			arrow := "  ▶ "
+			if ws.resourcesExpanded {
+				arrow = "  ▼ "
+			}
+			label = truncate(arrow+"resources"+fmt.Sprintf(" (%d)", row.count), w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavText, label)
+			}
+
+		case wsRowResource:
+			prefix := "    "
+			dot := "◦ "
+			name := truncate(row.resourceName, w-len(prefix)-len(dot))
+			label = prefix + dot + name
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, prefix) + fg(t.NavDimmed, "◦") + " " + fg(t.NavText, name)
+			}
+
+		case wsRowOutcomeGroup:
+			arrow := "  ▶ "
+			if ws.outcomesExpanded {
+				arrow = "  ▼ "
+			}
+			label = truncate(arrow+"outcomes"+fmt.Sprintf(" (%d)", row.count), w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavText, label)
+			}
+
+		case wsRowOutcome:
+			prefix := "    "
+			dot := "◦ "
+			name := truncate(row.outcomeName, w-len(prefix)-len(dot))
+			label = prefix + dot + name
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, prefix) + fg(t.NavDimmed, "◦") + " " + fg(t.NavText, name)
 			}
 		}
 		lines = append(lines, label)

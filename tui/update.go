@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -706,6 +708,12 @@ func (m *Model) navSelect() tea.Cmd {
 			return m.cmdViewArticle()
 		case wsRowCollection:
 			m.wsToggleExpand()
+		case wsRowResourceGroup, wsRowOutcomeGroup:
+			m.wsToggleExpand()
+		case wsRowResource:
+			return m.openWorkspaceFile(row.wsIdx, "resources", row.resourceName)
+		case wsRowOutcome:
+			return m.openWorkspaceFile(row.wsIdx, "outcomes", row.outcomeName)
 		}
 	}
 	return nil
@@ -839,9 +847,42 @@ func (m *Model) wsToggleExpand() {
 			ws.expandedCols = make(map[string]bool)
 		}
 		ws.expandedCols[row.colSlug] = !ws.expandedCols[row.colSlug]
+	case wsRowResourceGroup:
+		ws.resourcesExpanded = !ws.resourcesExpanded
+	case wsRowOutcomeGroup:
+		ws.outcomesExpanded = !ws.outcomesExpanded
 	}
 	m.wsRows = m.buildWsRows()
 	m.clampWsScroll()
+}
+
+// openWorkspaceFile reads a file from the workspace subdir and opens the resource overlay.
+func (m *Model) openWorkspaceFile(wsIdx int, subdir, filename string) tea.Cmd {
+	if wsIdx < 0 || wsIdx >= len(m.workspaceItems) {
+		return nil
+	}
+	ws := m.workspaceItems[wsIdx]
+	filePath := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, ws.name), subdir, filename)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		m.setStatusError(fmt.Sprintf("cannot read %s/%s: %v", subdir, filename, err))
+		return nil
+	}
+	// Binary check.
+	check := data
+	if len(check) > 512 {
+		check = check[:512]
+	}
+	if !utf8.Valid(check) {
+		m.setStatusError(fmt.Sprintf("%q is not a text file", filename))
+		return nil
+	}
+	const maxBytes = 200 * 1024
+	if len(data) > maxBytes {
+		data = append(data[:maxBytes], []byte("\n[file truncated at 200 KB]")...)
+	}
+	m.openResourceOverlay(filename, string(data))
+	return nil
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
@@ -3169,6 +3210,14 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 				}
 			case wsRowCollection:
 				m.wsToggleExpand()
+			case wsRowResourceGroup:
+				m.wsToggleExpand()
+			case wsRowOutcomeGroup:
+				m.wsToggleExpand()
+			case wsRowResource:
+				return m.openWorkspaceFile(row.wsIdx, "resources", row.resourceName)
+			case wsRowOutcome:
+				return m.openWorkspaceFile(row.wsIdx, "outcomes", row.outcomeName)
 			}
 		}
 	}

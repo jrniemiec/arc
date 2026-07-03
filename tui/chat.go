@@ -1099,6 +1099,13 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		}
 		return m.cmdResourceNew(arg)
 
+	case "/resource-save":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.Join(parts[1:], " ")
+		}
+		return m.chatSaveResource(arg)
+
 	default:
 		// Fall through to global command dispatcher so /log, /stats, /help etc. work.
 		return m.dispatchCommand(val)
@@ -1139,20 +1146,70 @@ func (m *Model) chatShowMeta() tea.Cmd {
 
 // chatSave saves the chat conversation to the workspace outcomes directory.
 func (m *Model) chatSave(filename string) tea.Cmd {
-	if m.chatEngine == nil {
-		m.statusMsg = "✗ no active chat"
+	msgs := m.chatMessages()
+	if len(msgs) == 0 {
+		m.setStatusError("no chat messages to save")
 		return nil
 	}
 	if filename == "" {
 		filename = fmt.Sprintf("chat-%s", time.Now().Format("2006-01-02-150405"))
 	}
 
-	hist := m.chatEngine.History()
+	dataRoot := m.cfg.DataRoot
+	wsName := m.chatWorkspace
+	content := m.formatChatMarkdown(msgs)
+	fname := filename + ".md"
+	return func() tea.Msg {
+		err := storefs.WriteWorkspaceOutcome(dataRoot, wsName, fname, []byte(content))
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ saved to outcomes/" + fname, reloadWorkspaces: true}
+	}
+}
+
+// chatSaveResource saves the current chat session as a resource file.
+func (m *Model) chatSaveResource(filename string) tea.Cmd {
+	msgs := m.chatMessages()
+	if len(msgs) == 0 {
+		m.setStatusError("no chat messages to save")
+		return nil
+	}
+	if filename == "" {
+		filename = fmt.Sprintf("chat-%s", time.Now().Format("2006-01-02-150405"))
+	}
+
+	dataRoot := m.cfg.DataRoot
+	wsName := m.chatWorkspace
+	content := m.formatChatMarkdown(msgs)
+	fname := filename + ".md"
+	return func() tea.Msg {
+		err := storefs.WriteWorkspaceResource(dataRoot, wsName, fname, []byte(content))
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ saved to resources/" + fname, reloadWorkspaces: true}
+	}
+}
+
+// chatMessages returns the current chat messages, preferring the engine history
+// if available, falling back to chatRawMsgs.
+func (m *Model) chatMessages() []chat.Message {
+	if m.chatEngine != nil {
+		return m.chatEngine.History().Msgs
+	}
+	return m.chatRawMsgs
+}
+
+// formatChatMarkdown renders chat messages as a markdown document.
+func (m *Model) formatChatMarkdown(msgs []chat.Message) string {
 	var sb strings.Builder
 	sb.WriteString("# Chat: " + m.chatWorkspace + "\n\n")
-	sb.WriteString("Profile: " + m.chatEngine.ProfileName() + "  ·  Model: " + m.chatEngine.Profile().Model + "\n\n")
+	if m.chatEngine != nil {
+		sb.WriteString("Profile: " + m.chatEngine.ProfileName() + "  ·  Model: " + m.chatEngine.Profile().Model + "\n\n")
+	}
 	sb.WriteString("---\n\n")
-	for _, msg := range hist.Msgs {
+	for _, msg := range msgs {
 		switch msg.Role {
 		case chat.RoleUser:
 			sb.WriteString("**You:** " + msg.Content + "\n\n")
@@ -1160,18 +1217,7 @@ func (m *Model) chatSave(filename string) tea.Cmd {
 			sb.WriteString("**Assistant:** " + msg.Content + "\n\n")
 		}
 	}
-
-	dataRoot := m.cfg.DataRoot
-	wsName := m.chatWorkspace
-	content := sb.String()
-	fname := filename + ".md"
-	return func() tea.Msg {
-		err := storefs.WriteWorkspaceOutcome(dataRoot, wsName, fname, []byte(content))
-		if err != nil {
-			return cmdDoneMsg{err: err.Error()}
-		}
-		return cmdDoneMsg{statusMsg: "✓ saved to outcomes/" + fname}
-	}
+	return sb.String()
 }
 
 // addChatNote stores text as a RoleNote message — visible in chat history
@@ -1332,7 +1378,7 @@ func (m *Model) cmdResourceAdd(path string) tea.Cmd {
 		if err != nil {
 			return cmdDoneMsg{err: "resource-add: " + err.Error()}
 		}
-		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q added to workspace %q", name, ws)}
+		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q added to workspace %q", name, ws), reloadWorkspaces: true}
 	}
 }
 
@@ -1344,16 +1390,15 @@ func (m *Model) cmdResourceRemove(name string) {
 	}
 	ws := m.chatWorkspace
 	cfg := m.cfg
-	m.pendingConfirmMsg = fmt.Sprintf("Delete resource %q from workspace %q? [yes] to confirm:", name, ws)
+	m.pendingConfirmMsg = fmt.Sprintf("delete resource %q? (y/n)", name)
 	m.pendingConfirm = func() tea.Cmd {
 		return func() tea.Msg {
 			if err := storefs.RemoveWorkspaceResource(cfg.DataRoot, ws, name); err != nil {
 				return cmdDoneMsg{err: "resource-remove: " + err.Error()}
 			}
-			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q removed from workspace %q", name, ws)}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q removed from workspace %q", name, ws), reloadWorkspaces: true}
 		}
 	}
-	m.setStatusLines([]string{m.pendingConfirmMsg})
 }
 
 // cmdResourceView opens a resource file in the text overlay.

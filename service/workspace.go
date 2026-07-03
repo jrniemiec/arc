@@ -83,7 +83,17 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 		ChatConfig:      chatCfg,
 		Articles:        articles,
 		CollectionSlugs: colSlugs,
+		ResourceNames:   resourceNames(resources),
+		OutcomeNames:    outcomes,
 	}, nil
+}
+
+func resourceNames(entries []fs.ResourceEntry) []string {
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+	return names
 }
 
 // ResolveWorkspaceName resolves a user-supplied query to a workspace name.

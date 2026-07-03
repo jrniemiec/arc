@@ -142,29 +142,39 @@ type workspaceItem struct {
 	chatStrategy    string
 	articles        []string          // slugs
 	collectionSlugs []string          // slugs
+	resources       []string          // resource file basenames
+	outcomes        []string          // outcome file basenames
 
 	// expand state
-	expanded     bool
-	expandedCols map[string]bool // collection slug → expanded
+	expanded          bool
+	expandedCols      map[string]bool // collection slug → expanded
+	resourcesExpanded bool
+	outcomesExpanded  bool
 }
 
 // wsRowKind distinguishes row types in the workspace tree.
 type wsRowKind int
 
 const (
-	wsRowWorkspace  wsRowKind = iota
-	wsRowCollection           // collection under workspace
-	wsRowArticle              // article (leaf)
+	wsRowWorkspace      wsRowKind = iota
+	wsRowCollection               // collection under workspace
+	wsRowArticle                  // article (leaf)
+	wsRowResourceGroup            // "Resources (N)" foldable header
+	wsRowResource                 // resource file (leaf)
+	wsRowOutcomeGroup             // "Outcomes (N)" foldable header
+	wsRowOutcome                  // outcome file (leaf)
 )
 
 // wsRow is one display row in the workspace foldable tree.
 type wsRow struct {
 	kind   wsRowKind
 	wsIdx  int    // index into workspaceItems
-	colSlug string // wsRowCollection rows
-	slug   string // wsRowArticle rows
-	title  string // article title (looked up from navItemsAll)
-	count  int    // article count for wsRowCollection
+	colSlug      string // wsRowCollection rows
+	slug         string // wsRowArticle rows
+	title        string // article title (looked up from navItemsAll)
+	count        int    // article count for wsRowCollection
+	resourceName string // wsRowResource rows
+	outcomeName  string // wsRowOutcome rows
 }
 
 // navItem is one entry in the left navigator.
@@ -387,6 +397,7 @@ var chatCommands = []cmdCompletion{
 	{"/resource-view", "<name>", "open resource file in viewer overlay"},
 	{"/resource-edit", "<name>", "open resource file in $EDITOR"},
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
+	{"/resource-save", "[filename]", "save chat session as a resource file"},
 	{"/help", "", "show chat commands"},
 }
 
@@ -582,6 +593,8 @@ func loadWorkspaces(svc *service.Service) tea.Cmd {
 				chatStrategy:    w.ChatConfig.Strategy,
 				articles:        w.Articles,
 				collectionSlugs: w.CollectionSlugs,
+				resources:       w.ResourceNames,
+				outcomes:        w.OutcomeNames,
 				expandedCols:    make(map[string]bool),
 			}
 		}
@@ -755,6 +768,22 @@ func (m Model) buildWsRows() []wsRow {
 				title = slug
 			}
 			rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, slug: slug, title: title})
+		}
+
+		// Resources folder (always visible, like collections).
+		rows = append(rows, wsRow{kind: wsRowResourceGroup, wsIdx: i, count: len(ws.resources)})
+		if ws.resourcesExpanded {
+			for _, name := range ws.resources {
+				rows = append(rows, wsRow{kind: wsRowResource, wsIdx: i, resourceName: name})
+			}
+		}
+
+		// Outcomes folder (always visible, like collections).
+		rows = append(rows, wsRow{kind: wsRowOutcomeGroup, wsIdx: i, count: len(ws.outcomes)})
+		if ws.outcomesExpanded {
+			for _, name := range ws.outcomes {
+				rows = append(rows, wsRow{kind: wsRowOutcome, wsIdx: i, outcomeName: name})
+			}
 		}
 	}
 	return rows

@@ -417,6 +417,15 @@ func WriteWorkspaceOutcome(dataRoot, name, filename string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// WriteWorkspaceResource writes a file to workspace/resources/.
+func WriteWorkspaceResource(dataRoot, name, filename string, data []byte) error {
+	dir := filepath.Join(WorkspaceDir(dataRoot, name), "resources")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, filename), data, 0644)
+}
+
 // ── Chat config ───────────────────────────────────────────────────────────────
 
 // ReadChatConfig reads chat/chat.json from a workspace. Returns zero value if missing.
