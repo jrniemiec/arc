@@ -25,8 +25,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Only the exit key breaks out.
 	if m.selectionMode {
 		if key, ok := msg.(tea.KeyMsg); ok {
-			if key.Type == tea.KeyEsc || key.String() == "ctrl+\\" {
+			if key.Type == tea.KeyEsc || key.String() == "ctrl+s" {
 				m.selectionMode = false
+				m.navWidthOverride = m.preSelNavWidth
+				m.selectionMaxPane = 0
 				m.statusMsg = ""
 				return m, tea.Batch(tea.EnableMouseCellMotion, spinnerTick())
 			}
@@ -356,8 +358,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	// Global keys — always active
 	switch {
-	case msg.String() == "ctrl+\\":
+	case msg.String() == "ctrl+s":
 		m.selectionMode = true
+		m.preSelNavWidth = m.navWidthOverride
+		// Maximize the focused pane (hide the other).
+		switch m.focus {
+		case paneNav:
+			m.selectionMaxPane = paneNav
+			m.navWidthOverride = m.width - 1
+		case paneContent:
+			m.selectionMaxPane = paneContent
+			m.navWidthOverride = 0
+		default:
+			m.selectionMaxPane = 0 // no maximization for command pane
+		}
 		// One final redraw shows the status message, then screen freezes.
 		return tea.DisableMouse
 	case key.Matches(msg, keys.Quit) && !(m.focus == paneCommand && msg.String() == "q"):

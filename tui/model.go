@@ -214,7 +214,9 @@ type Model struct {
 	themeMode string // "auto" | "light" | "dark"
 
 	// Selection mode — screen frozen, mouse disabled for native text selection
-	selectionMode bool
+	selectionMode    bool
+	preSelNavWidth   int  // saved navWidthOverride before selection mode
+	selectionMaxPane focusPane // which pane is maximized during selection (paneNav or paneContent)
 
 	// Spinner — drives cursor blink and future progress indicators
 	spinnerFrame  int

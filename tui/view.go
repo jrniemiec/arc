@@ -85,6 +85,13 @@ func sep(width int) string {
 // isTop=true uses ┬, isTop=false uses ┴. The active pane's portion is accent-colored.
 func (m Model) renderSplitSep(width int, isTop bool) string {
 	t := ActiveTheme
+
+	// Selection mode with maximized pane: plain full-width separator, no junction.
+	if m.selectionMode && m.selectionMaxPane != 0 {
+		color := t.Accent
+		return fg(color, strings.Repeat("─", width))
+	}
+
 	navW := m.navWidth()
 	rightW := width - navW - 1
 	if rightW < 0 {
@@ -288,6 +295,27 @@ func tabBarHitTest(x int) tab {
 
 // renderMainArea renders the split left/right pane for the current tab.
 func (m Model) renderMainArea(height int) string {
+	// Selection mode with maximized pane: render only the focused pane at full width.
+	if m.selectionMode && m.selectionMaxPane != 0 {
+		var lines []string
+		switch m.selectionMaxPane {
+		case paneNav:
+			lines = m.renderNavPane(height)
+		case paneContent:
+			lines = m.renderContentPane(height, m.width)
+		}
+		var sb strings.Builder
+		for i := 0; i < height; i++ {
+			if i < len(lines) {
+				sb.WriteString(lines[i])
+			}
+			if i < height-1 {
+				sb.WriteByte('\n')
+			}
+		}
+		return sb.String()
+	}
+
 	t := ActiveTheme
 	navW := m.navWidth()
 	rightWidth := m.width - navW - 1 // 1 for the vertical divider
@@ -1365,7 +1393,7 @@ func (m Model) renderStatusLine() string {
 		return m.renderChatStatusLine()
 	}
 	if m.selectionMode {
-		return fgBold(t.Accent, truncate(" selection mode — drag to select · Cmd+C to copy · Ctrl+\\ or Esc to exit", m.width))
+		return fgBold(t.Accent, truncate(" selection mode — drag to select · Cmd+C to copy · Ctrl+S or Esc to exit", m.width))
 	}
 	if m.pendingConfirmMsg != "" {
 		return fg(t.Accent, truncate(" "+m.pendingConfirmMsg, m.width))

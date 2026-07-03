@@ -528,7 +528,7 @@ func (m Model) buildChatVLines() []chatVLine {
 
 	var vlines []chatVLine
 	for e, box := range boxes {
-		selected := e == m.chatBoxCursor && m.focus == paneContent
+		selected := e == m.chatBoxCursor && m.focus == paneContent && !m.selectionMode
 		collapsed := m.chatCollapsed != nil && m.chatCollapsed[e]
 
 		var end int
@@ -775,58 +775,76 @@ func (m Model) renderChatPane(height, width int) []string {
 			end = total
 		}
 
+		selPlain := m.selectionMode && m.selectionMaxPane == paneContent
+
 		for _, vl := range vlines[start:end] {
 			switch {
 			case vl.isBoxTop:
-				lines = append(lines, topRule)
+				if selPlain {
+					lines = append(lines, "")
+				} else {
+					lines = append(lines, topRule)
+				}
 
 			case vl.isBoxBottom:
-				lines = append(lines, botRule)
+				if selPlain {
+					lines = append(lines, "")
+				} else {
+					lines = append(lines, botRule)
+				}
 
 			case vl.isSep:
 				lines = append(lines, "")
 
 			case vl.isHeader:
-				// Header line inside the selected box:
-				// left = "time  model", right = "v expand/collapse · s speak · x delete"
-				// All in t.Dimmed — identical to c2.
-				expandHint := "v expand"
-				if m.chatCollapsed != nil && m.chatCollapsed[vl.boxIdx] {
-					expandHint = "v collapse"
+				if selPlain {
+					// Plain header: just the metadata text, no border or hints.
+					lines = append(lines, fg(t.ContentDimmed, vl.metaText))
+				} else {
+					// Header line inside the selected box:
+					// left = "time  model", right = "v expand/collapse · s speak · x delete"
+					// All in t.Dimmed — identical to c2.
+					expandHint := "v expand"
+					if m.chatCollapsed != nil && m.chatCollapsed[vl.boxIdx] {
+						expandHint = "v collapse"
+					}
+					hintsStr := expandHint + " · s speak · x delete"
+					left := vl.metaText
+					leftW := lipgloss.Width(left)
+					hintsW := lipgloss.Width(hintsStr)
+					pad := innerW - leftW - hintsW
+					if pad < 1 {
+						pad = 1
+					}
+					headerContent := fg(t.ContentDimmed, left) +
+						strings.Repeat(" ", pad) +
+						fg(t.ContentDimmed, hintsStr)
+					// Pad to full innerW if total is short.
+					total := leftW + pad + hintsW
+					if total < innerW {
+						headerContent += strings.Repeat(" ", innerW-total)
+					}
+					lines = append(lines, bL+headerContent+bR)
 				}
-				hintsStr := expandHint + " · s speak · x delete"
-				left := vl.metaText
-				leftW := lipgloss.Width(left)
-				hintsW := lipgloss.Width(hintsStr)
-				pad := innerW - leftW - hintsW
-				if pad < 1 {
-					pad = 1
-				}
-				headerContent := fg(t.ContentDimmed, left) +
-					strings.Repeat(" ", pad) +
-					fg(t.ContentDimmed, hintsStr)
-				// Pad to full innerW if total is short.
-				total := leftW + pad + hintsW
-				if total < innerW {
-					headerContent += strings.Repeat(" ", innerW-total)
-				}
-				lines = append(lines, bL+headerContent+bR)
 
 			case vl.isEllipsis:
-				if vl.isSelected {
+				if selPlain || !vl.isSelected {
+					lines = append(lines, fg(t.ContentDimmed, vl.metaText))
+				} else {
 					text := fg(t.ContentDimmed, vl.metaText)
 					visW := lipgloss.Width(vl.metaText)
 					if visW < innerW {
 						text += strings.Repeat(" ", innerW-visW)
 					}
 					lines = append(lines, bL+text+bR)
-				} else {
-					lines = append(lines, fg(t.ContentDimmed, vl.metaText))
 				}
 
 			default:
 				cl := m.chatDisplayLines[vl.contentIdx]
-				if vl.isSelected {
+				if selPlain || !vl.isSelected {
+					// Plain text — no box border.
+					lines = append(lines, colorChatLine(cl, t))
+				} else {
 					// Inside the box border: pad to innerW.
 					if cl.role == chatLineBlank || cl.text == "" {
 						lines = append(lines, bL+strings.Repeat(" ", innerW)+bR)
@@ -852,9 +870,6 @@ func (m Model) renderChatPane(height, width int) []string {
 					}
 					colored := colorChatLine(chatLine{role: cl.role, text: text}, t)
 					lines = append(lines, bL+colored+bR)
-				} else {
-					// Plain text — no box border.
-					lines = append(lines, colorChatLine(cl, t))
 				}
 			}
 		}
