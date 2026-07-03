@@ -3,9 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -615,6 +619,15 @@ func (m Model) buildChatVLines() []chatVLine {
 	return vlines
 }
 
+// collapseAllBoxes marks every logical box as collapsed.
+func (m *Model) collapseAllBoxes() {
+	n := m.chatBoxCount()
+	m.chatCollapsed = make(map[int]bool, n)
+	for i := 0; i < n; i++ {
+		m.chatCollapsed[i] = true
+	}
+}
+
 // cmdChatCollapseBox toggles the collapsed state of box at boxIdx.
 func (m *Model) cmdChatCollapseBox(boxIdx int) {
 	if m.chatCollapsed == nil {
@@ -1045,6 +1058,47 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		m.setStatusLines(lines)
 		return nil
 
+	case "/resource-list":
+		m.cmdResourceList()
+		return nil
+
+	case "/resource-add":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.Join(parts[1:], " ")
+		}
+		return m.cmdResourceAdd(arg)
+
+	case "/resource-remove", "/resource-delete":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		m.cmdResourceRemove(arg)
+		return nil
+
+	case "/resource-view":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		m.cmdResourceView(arg)
+		return nil
+
+	case "/resource-edit":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		return m.cmdResourceEdit(arg)
+
+	case "/resource-new":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		return m.cmdResourceNew(arg)
+
 	default:
 		// Fall through to global command dispatcher so /log, /stats, /help etc. work.
 		return m.dispatchCommand(val)
@@ -1203,4 +1257,184 @@ func (m *Model) chatAutoScrollToBottom(viewH int) {
 		maxScroll = 0
 	}
 	m.chatScroll = maxScroll
+}
+
+// ── Resource overlay ────────────────────────────────────────────────────────
+
+// resourceReloadMsg fires after an external editor exits for a resource file.
+type resourceReloadMsg struct{ name string }
+
+// openResourceOverlay opens the resource file overlay for the named file.
+func (m *Model) openResourceOverlay(name, text string) {
+	m.resourcePreFocus = m.focus
+	m.resourceLines = strings.Split(text, "\n")
+	m.resourceName = name
+	m.resourceCursor = 0
+	m.resourceScroll = 0
+	m.focus = paneResource
+}
+
+// closeResourceOverlay tears down the resource overlay and restores previous focus.
+func (m *Model) closeResourceOverlay() {
+	m.focus = m.resourcePreFocus
+	m.resourceLines = nil
+	m.resourceName = ""
+	m.resourceCursor = 0
+	m.resourceScroll = 0
+}
+
+// scrollResourceToCursor adjusts resourceScroll so the cursor line is visible.
+func (m *Model) scrollResourceToCursor(viewH int) {
+	if m.resourceCursor < m.resourceScroll {
+		m.resourceScroll = m.resourceCursor
+	} else if m.resourceCursor >= m.resourceScroll+viewH {
+		m.resourceScroll = m.resourceCursor - viewH + 1
+	}
+}
+
+// cmdResourceList lists resources for the current workspace.
+func (m *Model) cmdResourceList() {
+	resources, err := storefs.ListWorkspaceResources(m.cfg.DataRoot, m.chatWorkspace)
+	if err != nil {
+		m.setStatusError("resource-list: " + err.Error())
+		return
+	}
+	if len(resources) == 0 {
+		m.setStatusLines([]string{fmt.Sprintf("(no resources for workspace %q)", m.chatWorkspace)})
+		return
+	}
+	lines := []string{fmt.Sprintf("resources for workspace %q:", m.chatWorkspace)}
+	for _, r := range resources {
+		var sizeStr string
+		switch {
+		case r.Size >= 1024*1024:
+			sizeStr = fmt.Sprintf("%.1f MB", float64(r.Size)/1024/1024)
+		case r.Size >= 1024:
+			sizeStr = fmt.Sprintf("%.1f KB", float64(r.Size)/1024)
+		default:
+			sizeStr = fmt.Sprintf("%d B", r.Size)
+		}
+		lines = append(lines, fmt.Sprintf("  %-32s  %8s", r.Name, sizeStr))
+	}
+	m.setStatusLines(lines)
+}
+
+// cmdResourceAdd copies a local file into workspace/resources/.
+func (m *Model) cmdResourceAdd(path string) tea.Cmd {
+	if path == "" {
+		m.setStatusError("usage: /resource-add <file>")
+		return nil
+	}
+	ws := m.chatWorkspace
+	cfg := m.cfg
+	return func() tea.Msg {
+		name, err := storefs.AddFileResource(cfg.DataRoot, ws, path)
+		if err != nil {
+			return cmdDoneMsg{err: "resource-add: " + err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q added to workspace %q", name, ws)}
+	}
+}
+
+// cmdResourceRemove removes a resource from workspace/resources/ with confirmation.
+func (m *Model) cmdResourceRemove(name string) {
+	if name == "" {
+		m.setStatusError("usage: /resource-remove <name>")
+		return
+	}
+	ws := m.chatWorkspace
+	cfg := m.cfg
+	m.pendingConfirmMsg = fmt.Sprintf("Delete resource %q from workspace %q? [yes] to confirm:", name, ws)
+	m.pendingConfirm = func() tea.Cmd {
+		return func() tea.Msg {
+			if err := storefs.RemoveWorkspaceResource(cfg.DataRoot, ws, name); err != nil {
+				return cmdDoneMsg{err: "resource-remove: " + err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q removed from workspace %q", name, ws)}
+		}
+	}
+	m.setStatusLines([]string{m.pendingConfirmMsg})
+}
+
+// cmdResourceView opens a resource file in the text overlay.
+func (m *Model) cmdResourceView(name string) {
+	if name == "" {
+		m.setStatusError("usage: /resource-view <name>")
+		return
+	}
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "resources")
+	filePath := filepath.Join(dir, name)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		m.setStatusError(fmt.Sprintf("resource %q not found", name))
+		return
+	}
+	// Binary check.
+	check := data
+	if len(check) > 512 {
+		check = check[:512]
+	}
+	if !utf8.Valid(check) {
+		m.setStatusError(fmt.Sprintf("%q is not a text file", name))
+		return
+	}
+	const maxBytes = 200 * 1024
+	if len(data) > maxBytes {
+		data = append(data[:maxBytes], []byte("\n[file truncated at 200 KB]")...)
+	}
+	m.openResourceOverlay(name, string(data))
+}
+
+// cmdResourceEdit opens a resource file in $EDITOR.
+func (m *Model) cmdResourceEdit(name string) tea.Cmd {
+	if name == "" {
+		m.setStatusError("usage: /resource-edit <name>")
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		m.setStatusError("$EDITOR is not set — add 'export EDITOR=<path>' to your shell config")
+		return nil
+	}
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "resources")
+	filePath := filepath.Join(dir, name)
+	if _, err := os.Stat(filePath); err != nil {
+		m.setStatusError(fmt.Sprintf("resource %q not found", name))
+		return nil
+	}
+	editorCmd := exec.Command(editor, filePath)
+	return tea.ExecProcess(editorCmd, func(err error) tea.Msg {
+		return resourceReloadMsg{name: name}
+	})
+}
+
+// cmdResourceNew creates a new resource file and opens it in $EDITOR.
+func (m *Model) cmdResourceNew(name string) tea.Cmd {
+	if name == "" {
+		m.setStatusError("usage: /resource-new <name>")
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		m.setStatusError("$EDITOR is not set — add 'export EDITOR=<path>' to your shell config")
+		return nil
+	}
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "resources")
+	filePath := filepath.Join(dir, name)
+	if _, err := os.Stat(filePath); err == nil {
+		m.setStatusError(fmt.Sprintf("resource %q already exists — use /resource-edit", name))
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		m.setStatusError("resource-new: " + err.Error())
+		return nil
+	}
+	if err := os.WriteFile(filePath, nil, 0o644); err != nil {
+		m.setStatusError("resource-new: " + err.Error())
+		return nil
+	}
+	editorCmd := exec.Command(editor, filePath)
+	return tea.ExecProcess(editorCmd, func(err error) tea.Msg {
+		return resourceReloadMsg{name: name}
+	})
 }

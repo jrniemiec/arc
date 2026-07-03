@@ -203,6 +203,12 @@ func (m Model) View() string {
 	if m.width == 0 || m.height < 6 {
 		return ""
 	}
+
+	// Resource overlay takes over the full screen.
+	if m.focus == paneResource {
+		return m.renderResourceOverlay()
+	}
+
 	// Fixed rows: top bar (2) + split sep (1) + cmd (1) + status sep (1) + completions (N) + status bar (1) = 6+N
 	compLines := m.renderCompletionLines()
 	fixedRows := 6 + len(compLines)
@@ -1322,6 +1328,9 @@ func (m Model) renderStatusLine() string {
 		return fg(t.Accent, truncate(" "+m.navFilter, m.width))
 	}
 	if m.statusMsg != "" {
+		if m.statusErr {
+			return fgBold(t.StatusError, truncate(" "+m.statusMsg, m.width))
+		}
 		return fg(t.StatusText, truncate(" "+m.statusMsg, m.width))
 	}
 	// Idle: show context stats for the active tab/sub-tab.
@@ -1377,4 +1386,64 @@ func padRight(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-visible)
+}
+
+// ── Resource overlay ──────────────────────────────────────────────────────────
+
+// renderResourceOverlay renders the full-screen resource file viewer.
+func (m Model) renderResourceOverlay() string {
+	t := ActiveTheme
+	w := m.width
+	h := m.height
+
+	// Layout: top bar (2 lines) + content + hint bar (2 lines)
+	contentH := h - 4
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	var out []string
+
+	// Top bar: "arc │ resource: <name>   line N / M"
+	left := fgBold(t.TopBarText, "arc") + fg(t.Dimmed, " │ ") + fg(t.TopBarText, "resource: "+m.resourceName)
+	total := len(m.resourceLines)
+	right := fg(t.Dimmed, fmt.Sprintf("line %d / %d", m.resourceCursor+1, total))
+	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	if gap < 1 {
+		gap = 1
+	}
+	out = append(out, " "+left+strings.Repeat(" ", gap)+right+" ")
+	out = append(out, fg(t.BoxBorder, strings.Repeat("─", w)))
+
+	// Scrollable content.
+	start := m.resourceScroll
+	end := start + contentH
+	if end > len(m.resourceLines) {
+		end = len(m.resourceLines)
+	}
+	for i := start; i < end; i++ {
+		line := m.resourceLines[i]
+		if i == m.resourceCursor {
+			out = append(out, fgBold(t.InputPrompt, "▶ ")+fg(t.TopBarText, line))
+		} else {
+			out = append(out, fg(t.Dimmed, "  ")+fg(t.ChatAssistant, line))
+		}
+	}
+	// Pad remaining content lines.
+	for len(out) < h-2 {
+		out = append(out, "")
+	}
+
+	// Hint bar.
+	out = append(out, fg(t.BoxBorder, strings.Repeat("─", w)))
+	out = append(out, " "+fg(t.Dimmed, "↑↓ / PgUp PgDn  move  ·  g/G  top/bottom  ·  e  edit  ·  Ctrl+X  close"))
+
+	// Safety clamp.
+	if len(out) > h {
+		out = out[:h]
+	}
+	for len(out) < h {
+		out = append(out, "")
+	}
+	return strings.Join(out, "\n")
 }

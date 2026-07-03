@@ -47,6 +47,7 @@ const (
 	paneNav                      // left navigator
 	paneContent                  // right content pane
 	paneCommand                  // command input line
+	paneResource                 // full-screen resource file overlay
 )
 
 // contentTab identifies the active sub-tab in the content pane.
@@ -311,6 +312,13 @@ type Model struct {
 	chatBoxCursor      int                   // selected box index in boxed view (focus==paneContent)
 	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
+
+	// Resource overlay (active when focus == paneResource)
+	resourceLines    []string // file content split into lines
+	resourceName     string   // file name shown in top bar
+	resourceCursor   int      // highlighted line index
+	resourceScroll   int      // scroll offset
+	resourcePreFocus focusPane // focus to restore on close
 }
 
 // cmdCompletion is one entry in the command completion popup.
@@ -373,6 +381,12 @@ var chatCommands = []cmdCompletion{
 	{"/system", "", "print system prompt (includes RAG + knowledge base)"},
 	{"/meta", "", "show workspace details"},
 	{"/save", "[filename]", "save session to outcomes/<filename>.md"},
+	{"/resource-list", "", "list files in workspace/resources/"},
+	{"/resource-add", "<file>", "copy local file into workspace/resources/"},
+	{"/resource-remove", "<name>", "delete a resource file (with confirmation)"},
+	{"/resource-view", "<name>", "open resource file in viewer overlay"},
+	{"/resource-edit", "<name>", "open resource file in $EDITOR"},
+	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/help", "", "show chat commands"},
 }
 
@@ -763,7 +777,7 @@ func (m Model) Init() tea.Cmd {
 		})
 	}
 	if m.svc != nil {
-		cmds = append(cmds, loadNav(m.svc), loadStats(m.svc))
+		cmds = append(cmds, loadNav(m.svc), loadStats(m.svc), loadWorkspaces(m.svc))
 	}
 	return tea.Batch(cmds...)
 }

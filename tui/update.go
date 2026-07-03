@@ -199,6 +199,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case resourceReloadMsg:
+		// Re-read the file after external editor exits.
+		if m.chatMode && m.chatWorkspace != "" {
+			name := msg.name
+			filePath := storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace) + "/resources/" + name
+			if data, err := os.ReadFile(filePath); err == nil {
+				text := string(data)
+				if m.focus == paneResource && m.resourceName == name {
+					m.resourceLines = strings.Split(text, "\n")
+					if m.resourceCursor >= len(m.resourceLines) {
+						m.resourceCursor = len(m.resourceLines) - 1
+					}
+				} else {
+					// Re-open the overlay.
+					m.openResourceOverlay(name, text)
+				}
+			}
+		}
+
 	case contentLoadedMsg:
 		m.contentFiles = msg.files
 		m.contentLines = msg.lines
@@ -233,6 +252,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursorVisible = true
 			}
 			m.rebuildChatLines(m.chatBuildWidth())
+			m.collapseAllBoxes()
 			chatViewH := m.height - 6 - m.completionCount() - 2
 			m.chatAutoScrollToBottom(chatViewH)
 			m.chatBoxCursor = 0
@@ -281,13 +301,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatLastElapsed = msg.elapsed
 		}
 		m.rebuildChatLines(m.chatBuildWidth())
-		chatViewH := m.height - 6 - m.completionCount() - 2
-		// Keep chatBoxCursor on the newest exchange when auto-scrolling.
-		if m.chatAutoScroll {
-			if n := m.chatBoxCount(); n > 0 {
+		// Collapse the newly completed exchange.
+		if n := m.chatBoxCount(); n > 0 {
+			if m.chatCollapsed == nil {
+				m.chatCollapsed = make(map[int]bool)
+			}
+			m.chatCollapsed[n-1] = true
+			if m.chatAutoScroll {
 				m.chatBoxCursor = n - 1
 			}
 		}
+		chatViewH := m.height - 6 - m.completionCount() - 2
 		m.chatAutoScrollToBottom(chatViewH)
 
 	case tea.KeyMsg:
@@ -373,6 +397,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleContentKey(msg)
 	case paneCommand:
 		return m.handleCommandKey(msg)
+	case paneResource:
+		return m.handleResourceKey(msg)
 	}
 
 	return nil
@@ -944,6 +970,55 @@ func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 			m.chatBoxCursor = numBoxes - 1
 		}
 		m.chatAutoScroll = true
+	}
+	return nil
+}
+
+// handleResourceKey handles keyboard input in the resource file overlay.
+func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
+	viewH := m.height - 4 // top bar (2) + hint bar (2)
+	if viewH < 1 {
+		viewH = 1
+	}
+	total := len(m.resourceLines)
+
+	switch msg.String() {
+	case "ctrl+x", "q", "esc":
+		m.closeResourceOverlay()
+	case "g":
+		m.resourceCursor = 0
+		m.resourceScroll = 0
+	case "G":
+		if total > 0 {
+			m.resourceCursor = total - 1
+		}
+		m.scrollResourceToCursor(viewH)
+	case "k", "up":
+		if m.resourceCursor > 0 {
+			m.resourceCursor--
+			m.scrollResourceToCursor(viewH)
+		}
+	case "j", "down":
+		if m.resourceCursor < total-1 {
+			m.resourceCursor++
+			m.scrollResourceToCursor(viewH)
+		}
+	case "pgup", "ctrl+u":
+		step := viewH / 2
+		m.resourceCursor -= step
+		if m.resourceCursor < 0 {
+			m.resourceCursor = 0
+		}
+		m.scrollResourceToCursor(viewH)
+	case "pgdown", "ctrl+d":
+		step := viewH / 2
+		m.resourceCursor += step
+		if m.resourceCursor >= total {
+			m.resourceCursor = total - 1
+		}
+		m.scrollResourceToCursor(viewH)
+	case "e":
+		return m.cmdResourceEdit(m.resourceName)
 	}
 	return nil
 }
