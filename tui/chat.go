@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -1433,7 +1432,7 @@ func (m *Model) cmdResourceView(name string) {
 	m.openResourceOverlay(name, string(data))
 }
 
-// cmdResourceEdit opens a resource file in $EDITOR.
+// cmdResourceEdit opens a resource file in $EDITOR in a separate terminal window.
 func (m *Model) cmdResourceEdit(name string) tea.Cmd {
 	if name == "" {
 		m.setStatusError("usage: /resource-edit <name>")
@@ -1450,13 +1449,11 @@ func (m *Model) cmdResourceEdit(name string) tea.Cmd {
 		m.setStatusError(fmt.Sprintf("resource %q not found", name))
 		return nil
 	}
-	editorCmd := exec.Command(editor, filePath)
-	return tea.ExecProcess(editorCmd, func(err error) tea.Msg {
-		return resourceReloadMsg{name: name}
-	})
+	m.openEditorInTerminal(editor, filePath, name)
+	return nil
 }
 
-// cmdResourceNew creates a new resource file and opens it in $EDITOR.
+// cmdResourceNew creates a new resource file and opens it in $EDITOR in a separate terminal window.
 func (m *Model) cmdResourceNew(name string) tea.Cmd {
 	if name == "" {
 		m.setStatusError("usage: /resource-new <name>")
@@ -1481,8 +1478,6 @@ func (m *Model) cmdResourceNew(name string) tea.Cmd {
 		m.setStatusError("resource-new: " + err.Error())
 		return nil
 	}
-	editorCmd := exec.Command(editor, filePath)
-	return tea.ExecProcess(editorCmd, func(err error) tea.Msg {
-		return resourceReloadMsg{name: name}
-	})
+	m.openEditorInTerminal(editor, filePath, name)
+	return nil
 }

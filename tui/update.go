@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -491,6 +493,27 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		return m.cmdViewArticle()
+	case msg.String() == "e":
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome) {
+				editor := os.Getenv("EDITOR")
+				if editor == "" {
+					m.setStatusError("$EDITOR is not set")
+					return nil
+				}
+				path := m.wsFilePathForRow(row)
+				if path == "" {
+					return nil
+				}
+				name := row.resourceName
+				if row.kind == wsRowOutcome {
+					name = row.outcomeName
+				}
+				m.openEditorInTerminal(editor, path, name)
+				return nil
+			}
+		}
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
@@ -1047,6 +1070,37 @@ func (m *Model) viewWsFileInTerminal() tea.Cmd {
 	cmd := exec.Command("osascript", "-e", appleScript)
 	cmd.Start()
 	return nil
+}
+
+// openEditorInTerminal opens $EDITOR as a detached process with a background
+// goroutine that kills it when arc exits.
+func (m *Model) openEditorInTerminal(editor, filePath, label string) {
+	cmd := exec.Command(editor, filePath)
+	if err := cmd.Start(); err != nil {
+		m.setStatusError(fmt.Sprintf("edit: %v", err))
+		return
+	}
+	// Background: wait for editor to exit, or kill it if arc dies first.
+	arcPid := os.Getpid()
+	go func() {
+		done := make(chan struct{})
+		go func() {
+			cmd.Wait()
+			close(done)
+		}()
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(1 * time.Second):
+				if err := syscall.Kill(arcPid, 0); err != nil {
+					cmd.Process.Kill()
+					return
+				}
+			}
+		}
+	}()
+	m.setStatusLines([]string{fmt.Sprintf("opened %s in external editor", label)})
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
