@@ -86,6 +86,11 @@ func sep(width int) string {
 func (m Model) renderSplitSep(width int, isTop bool) string {
 	t := ActiveTheme
 
+	// Shell mode: bottom separator (above input) goes bright red.
+	if !isTop && strings.HasPrefix(m.inputValue, "!") {
+		return shellBorderColor + strings.Repeat("─", width) + "\033[0m"
+	}
+
 	// Selection mode with maximized pane: plain full-width separator, no junction.
 	if m.selectionMode && m.selectionMaxPane != 0 {
 		color := t.Accent
@@ -1233,15 +1238,33 @@ func wordWrap(text string, maxWidth int) []string {
 }
 
 
+// shellBorderColor is bright bold red ANSI, used to tint input and separators in shell mode.
+const shellBorderColor = "\033[1;91m"
+
+// fgShellInput renders text in bright bold red when shell mode is active,
+// otherwise falls back to the given theme color.
+func fgShellInput(shellMode bool, col lipgloss.Color, text string) string {
+	if shellMode {
+		return shellBorderColor + text + "\033[0m"
+	}
+	return fg(col, text)
+}
+
 // renderCommandInput renders the command input line with real text and cursor.
 func (m Model) renderCommandInput() string {
 	t := ActiveTheme
+	shellMode := strings.HasPrefix(m.inputValue, "!")
+
 	promptStr := "> "
 	if m.chatMode {
 		promptStr = m.chatWorkspace + "> "
 	}
 	prompt := fg(t.InputPrompt, promptStr)
 	promptW := len([]rune(promptStr))
+	if shellMode {
+		prompt = ""
+		promptW = 0
+	}
 	availW := m.width - promptW
 	if availW < 4 {
 		availW = 4
@@ -1251,7 +1274,7 @@ func (m Model) renderCommandInput() string {
 		if m.inputValue == "" {
 			return prompt + fg(t.Dimmed, "esc · type a command")
 		}
-		return prompt + fg(t.InputText, truncate(m.inputValue, availW))
+		return prompt + fgShellInput(shellMode, t.InputText, truncate(m.inputValue, availW))
 	}
 
 	// Focused: render inputValue with cursor, scrolling viewport to keep cursor visible.
@@ -1279,7 +1302,7 @@ func (m Model) renderCommandInput() string {
 	var sb strings.Builder
 	sb.WriteString(prompt)
 	if cursorInView > 0 {
-		sb.WriteString(fg(t.InputText, string(visible[:cursorInView])))
+		sb.WriteString(fgShellInput(shellMode, t.InputText, string(visible[:cursorInView])))
 	}
 	// Cursor block: the char at cursor, or a space if at end.
 	if m.cursorVisible {
@@ -1291,19 +1314,22 @@ func (m Model) renderCommandInput() string {
 		}
 		sb.WriteString(reverse(cursorChar))
 		if cursorInView+1 < len(visible) {
-			sb.WriteString(fg(t.InputText, string(visible[cursorInView+1:])))
+			sb.WriteString(fgShellInput(shellMode, t.InputText, string(visible[cursorInView+1:])))
 		}
 	} else {
 		// Cursor invisible — render all visible text normally.
-		sb.WriteString(fg(t.InputText, string(visible[cursorInView:])))
+		sb.WriteString(fgShellInput(shellMode, t.InputText, string(visible[cursorInView:])))
 	}
 	return sb.String()
 }
 
 // renderStatusSep renders the separator between the command input and the status bar.
-// Accent-colored when the command pane is focused.
+// Accent-colored when the command pane is focused; bright red in shell mode.
 func (m Model) renderStatusSep() string {
 	t := ActiveTheme
+	if strings.HasPrefix(m.inputValue, "!") {
+		return shellBorderColor + strings.Repeat("─", m.width) + "\033[0m"
+	}
 	if m.focus == paneCommand {
 		return fg(t.Accent, strings.Repeat("─", m.width))
 	}

@@ -223,6 +223,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case shellDoneMsg:
+		lines := strings.Split(strings.TrimRight(msg.output, "\n"), "\n")
+		if msg.exitCode != 0 {
+			lines = append(lines, fmt.Sprintf("[exit %d]", msg.exitCode))
+			m.statusErr = true
+		}
+		m.setStatusLines(lines)
+
 	case resourceReloadMsg:
 		// Re-read the file after external editor exits.
 		if m.chatMode && m.chatWorkspace != "" {
@@ -1513,6 +1521,12 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					raw := strings.TrimSpace(val[2:])
 					return m.addChatNote(raw)
 				}
+				if strings.HasPrefix(val, "!") {
+					shellCmd := strings.TrimSpace(val[1:])
+					if shellCmd != "" {
+						return runShellCmd(shellCmd)
+					}
+				}
 				if strings.HasPrefix(val, "/") {
 					return m.dispatchChatCommand(val)
 				}
@@ -1977,6 +1991,16 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	m.statusErr = false
 	m.pendingConfirm = nil
 	m.pendingConfirmMsg = ""
+
+	// Shell command — run via $SHELL -c, show output in status pane.
+	if strings.HasPrefix(val, "!") {
+		shellCmd := strings.TrimSpace(val[1:])
+		if shellCmd == "" {
+			m.statusMsg = "usage: !<command>"
+			return nil
+		}
+		return runShellCmd(shellCmd)
+	}
 
 	parts := strings.Fields(val)
 	if len(parts) == 0 {
@@ -3568,6 +3592,41 @@ func (m *Model) navPaneHeight() int {
 		h = 1
 	}
 	return h
+}
+
+// =============================================================================
+// Shell command execution (! prefix)
+// =============================================================================
+
+type shellDoneMsg struct {
+	cmd      string
+	output   string
+	exitCode int
+}
+
+// runShellCmd executes cmd via the user's login shell with a 30s timeout and returns shellDoneMsg.
+func runShellCmd(cmd string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "sh"
+		}
+		c := exec.CommandContext(ctx, shell, "-i", "-c", cmd)
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		out, err := c.CombinedOutput()
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = 1
+				out = append(out, []byte("\n"+err.Error())...)
+			}
+		}
+		return shellDoneMsg{cmd: cmd, output: string(out), exitCode: exitCode}
+	}
 }
 
 // contentViewHeight returns the number of lines available for scrollable content.
