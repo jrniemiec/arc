@@ -411,6 +411,15 @@ func ReadWorkspaceOutcome(dataRoot, name, filename string) ([]byte, error) {
 	return data, nil
 }
 
+// RemoveWorkspaceOutcome removes a file from workspace/outcomes/.
+func RemoveWorkspaceOutcome(dataRoot, workspaceName, basename string) error {
+	path := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "outcomes", basename)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("outcome %q not found in workspace %q", basename, workspaceName)
+	}
+	return os.Remove(path)
+}
+
 // WriteWorkspaceOutcome writes a file to workspace/outcomes/.
 func WriteWorkspaceOutcome(dataRoot, name, filename string, data []byte) error {
 	path := filepath.Join(WorkspaceDir(dataRoot, name), "outcomes", filename)

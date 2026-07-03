@@ -1392,15 +1392,65 @@ func (m *Model) cmdResourceRemove(name string) {
 	}
 	ws := m.chatWorkspace
 	cfg := m.cfg
-	m.pendingConfirmMsg = fmt.Sprintf("delete resource %q? (y/n)", name)
-	m.pendingConfirm = func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete resource %q? (y/n)", name), func() tea.Cmd {
 		return func() tea.Msg {
 			if err := storefs.RemoveWorkspaceResource(cfg.DataRoot, ws, name); err != nil {
 				return cmdDoneMsg{err: "resource-remove: " + err.Error()}
 			}
 			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q removed from workspace %q", name, ws), reloadWorkspaces: true}
 		}
+	})
+}
+
+// cmdUnlinkArticle removes an article from a workspace collection or the workspace itself.
+func (m *Model) cmdUnlinkArticle(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	slug := row.slug
+	title := row.title
+	if title == "" {
+		title = slug
 	}
+
+	if row.colSlug != "" {
+		col := row.colSlug
+		m.askConfirm(fmt.Sprintf("unlink %q from collection %q? (y/n)", title, col), func() tea.Cmd {
+			return func() tea.Msg {
+				if err := storefs.RemoveArticleFromCollection(cfg.DataRoot, col, slug); err != nil {
+					return cmdDoneMsg{err: "unlink: " + err.Error()}
+				}
+				return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ unlinked %q from collection %q", title, col), reloadWorkspaces: true}
+			}
+		})
+	} else {
+		wsName := ws.name
+		m.askConfirm(fmt.Sprintf("unlink %q from workspace %q? (y/n)", title, wsName), func() tea.Cmd {
+			return func() tea.Msg {
+				if err := storefs.RemoveArticleFromWorkspace(cfg.DataRoot, wsName, slug); err != nil {
+					return cmdDoneMsg{err: "unlink: " + err.Error()}
+				}
+				return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ unlinked %q from workspace %q", title, wsName), reloadWorkspaces: true}
+			}
+		})
+	}
+}
+
+// cmdOutcomeRemove removes an outcome from workspace/outcomes/ with confirmation.
+func (m *Model) cmdOutcomeRemove(name string) {
+	if name == "" {
+		m.setStatusError("usage: delete outcome — select an outcome first")
+		return
+	}
+	ws := m.chatWorkspace
+	cfg := m.cfg
+	m.askConfirm(fmt.Sprintf("delete outcome %q? (y/n)", name), func() tea.Cmd {
+		return func() tea.Msg {
+			if err := storefs.RemoveWorkspaceOutcome(cfg.DataRoot, ws, name); err != nil {
+				return cmdDoneMsg{err: "outcome-remove: " + err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ outcome %q removed from workspace %q", name, ws), reloadWorkspaces: true}
+		}
+	})
 }
 
 // cmdResourceView opens a resource file in the text overlay.

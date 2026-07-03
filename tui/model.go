@@ -643,6 +643,16 @@ func (m *Model) setStatusLines(lines []string) {
 	m.statusScroll = 0
 }
 
+// askConfirm shows a confirmation prompt and moves focus to the command pane.
+func (m *Model) askConfirm(msg string, fn func() tea.Cmd) {
+	m.pendingConfirmMsg = msg
+	m.pendingConfirm = fn
+	m.focus = paneCommand
+	m.cursorVisible = true
+	m.inputValue = ""
+	m.inputCursor = 0
+}
+
 func (m *Model) setStatusError(msg string) {
 	m.statusMsg = msg
 	m.statusErr = true

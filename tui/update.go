@@ -141,11 +141,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != "" {
 			m.workspacesErr = msg.err
 		} else {
+			// Carry over UI state (expanded, scroll) from old items.
+			old := make(map[string]*workspaceItem, len(m.workspaceItems))
+			for i := range m.workspaceItems {
+				old[m.workspaceItems[i].name] = &m.workspaceItems[i]
+			}
+			for i := range msg.items {
+				if prev, ok := old[msg.items[i].name]; ok {
+					msg.items[i].expanded = prev.expanded
+					msg.items[i].expandedCols = prev.expandedCols
+					msg.items[i].resourcesExpanded = prev.resourcesExpanded
+					msg.items[i].outcomesExpanded = prev.outcomesExpanded
+				}
+			}
 			m.workspaceItemsAll = msg.items
 			m.workspaceItems = msg.items
 			m.wsRows = m.buildWsRows()
-			m.wsCursor = 0
-			m.wsScroll = 0
+			// Clamp cursor/scroll to new bounds instead of resetting.
+			if m.wsCursor >= len(m.wsRows) {
+				m.wsCursor = len(m.wsRows) - 1
+			}
+			if m.wsCursor < 0 {
+				m.wsCursor = 0
+			}
 		}
 		m.workspacesLoaded = true
 		// Auto-load history for first workspace if on Workspaces sub-tab.
@@ -471,6 +489,19 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Delete):
 		switch m.navSubTab {
 		case navSubTabWorkspaces:
+			row := m.selectedWsRow()
+			if row != nil {
+				switch row.kind {
+				case wsRowResource:
+					m.cmdResourceRemove(row.resourceName)
+					return nil
+				case wsRowOutcome:
+					m.cmdOutcomeRemove(row.outcomeName)
+					return nil
+				case wsRowArticle:
+					return m.cmdDeleteArticle()
+				}
+			}
 			return m.cmdDeleteWorkspace()
 		case navSubTabCollections:
 			return m.cmdDeleteCollection()
@@ -493,6 +524,14 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		return m.cmdViewArticle()
+	case msg.String() == "U":
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row != nil && row.kind == wsRowArticle && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+				m.cmdUnlinkArticle(row)
+				return nil
+			}
+		}
 	case msg.String() == "e":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
@@ -2420,12 +2459,7 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 		return nil
 	}
 	item := *sel
-	m.pendingConfirmMsg = fmt.Sprintf("delete %q? (y/n)", item.title)
-	m.focus = paneCommand
-	m.cursorVisible = true
-	m.inputValue = ""
-	m.inputCursor = 0
-	m.pendingConfirm = func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete %q? (y/n)", item.title), func() tea.Cmd {
 		id := item.id
 		svc := m.svc
 		// Remove from in-memory lists immediately
@@ -2446,7 +2480,7 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 			_ = svc.DeleteArticle(context.Background(), id)
 			return nil
 		})
-	}
+	})
 	return nil
 }
 
@@ -2819,8 +2853,7 @@ func (m *Model) cmdDeleteCollection() tea.Cmd {
 	}
 	slug := col.colSlug
 	svc := m.svc
-	m.pendingConfirmMsg = fmt.Sprintf("delete collection %q? (y/n)", slug)
-	m.pendingConfirm = func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete collection %q? (y/n)", slug), func() tea.Cmd {
 		return func() tea.Msg {
 			_, err := svc.DeleteCollection(context.Background(), slug, false)
 			if err != nil {
@@ -2828,7 +2861,7 @@ func (m *Model) cmdDeleteCollection() tea.Cmd {
 			}
 			return cmdDoneMsg{statusMsg: "✓ deleted collection " + slug, reloadCollections: true}
 		}
-	}
+	})
 	return nil
 }
 
@@ -2839,8 +2872,7 @@ func (m *Model) cmdDeleteArticleBySlug(slug string) tea.Cmd {
 		return nil
 	}
 	svc := m.svc
-	m.pendingConfirmMsg = fmt.Sprintf("delete article %q? (y/n)", slug)
-	m.pendingConfirm = func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete article %q? (y/n)", slug), func() tea.Cmd {
 		m.navItems = removeNavItem(m.navItems, slug)
 		m.navItemsAll = removeNavItem(m.navItemsAll, slug)
 		if m.navCursor >= len(m.navItems) {
@@ -2855,7 +2887,7 @@ func (m *Model) cmdDeleteArticleBySlug(slug string) tea.Cmd {
 			_ = svc.DeleteArticle(context.Background(), slug)
 			return nil
 		})
-	}
+	})
 	return nil
 }
 
@@ -2866,8 +2898,7 @@ func (m *Model) cmdDeleteCollectionByName(slug string) tea.Cmd {
 		return nil
 	}
 	svc := m.svc
-	m.pendingConfirmMsg = fmt.Sprintf("delete collection %q? (y/n)", slug)
-	m.pendingConfirm = func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete collection %q? (y/n)", slug), func() tea.Cmd {
 		return func() tea.Msg {
 			_, err := svc.DeleteCollection(context.Background(), slug, false)
 			if err != nil {
@@ -2875,7 +2906,7 @@ func (m *Model) cmdDeleteCollectionByName(slug string) tea.Cmd {
 			}
 			return cmdDoneMsg{statusMsg: "✓ deleted collection " + slug, reloadCollections: true}
 		}
-	}
+	})
 	return nil
 }
 
@@ -2886,15 +2917,14 @@ func (m *Model) cmdDeleteWorkspaceByName(name string) tea.Cmd {
 		return nil
 	}
 	svc := m.svc
-	m.pendingConfirmMsg = fmt.Sprintf("delete workspace %q? (y/n)", name)
-	m.pendingConfirm = func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete workspace %q? (y/n)", name), func() tea.Cmd {
 		return func() tea.Msg {
 			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
 				return cmdDoneMsg{err: err.Error()}
 			}
 			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true}
 		}
-	}
+	})
 	return nil
 }
 
@@ -2941,15 +2971,14 @@ func (m *Model) cmdDeleteWorkspace() tea.Cmd {
 	}
 	name := ws.name
 	svc := m.svc
-	m.pendingConfirmMsg = fmt.Sprintf("delete workspace %q? (y/n)", name)
-	m.pendingConfirm = func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete workspace %q? (y/n)", name), func() tea.Cmd {
 		return func() tea.Msg {
 			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
 				return cmdDoneMsg{err: err.Error()}
 			}
 			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true}
 		}
-	}
+	})
 	return nil
 }
 
@@ -3142,6 +3171,7 @@ var helpGroups = []struct {
 		{"o", "", "open source URL in browser"},
 		{"v", "", "view article in external terminal"},
 		{"D", "", "delete current item"},
+		{"U", "", "unlink article from workspace/collection"},
 		{"/", "", "open command input"},
 		{"?", "", "show key bindings"},
 		{"q / ctrl+c", "", "quit"},
