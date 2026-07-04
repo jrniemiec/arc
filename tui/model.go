@@ -158,6 +158,7 @@ type wsRowKind int
 
 const (
 	wsRowWorkspace      wsRowKind = iota
+	wsRowScratch                  // scratch.md file (leaf, always present)
 	wsRowCollection               // collection under workspace
 	wsRowArticle                  // article (leaf)
 	wsRowResourceGroup            // "Resources (N)" foldable header
@@ -327,6 +328,12 @@ type Model struct {
 	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
 
+	// Scratch pane (split at bottom of nav)
+	scratchOpen    bool     // true when scratch split is visible
+	scratchFocused bool     // true when scratch region has focus (within paneNav)
+	scratchScroll  int      // scroll offset into scratchLines
+	scratchLines   []string // cached content for rendering
+
 	// Resource overlay (active when focus == paneResource)
 	resourceLines    []string // file content split into lines
 	resourceName     string   // file name shown in top bar
@@ -348,6 +355,7 @@ var globalCommands = []cmdCompletion{
 	{"/article", "<cmd>", "article commands (list, search, ingest, …)"},
 	{"/collection", "<cmd>", "collection commands (list, show, …)"},
 	{"/workspace", "<cmd>", "workspace commands (list, new, delete, …)"},
+	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
 	{"/help", "[group]", "show command reference"},
 	{"/stats", "", "show library stats"},
 	{"/log", "", "open/close debug log tail"},
@@ -402,6 +410,7 @@ var chatCommands = []cmdCompletion{
 	{"/resource-edit", "<name>", "open resource file in $EDITOR"},
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
+	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
 	{"/help", "", "show chat commands"},
 }
 
@@ -799,6 +808,9 @@ func (m Model) buildWsRows() []wsRow {
 				rows = append(rows, wsRow{kind: wsRowOutcome, wsIdx: i, outcomeName: name})
 			}
 		}
+
+		// Scratch file — always last in expanded workspace.
+		rows = append(rows, wsRow{kind: wsRowScratch, wsIdx: i})
 	}
 	return rows
 }

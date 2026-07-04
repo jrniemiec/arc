@@ -415,6 +415,35 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.focus = paneCommand
 		m.cursorVisible = true
 		return nil
+	case key.Matches(msg, keys.Scratch):
+		m.toggleScratch()
+		return nil
+
+	case key.Matches(msg, keys.Refresh):
+		if m.svc == nil {
+			return nil
+		}
+		var batch []tea.Cmd
+		switch m.activeTab {
+		case tabLibrary:
+			switch m.navSubTab {
+			case navSubTabArticles:
+				batch = append(batch, loadNav(m.svc))
+			case navSubTabCollections:
+				m.collectionsLoaded = false
+				batch = append(batch, loadCollectionsTree(m.svc))
+			case navSubTabWorkspaces:
+				m.workspacesLoaded = false
+				batch = append(batch, loadWorkspaces(m.svc))
+			}
+			batch = append(batch, m.triggerContentLoad())
+		case tabStats:
+			m.statsLoaded = false
+			batch = append(batch, loadStats(m.svc))
+		}
+		m.statusMsg = "↻ refreshed"
+		return tea.Batch(batch...)
+
 	case key.Matches(msg, keys.PaneNext):
 		// If param picker active, Tab fills selected param into input.
 		if len(m.paramItems) > 0 && m.paramIdx >= 0 {
@@ -427,6 +456,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.focus = (m.focus + 1) % 4 // TabBar → Nav → Content → Command → TabBar
+		m.scratchFocused = false
 		if m.focus == paneCommand {
 			m.cursorVisible = true
 		}
@@ -439,6 +469,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case key.Matches(msg, keys.PanePrev):
 		m.focus = (m.focus + 3) % 4 // +3 mod 4 = -1 mod 4
+		m.scratchFocused = false
 		if m.focus == paneCommand {
 			m.cursorVisible = true
 		}
@@ -492,6 +523,10 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
+	// When scratch pane is focused, route scroll/view/edit keys to scratch.
+	if m.scratchOpen && m.scratchFocused {
+		return m.handleScratchKey(msg)
+	}
 	switch {
 	case key.Matches(msg, keys.ContentTabPrev):
 		return m.navLeft()
@@ -544,7 +579,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Open):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
-			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome) {
+			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome || row.kind == wsRowScratch) {
 				return m.openWsFileExternal()
 			}
 		}
@@ -552,7 +587,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.View):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
-			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome) {
+			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome || row.kind == wsRowScratch) {
 				return m.viewWsFileInTerminal()
 			}
 		}
@@ -568,7 +603,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case msg.String() == "e":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
-			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome) {
+			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome || row.kind == wsRowScratch) {
 				editor := os.Getenv("EDITOR")
 				if editor == "" {
 					m.setStatusError("$EDITOR is not set")
@@ -581,6 +616,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				name := row.resourceName
 				if row.kind == wsRowOutcome {
 					name = row.outcomeName
+				} else if row.kind == wsRowScratch {
+					name = "scratch.md"
 				}
 				m.openEditorInTerminal(editor, path, name)
 				return nil
@@ -842,6 +879,9 @@ func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 	if m.chatMode && sub != navSubTabWorkspaces {
 		m.exitChatMode()
 	}
+	if sub != navSubTabWorkspaces && m.scratchOpen {
+		m.closeScratch()
+	}
 	m.navSubTab = sub
 	m.navRowCursor = 0
 	m.navRowScroll = 0
@@ -1072,6 +1112,8 @@ func (m *Model) wsFilePathForRow(row *wsRow) string {
 	}
 	ws := m.workspaceItems[row.wsIdx]
 	switch row.kind {
+	case wsRowScratch:
+		return storefs.ScratchPath(m.cfg.DataRoot, ws.name)
 	case wsRowResource:
 		return filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, ws.name), "resources", row.resourceName)
 	case wsRowOutcome:
@@ -1108,6 +1150,8 @@ func (m *Model) viewWsFileInTerminal() tea.Cmd {
 	name := row.resourceName
 	if row.kind == wsRowOutcome {
 		name = row.outcomeName
+	} else if row.kind == wsRowScratch {
+		name = "scratch.md"
 	}
 
 	pid := os.Getpid()
@@ -2071,6 +2115,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	case "/help":
 		m.setStatusLines(m.helpLines(arg))
 		return nil
+	case "/scratch":
+		return m.cmdScratch(arg)
 	case "/article":
 		return m.dispatchQualified(navSubTabArticles, arg)
 	case "/collection":
@@ -3433,6 +3479,31 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 
+		// Scratch pane wheel (bottom of nav pane).
+		if msg.X < m.dividerCol() && m.scratchOpen {
+			mainH := m.height - 6 - m.completionCount()
+			scratchH := mainH / 3
+			if scratchH < 3 {
+				scratchH = 3
+			}
+			scratchStartRow := topBarHeight + (mainH - scratchH)
+			if msg.Y >= scratchStartRow {
+				viewH := scratchH - 1
+				m.scratchScroll += delta
+				if m.scratchScroll < 0 {
+					m.scratchScroll = 0
+				}
+				maxScroll := len(m.scratchLines) - viewH
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.scratchScroll > maxScroll {
+					m.scratchScroll = maxScroll
+				}
+				return nil
+			}
+		}
+
 		// Nav pane wheel (left of divider).
 		if msg.X < m.dividerCol() {
 			if m.navSubTab == navSubTabCollections {
@@ -3546,6 +3617,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click in nav pane (left of divider) — focus nav, update cursor row.
 			if msg.X < divCol {
 				m.focus = paneNav
+				// Check if click is in the scratch region.
+				if m.scratchOpen {
+					mainH := m.height - 6 - m.completionCount()
+					scratchH := mainH / 3
+					if scratchH < 3 {
+						scratchH = 3
+					}
+					scratchStartRow := topBarHeight + (mainH - scratchH)
+					if msg.Y >= scratchStartRow {
+						m.scratchFocused = true
+						return nil
+					}
+				}
+				m.scratchFocused = false
 				if cmd := m.clickNavRow(msg.Y); cmd != nil {
 					return cmd
 				}
@@ -3688,4 +3773,215 @@ func (m *Model) contentViewHeight() int {
 		h = 1
 	}
 	return h
+}
+
+// ── Scratch ─────────────────────────────────────────────────────────────────
+
+// scratchWorkspace returns the workspace name to use for scratch operations.
+// Returns "" (global scratch) if no workspace is active.
+func (m *Model) scratchWorkspace() string {
+	if m.chatMode && m.chatWorkspace != "" {
+		return m.chatWorkspace
+	}
+	if m.navSubTab == navSubTabWorkspaces {
+		if ws := m.selectedWorkspace(); ws != nil {
+			return ws.name
+		}
+	}
+	return ""
+}
+
+// toggleScratch toggles the scratch pane. When opening, pre-fills input with "/scratch ".
+func (m *Model) toggleScratch() {
+	if m.scratchOpen {
+		m.scratchOpen = false
+		return
+	}
+	m.scratchOpen = true
+	m.reloadScratchLines()
+	m.focus = paneCommand
+	m.cursorVisible = true
+	m.inputValue = "/scratch "
+	m.inputCursor = len([]rune(m.inputValue))
+	m.cmdComplete = nil
+	m.cmdCompleteIdx = -1
+	m.paramItems = nil
+	m.paramIdx = -1
+}
+
+// cmdScratch handles /scratch [msg]. Empty msg toggles pane; non-empty appends.
+func (m *Model) cmdScratch(msg string) tea.Cmd {
+	ws := m.scratchWorkspace()
+	if msg == "" {
+		// Toggle pane visibility.
+		if m.scratchOpen {
+			m.scratchOpen = false
+		} else {
+			m.scratchOpen = true
+			m.reloadScratchLines()
+		}
+		return nil
+	}
+	// Append message.
+	if err := storefs.AppendScratch(m.cfg.DataRoot, ws, msg); err != nil {
+		m.setStatusError("scratch: " + err.Error())
+		return nil
+	}
+	m.reloadScratchLines()
+	if !m.scratchOpen {
+		m.scratchOpen = true
+	}
+	// Auto-scroll to bottom.
+	m.scratchScrollToBottom()
+	m.statusMsg = "✓ added to scratch"
+	return nil
+}
+
+// reloadScratchLines reads the scratch file and caches lines for rendering.
+func (m *Model) reloadScratchLines() {
+	ws := m.scratchWorkspace()
+	content, err := storefs.ReadScratch(m.cfg.DataRoot, ws)
+	if err != nil {
+		m.scratchLines = []string{"(error reading scratch: " + err.Error() + ")"}
+		return
+	}
+	if content == "" {
+		m.scratchLines = []string{"(empty scratch — use /scratch <msg> to add notes)"}
+		return
+	}
+	m.scratchLines = splitLines(content)
+}
+
+// scratchScrollToBottom scrolls the scratch pane to the bottom.
+func (m *Model) scratchScrollToBottom() {
+	mainH := m.height - 6 - m.completionCount()
+	scratchH := mainH / 3
+	if scratchH < 3 {
+		scratchH = 3
+	}
+	viewH := scratchH - 1 // minus header line
+	maxScroll := len(m.scratchLines) - viewH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	m.scratchScroll = maxScroll
+}
+
+// closeScratch closes the scratch pane.
+func (m *Model) closeScratch() {
+	m.scratchOpen = false
+	m.scratchFocused = false
+	m.scratchScroll = 0
+	m.scratchLines = nil
+}
+
+// scratchFilePath returns the file path for the current scratch file.
+func (m *Model) scratchFilePath() string {
+	return storefs.ScratchPath(m.cfg.DataRoot, m.scratchWorkspace())
+}
+
+// handleScratchKey handles keys when the scratch pane is focused.
+func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
+	mainH := m.height - 6 - m.completionCount()
+	scratchH := mainH / 3
+	if scratchH < 3 {
+		scratchH = 3
+	}
+	viewH := scratchH - 1 // minus header
+
+	switch {
+	case key.Matches(msg, keys.NavUp):
+		if m.scratchScroll > 0 {
+			m.scratchScroll--
+		}
+	case key.Matches(msg, keys.NavDown):
+		maxScroll := len(m.scratchLines) - viewH
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.scratchScroll < maxScroll {
+			m.scratchScroll++
+		}
+	case key.Matches(msg, keys.PageUp):
+		m.scratchScroll -= viewH
+		if m.scratchScroll < 0 {
+			m.scratchScroll = 0
+		}
+	case key.Matches(msg, keys.PageDown):
+		maxScroll := len(m.scratchLines) - viewH
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		m.scratchScroll += viewH
+		if m.scratchScroll > maxScroll {
+			m.scratchScroll = maxScroll
+		}
+	case key.Matches(msg, keys.Home):
+		m.scratchScroll = 0
+	case key.Matches(msg, keys.End):
+		maxScroll := len(m.scratchLines) - viewH
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		m.scratchScroll = maxScroll
+	case key.Matches(msg, keys.View):
+		// View scratch file in external terminal.
+		path := m.scratchFilePath()
+		ws := m.scratchWorkspace()
+		label := "scratch"
+		if ws != "" {
+			label = ws + "/scratch"
+		}
+		pid := os.Getpid()
+		scriptPath := fmt.Sprintf("%s/arc-view-%d-scratch.sh", os.TempDir(), pid)
+		script := fmt.Sprintf(
+			"#!/bin/bash\ntrap 'rm -f %q' EXIT\n"+
+				"(while kill -0 %d 2>/dev/null; do sleep 1; done; kill $$ 2>/dev/null) &\n"+
+				"cat %q\necho ''\nread -n1 -s -r -p '(press any key to close)'\n",
+			scriptPath, pid, path,
+		)
+		if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+			m.setStatusError(fmt.Sprintf("view: could not write script: %v", err))
+			return nil
+		}
+		var appleScript string
+		switch ActiveTerminal {
+		case TermITerm2:
+			appleScript = fmt.Sprintf(
+				`tell application "iTerm2" to create window with default profile command %q`,
+				scriptPath,
+			)
+		default:
+			appleScript = fmt.Sprintf(
+				`tell application "Terminal" to do script %q`,
+				scriptPath,
+			)
+		}
+		cmd := exec.Command("osascript", "-e", appleScript)
+		cmd.Start()
+		m.setStatusLines([]string{fmt.Sprintf("opened %s in terminal viewer", label)})
+	case msg.String() == "e":
+		// Edit scratch file in $EDITOR.
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			m.setStatusError("$EDITOR is not set")
+			return nil
+		}
+		path := m.scratchFilePath()
+		ws := m.scratchWorkspace()
+		label := "scratch"
+		if ws != "" {
+			label = ws + "/scratch"
+		}
+		m.openEditorInTerminal(editor, path, label)
+	case key.Matches(msg, keys.Back):
+		// Esc unfocuses scratch, returns to nav tree.
+		m.scratchFocused = false
+	case key.Matches(msg, keys.Command):
+		m.focus = paneCommand
+		m.cursorVisible = true
+		m.inputValue = "/scratch "
+		m.inputCursor = len([]rune(m.inputValue))
+	}
+	return nil
 }

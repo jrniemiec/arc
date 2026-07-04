@@ -64,7 +64,59 @@ func CreateWorkspace(dataRoot, name, description string, chatCfg config.ChatConf
 	if err := WriteWorkspaceMeta(dataRoot, m); err != nil {
 		return err
 	}
+	// Create empty scratch file.
+	if err := EnsureScratch(dataRoot, name); err != nil {
+		return err
+	}
 	return WriteChatConfig(dataRoot, name, chatCfg)
+}
+
+// ── Scratch helpers ─────────────────────────────────────────────────────────
+
+// ScratchPath returns the path to the scratch file.
+// If workspace is non-empty, returns the per-workspace scratch; otherwise the global one.
+func ScratchPath(dataRoot, workspace string) string {
+	if workspace != "" {
+		return filepath.Join(WorkspaceDir(dataRoot, workspace), "scratch.md")
+	}
+	return filepath.Join(dataRoot, "scratch.md")
+}
+
+// EnsureScratch creates the scratch file if it does not exist.
+func EnsureScratch(dataRoot, workspace string) error {
+	path := ScratchPath(dataRoot, workspace)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	return os.WriteFile(path, []byte(""), 0644)
+}
+
+// ReadScratch reads the scratch file and returns its content.
+func ReadScratch(dataRoot, workspace string) (string, error) {
+	data, err := os.ReadFile(ScratchPath(dataRoot, workspace))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// AppendScratch appends a line to the scratch file with a timestamp prefix.
+func AppendScratch(dataRoot, workspace, msg string) error {
+	if err := EnsureScratch(dataRoot, workspace); err != nil {
+		return err
+	}
+	path := ScratchPath(dataRoot, workspace)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	stamp := time.Now().Format("2006-01-02 15:04")
+	_, err = fmt.Fprintf(f, "[%s] %s\n", stamp, msg)
+	return err
 }
 
 // ReadWorkspaceMeta reads meta.json from a workspace directory.

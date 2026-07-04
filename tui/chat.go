@@ -1123,6 +1123,13 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		}
 		return m.chatSaveResource(arg)
 
+	case "/scratch":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.Join(parts[1:], " ")
+		}
+		return m.cmdScratch(arg)
+
 	default:
 		// Fall through to global command dispatcher so /log, /stats, /help etc. work.
 		return m.dispatchCommand(val)
@@ -1301,6 +1308,7 @@ func (m *Model) exitChatMode() {
 	m.chatRagMode = ""
 	m.chatBoxCursor = 0
 	m.chatCollapsed = nil
+	m.closeScratch()
 	m.focus = paneNav
 	m.statusMsg = ""
 	m.statusLines = nil

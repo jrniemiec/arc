@@ -365,6 +365,21 @@ func (m Model) renderMainArea(height int) string {
 // renderNavPane returns lines for the left navigator pane.
 func (m Model) renderNavPane(height int) []string {
 	t := ActiveTheme
+
+	// Calculate scratch split if open.
+	scratchH := 0
+	navH := height
+	if m.scratchOpen {
+		scratchH = height / 3
+		if scratchH < 3 {
+			scratchH = 3
+		}
+		navH = height - scratchH
+		if navH < 3 {
+			navH = 3
+		}
+	}
+
 	var lines []string
 
 	if m.activeTab == tabLibrary {
@@ -373,11 +388,11 @@ func (m Model) renderNavPane(height int) []string {
 		lines = append(lines, "")
 		switch m.navSubTab {
 		case navSubTabArticles:
-			lines = append(lines, m.renderNavLibrary(height-2)...)
+			lines = append(lines, m.renderNavLibrary(navH-2)...)
 		case navSubTabCollections:
-			lines = append(lines, m.renderNavCollections(height-2)...)
+			lines = append(lines, m.renderNavCollections(navH-2)...)
 		case navSubTabWorkspaces:
-			lines = append(lines, m.renderNavWorkspaces(height-2)...)
+			lines = append(lines, m.renderNavWorkspaces(navH-2)...)
 		}
 	} else {
 		// Non-Library tabs keep a single label header + content.
@@ -401,6 +416,67 @@ func (m Model) renderNavPane(height int) []string {
 		case tabStats:
 			lines = append(lines, fg(t.NavDimmed, "(stats)"))
 		}
+	}
+
+	// Pad nav portion to navH.
+	for len(lines) < navH {
+		lines = append(lines, "")
+	}
+	lines = lines[:navH]
+
+	// Append scratch pane if open.
+	if m.scratchOpen && scratchH > 0 {
+		lines = append(lines, m.renderScratchPane(scratchH)...)
+	}
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
+// renderScratchPane renders the scratch split pane content.
+func (m Model) renderScratchPane(height int) []string {
+	t := ActiveTheme
+	w := m.navWidth()
+	var lines []string
+
+	// Header separator with label.
+	label := " Scratch "
+	ws := m.scratchWorkspace()
+	if ws != "" {
+		label = " Scratch [" + ws + "] "
+	}
+	sepLen := w - len([]rune(label))
+	if sepLen < 0 {
+		sepLen = 0
+	}
+	leftSep := sepLen / 2
+	rightSep := sepLen - leftSep
+	headerColor := t.Dimmed
+	if m.scratchFocused && m.focus == paneNav {
+		headerColor = t.Accent
+	}
+	header := fg(headerColor, strings.Repeat("─", leftSep)+label+strings.Repeat("─", rightSep))
+	lines = append(lines, header)
+
+	// Content lines.
+	viewH := height - 1 // minus header
+	if viewH < 1 {
+		viewH = 1
+	}
+	end := m.scratchScroll + viewH
+	if end > len(m.scratchLines) {
+		end = len(m.scratchLines)
+	}
+	for i := m.scratchScroll; i < end; i++ {
+		line := m.scratchLines[i]
+		// Truncate to nav width.
+		runes := []rune(line)
+		if len(runes) > w {
+			line = string(runes[:w-1]) + "…"
+		}
+		lines = append(lines, fg(t.NavDimmed, line))
 	}
 
 	for len(lines) < height {
@@ -578,6 +654,17 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				label = reverse(label)
 			} else {
 				label = fgBold(t.NavGroup, label)
+			}
+
+		case wsRowScratch:
+			prefix := "  "
+			dot := "✎ "
+			name := "scratch.md"
+			label = prefix + dot + name
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, prefix) + fg(t.Accent, "✎") + " " + fg(t.NavText, name)
 			}
 
 		case wsRowCollection:
