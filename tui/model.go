@@ -278,6 +278,10 @@ type Model struct {
 	// Log viewer
 	logViewerOpen bool // true while the tail window is open
 
+	// Input correction (Ctrl+G)
+	correcting      bool   // true while correction LLM call is in flight
+	correctionFlash string // non-empty: flash message shown in status bar
+
 	// Command input
 	inputValue        string
 	inputCursor       int      // rune index into inputValue
@@ -501,6 +505,15 @@ type chatStreamDoneMsg struct {
 	elapsed time.Duration
 	err     string
 }
+
+// correctionDoneMsg is returned by doCorrection when the LLM call completes.
+type correctionDoneMsg struct {
+	text string // corrected text (empty on error)
+	err  error
+}
+
+// correctionFlashMsg clears the correction flash after a delay.
+type correctionFlashMsg struct{}
 
 type cmdDoneMsg struct {
 	statusMsg          string

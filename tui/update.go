@@ -14,8 +14,10 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/service"
 	storefs "github.com/jrniemiec/arc/store/fs"
+	"github.com/jrniemiec/llm"
 )
 
 // Update implements tea.Model.
@@ -223,6 +225,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case correctionDoneMsg:
+		m.correcting = false
+		if msg.err == nil && msg.text != "" {
+			corrected := msg.text
+			if corrected != m.inputValue {
+				m.statusMsg = "✓ corrected"
+			} else {
+				m.statusMsg = "✓ no changes"
+			}
+			m.statusErr = false
+			m.inputValue = corrected
+			m.inputCursor = len([]rune(corrected))
+		} else if msg.err != nil {
+			errStr := msg.err.Error()
+			if len(errStr) > 40 {
+				errStr = errStr[:40] + "…"
+			}
+			m.statusMsg = "✗ " + errStr
+			m.statusErr = true
+		}
+		cmds = append(cmds, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return correctionFlashMsg{}
+		}))
+
+	case correctionFlashMsg:
+		if m.statusMsg == "✓ corrected" || m.statusMsg == "✓ no changes" ||
+			strings.HasPrefix(m.statusMsg, "✗ ") {
+			m.statusMsg = ""
+			m.statusErr = false
+		}
+
 	case shellDoneMsg:
 		m.statusErr = false
 		header := "! " + msg.cmd
@@ -417,6 +450,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case key.Matches(msg, keys.Scratch):
 		m.toggleScratch()
+		return nil
+
+	case key.Matches(msg, keys.CorrectInput):
+		if !m.correcting && strings.TrimSpace(m.inputValue) != "" {
+			m.correcting = true
+			m.statusMsg = "correcting…"
+			m.statusErr = false
+			return doCorrection(m.inputValue, m.cfg)
+		}
 		return nil
 
 	case key.Matches(msg, keys.Refresh):
@@ -3984,4 +4026,80 @@ func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
 		m.inputCursor = len([]rune(m.inputValue))
 	}
 	return nil
+}
+
+// ── Input correction (Ctrl+G) ────────────────────────────────────────────────
+
+const defaultCorrectionPrompt = "Correct the spelling and grammar of the following text. " +
+	"Return only the corrected text with no explanations, no quotes, and no additional commentary."
+
+// doCorrection sends the input text to an LLM for spelling/grammar correction.
+func doCorrection(text string, cfg config.Config) tea.Cmd {
+	return func() tea.Msg {
+		// Resolve which profile to use.
+		profileCode := cfg.CorrectionProfile
+		if profileCode == "" {
+			profileCode = "oai-mini"
+		}
+		prof, ok := cfg.Profiles[profileCode]
+		if !ok {
+			// Try any available profile.
+			for code, p := range cfg.Profiles {
+				profileCode = code
+				prof = p
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return correctionDoneMsg{err: fmt.Errorf("no LLM profiles configured")}
+		}
+
+		// Resolve system prompt.
+		systemPrompt := cfg.CorrectionPrompt
+		if systemPrompt == "" {
+			systemPrompt = defaultCorrectionPrompt
+		}
+
+		apiKey := correctionResolveAPIKey(prof.Provider)
+		prov, err := llm.New(llm.ProviderConfig{
+			Provider: prof.Provider,
+			Model:    prof.Model,
+			Host:     prof.Host,
+			APIKey:   apiKey,
+		})
+		if err != nil {
+			return correctionDoneMsg{err: fmt.Errorf("correction: %w", err)}
+		}
+
+		msgs := []llm.Message{
+			{Role: llm.RoleUser, Content: text},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		response, _, err := prov.Chat(ctx, systemPrompt, msgs)
+		if err != nil {
+			return correctionDoneMsg{err: fmt.Errorf("correction: %w", err)}
+		}
+		return correctionDoneMsg{text: strings.TrimSpace(response)}
+	}
+}
+
+// correctionResolveAPIKey returns the API key for the given provider from env vars.
+func correctionResolveAPIKey(provider string) string {
+	switch strings.ToLower(provider) {
+	case "anthropic":
+		for _, k := range []string{"ARC_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"} {
+			if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+				return v
+			}
+		}
+	case "openai":
+		for _, k := range []string{"ARC_OPENAI_API_KEY", "OPENAI_API_KEY"} {
+			if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }

@@ -41,6 +41,14 @@ type Config struct {
 	// is never consulted at runtime.
 	Chat ChatConfig `json:"chat"`
 
+	// Input correction (Ctrl+G in TUI)
+	// CorrectionProfile selects which profile to use for Ctrl+G corrections.
+	// Defaults to "oai-mini" if empty.
+	CorrectionProfile string `json:"correction_profile,omitempty"`
+	// CorrectionPrompt overrides the built-in system prompt used for corrections.
+	// Leave empty to use the default.
+	CorrectionPrompt string `json:"correction_prompt,omitempty"`
+
 	// Agent
 	AgentPath string `json:"agent_path,omitempty"` // default: <DataRoot>/agent
 

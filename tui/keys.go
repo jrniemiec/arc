@@ -28,9 +28,10 @@ type keyMap struct {
 	MarkUnread   key.Binding // u — mark article as unread
 	ToggleFav    key.Binding // f — toggle favorite
 	Delete       key.Binding // D — delete article
-	Refresh    key.Binding // Ctrl+R — refresh current view
-	Scratch    key.Binding // Ctrl+L — toggle scratch pane
-	Quit       key.Binding // q / Ctrl+C
+	CorrectInput key.Binding // Ctrl+G — correct spelling/grammar
+	Refresh      key.Binding // Ctrl+R — refresh current view
+	Scratch      key.Binding // Ctrl+L — toggle scratch pane
+	Quit         key.Binding // q / Ctrl+C
 }
 
 var keys = keyMap{
@@ -117,6 +118,10 @@ var keys = keyMap{
 	Delete: key.NewBinding(
 		key.WithKeys("D"),
 		key.WithHelp("D", "delete article"),
+	),
+	CorrectInput: key.NewBinding(
+		key.WithKeys("ctrl+g"),
+		key.WithHelp("ctrl+g", "correct spelling/grammar"),
 	),
 	Refresh: key.NewBinding(
 		key.WithKeys("ctrl+r"),
