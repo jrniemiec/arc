@@ -285,6 +285,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.resourceTTSText = ""
+		// Drain content paragraph-block queue.
+		if len(m.contentTTSQueue) > 0 && m.focus == paneContent && !m.chatMode {
+			next := m.contentTTSQueue[0]
+			m.contentTTSQueue = m.contentTTSQueue[1:]
+			m.contentScroll = next.cursorLine
+			m.contentTTSText = next.text
+			text := tts.Strip(m.contentTTSText)
+			playFn := m.ttsPlayer.Play(text)
+			m.ttsGen = m.ttsPlayer.Gen()
+			m.ttsCurrentText = text
+			cmds = append(cmds, func() tea.Msg {
+				done := playFn()
+				return ttsDoneMsg{err: done.Err, gen: done.Gen}
+			})
+			break
+		}
+		m.contentTTSText = ""
 		m.statusMsg = ""
 
 	case shellDoneMsg:
@@ -1370,6 +1387,15 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		return m.openCurrentURL()
 	case key.Matches(msg, keys.ToggleFav):
 		return m.cmdToggleFavorite()
+	case msg.Type == tea.KeyRunes:
+		switch msg.String() {
+		case "s":
+			return m.cmdContentTTS()
+		case "[":
+			return m.cmdContentTTSAdjustRate(-20)
+		case "]":
+			return m.cmdContentTTSAdjustRate(+20)
+		}
 	}
 	return nil
 }
@@ -1501,12 +1527,45 @@ func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
 		m.scrollResourceToCursor(viewH)
 	case "e":
 		return m.cmdResourceEdit(m.resourceName)
+	case "x":
+		return m.cmdResourceDeleteLine(viewH)
 	case "s":
 		return m.cmdResourceTTS(viewH)
 	case "[":
 		return m.cmdResourceTTSAdjustRate(-20, viewH)
 	case "]":
 		return m.cmdResourceTTSAdjustRate(+20, viewH)
+	}
+	return nil
+}
+
+// cmdResourceDeleteLine deletes the current line from a scratch file overlay.
+func (m *Model) cmdResourceDeleteLine(viewH int) tea.Cmd {
+	// Only allow deletion in scratch files.
+	if !strings.HasPrefix(m.resourceName, "scratch") {
+		return nil
+	}
+	if len(m.resourceLines) == 0 {
+		return nil
+	}
+	// Remove the line at cursor.
+	idx := m.resourceCursor
+	m.resourceLines = append(m.resourceLines[:idx], m.resourceLines[idx+1:]...)
+	// Write back to disk.
+	path := m.scratchFilePath()
+	content := strings.Join(m.resourceLines, "\n")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		m.setStatusError("delete line: " + err.Error())
+		return nil
+	}
+	// Adjust cursor.
+	if m.resourceCursor >= len(m.resourceLines) && m.resourceCursor > 0 {
+		m.resourceCursor--
+	}
+	m.scrollResourceToCursor(viewH)
+	// Refresh scratch pane if open.
+	if m.scratchOpen {
+		m.reloadScratchLines()
 	}
 	return nil
 }
@@ -4414,6 +4473,75 @@ func (m *Model) cmdResourceTTSAdjustRate(delta, viewH int) tea.Cmd {
 	m.ttsPlayer.Stop()
 
 	text := tts.Strip(m.resourceTTSText)
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// ── Content pane TTS ────────────────────────────────────────────────────────
+
+// cmdContentTTS plays or stops TTS from the current scroll position in the content pane.
+func (m *Model) cmdContentTTS() tea.Cmd {
+	if m.ttsPlayer.Playing() {
+		m.stopTTS()
+		m.statusMsg = ""
+		return nil
+	}
+
+	if len(m.contentLines) == 0 {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	blocks := buildResourceTTSBlocks(m.contentLines, m.contentScroll)
+	if len(blocks) == 0 {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	m.contentTTSQueue = blocks[1:]
+	m.contentScroll = blocks[0].cursorLine
+	m.contentTTSText = blocks[0].text
+
+	text := tts.Strip(m.contentTTSText)
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// cmdContentTTSAdjustRate changes the TTS rate and restarts playback of the
+// current content block. No-op if not playing.
+func (m *Model) cmdContentTTSAdjustRate(delta int) tea.Cmd {
+	if !m.ttsPlayer.Playing() || m.contentTTSText == "" {
+		return nil
+	}
+
+	newRate := m.cfg.TTSRate + delta
+	if m.cfg.TTSRate == 0 {
+		newRate = 200 + delta
+	}
+	if newRate < 80 {
+		newRate = 80
+	}
+	if newRate > 500 {
+		newRate = 500
+	}
+	m.cfg.TTSRate = newRate
+	m.ttsPlayer.SetRate(newRate)
+
+	m.ttsPlayer.Stop()
+
+	text := tts.Strip(m.contentTTSText)
 	playFn := m.ttsPlayer.Play(text)
 	m.ttsGen = m.ttsPlayer.Gen()
 	m.ttsCurrentText = text

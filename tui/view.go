@@ -1511,6 +1511,14 @@ func (m Model) renderStatusLine() string {
 	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
 		return m.renderChatStatusLine()
 	}
+	if m.ttsPlayer.Playing() && m.contentTTSText != "" && !m.selectionMode {
+		rate := m.cfg.TTSRate
+		if rate <= 0 {
+			rate = 200
+		}
+		label := fmt.Sprintf("♪ article  say  %d wpm  [ slower  ] faster", rate)
+		return renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
+	}
 	if m.selectionMode {
 		return fgBold(t.Accent, truncate(" selection mode — drag to select · Cmd+C to copy · Ctrl+S or Esc to exit", m.width))
 	}
@@ -1562,7 +1570,7 @@ func (m Model) renderStatusLine() string {
 func (m Model) hintsFor() string {
 	switch m.activeTab {
 	case tabLibrary:
-		return " j/k navigate · Tab pane · / command · 1·2·3 tabs · q quit · ? help"
+		return " j/k navigate · Tab pane · s speak · / command · 1·2·3 tabs · q quit · ? help"
 	case tabAgent:
 		return " j/k navigate · R run · D dry-run · 1·2·3 tabs · q quit · ? help"
 	case tabStats:

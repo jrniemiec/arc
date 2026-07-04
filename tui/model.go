@@ -361,6 +361,8 @@ type Model struct {
 	ttsCurrentText   string             // text being spoken (for restart on rate change)
 	resourceTTSText  string             // text of the resource block currently playing (for speed-change restart)
 	resourceTTSQueue []resourceTTSBlock // paragraph blocks still to be spoken
+	contentTTSText   string             // text of the content block currently playing
+	contentTTSQueue  []resourceTTSBlock // paragraph blocks for content pane TTS
 }
 
 // cmdCompletion is one entry in the command completion popup.
@@ -707,6 +709,8 @@ func (m *Model) stopTTS() {
 	m.ttsCurrentText = ""
 	m.resourceTTSText = ""
 	m.resourceTTSQueue = nil
+	m.contentTTSText = ""
+	m.contentTTSQueue = nil
 }
 
 func (m *Model) setStatusError(msg string) {
