@@ -73,11 +73,29 @@ func CreateWorkspace(dataRoot, name, description string, chatCfg config.ChatConf
 
 // ── Scratch helpers ─────────────────────────────────────────────────────────
 
+// ScratchName returns the scratch filename for a workspace.
+// Per-workspace: "scratch-<workspace>.md"; global: "scratch.md".
+func ScratchName(workspace string) string {
+	if workspace != "" {
+		return "scratch-" + workspace + ".md"
+	}
+	return "scratch.md"
+}
+
 // ScratchPath returns the path to the scratch file.
 // If workspace is non-empty, returns the per-workspace scratch; otherwise the global one.
 func ScratchPath(dataRoot, workspace string) string {
 	if workspace != "" {
-		return filepath.Join(WorkspaceDir(dataRoot, workspace), "scratch.md")
+		dir := WorkspaceDir(dataRoot, workspace)
+		newPath := filepath.Join(dir, ScratchName(workspace))
+		// Migrate: rename old scratch.md → scratch-<ws>.md on first access.
+		if _, err := os.Stat(newPath); os.IsNotExist(err) {
+			oldPath := filepath.Join(dir, "scratch.md")
+			if _, err2 := os.Stat(oldPath); err2 == nil {
+				_ = os.Rename(oldPath, newPath)
+			}
+		}
+		return newPath
 	}
 	return filepath.Join(dataRoot, "scratch.md")
 }

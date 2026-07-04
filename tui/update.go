@@ -229,7 +229,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case correctionDoneMsg:
 		m.correcting = false
 		if msg.err == nil && msg.text != "" {
-			corrected := msg.text
+			corrected := m.correctionPrefix + msg.text
+			m.correctionPrefix = ""
 			if corrected != m.inputValue {
 				m.statusMsg = "✓ corrected"
 			} else {
@@ -487,7 +488,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.correcting = true
 			m.statusMsg = "correcting…"
 			m.statusErr = false
-			return doCorrection(m.inputValue, m.cfg)
+			// Strip command prefix (e.g. "/scratch ", "//") so the LLM only sees prose.
+			text := m.inputValue
+			m.correctionPrefix = ""
+			if strings.HasPrefix(text, "//") {
+				m.correctionPrefix = "//"
+				text = text[2:]
+			} else if strings.HasPrefix(text, "/") {
+				if idx := strings.Index(text, " "); idx >= 0 {
+					m.correctionPrefix = text[:idx+1]
+					text = text[idx+1:]
+				}
+			}
+			return doCorrection(text, m.cfg)
 		}
 		return nil
 
@@ -689,7 +702,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				if row.kind == wsRowOutcome {
 					name = row.outcomeName
 				} else if row.kind == wsRowScratch {
-					name = "scratch.md"
+					name = storefs.ScratchName(m.workspaceItems[row.wsIdx].name)
 				}
 				m.openEditorInTerminal(editor, path, name)
 				return nil
@@ -1130,7 +1143,7 @@ func (m *Model) openScratchOverlay(wsIdx int) tea.Cmd {
 		m.setStatusError(fmt.Sprintf("cannot read scratch: %v", err))
 		return nil
 	}
-	m.openResourceOverlay("scratch.md", string(data))
+	m.openResourceOverlay(storefs.ScratchName(ws.name), string(data))
 	return nil
 }
 
@@ -1242,7 +1255,7 @@ func (m *Model) viewWsFileInTerminal() tea.Cmd {
 	if row.kind == wsRowOutcome {
 		name = row.outcomeName
 	} else if row.kind == wsRowScratch {
-		name = "scratch.md"
+		name = storefs.ScratchName(m.workspaceItems[row.wsIdx].name)
 	}
 
 	pid := os.Getpid()
@@ -1499,6 +1512,14 @@ func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
+	// Ctrl+T: insert compact timestamp (2006-01-02 15:04).
+	if msg.String() == "ctrl+t" {
+		ts := []rune(time.Now().Format("2006-01-02 15:04"))
+		m.inputExitHistory()
+		m.inputInsert(ts)
+		m.updateCompletions()
+		return nil
+	}
 	// Ctrl+V: read clipboard and paste.
 	if msg.String() == "ctrl+v" {
 		m.pasteFromClipboard()
@@ -3907,6 +3928,43 @@ func (m *Model) toggleScratch() {
 	m.cmdCompleteIdx = -1
 	m.paramItems = nil
 	m.paramIdx = -1
+
+	// Auto-select the scratch row in the workspace tree.
+	m.selectScratchRow()
+}
+
+// selectScratchRow navigates the workspace tree cursor to the scratch row
+// for the current workspace, expanding it if necessary.
+func (m *Model) selectScratchRow() {
+	ws := m.scratchWorkspace()
+	if ws == "" {
+		return
+	}
+	// Find the workspace index.
+	wsIdx := -1
+	for i, item := range m.workspaceItems {
+		if item.name == ws {
+			wsIdx = i
+			break
+		}
+	}
+	if wsIdx < 0 {
+		return
+	}
+	// Ensure workspace is expanded so the scratch row is visible.
+	if !m.workspaceItems[wsIdx].expanded {
+		m.workspaceItems[wsIdx].expanded = true
+		m.wsRows = m.buildWsRows()
+	}
+	// Find the scratch row for this workspace.
+	for i, row := range m.wsRows {
+		if row.kind == wsRowScratch && row.wsIdx == wsIdx {
+			m.wsCursor = i
+			m.navSubTab = navSubTabWorkspaces
+			m.clampWsScroll()
+			return
+		}
+	}
 }
 
 // cmdScratch handles /scratch [msg]. Empty msg toggles pane; non-empty appends.

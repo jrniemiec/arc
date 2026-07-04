@@ -288,8 +288,9 @@ type Model struct {
 	logViewerOpen bool // true while the tail window is open
 
 	// Input correction (Ctrl+G)
-	correcting      bool   // true while correction LLM call is in flight
-	correctionFlash string // non-empty: flash message shown in status bar
+	correcting       bool   // true while correction LLM call is in flight
+	correctionPrefix string // command prefix stripped before sending to LLM
+	correctionFlash  string // non-empty: flash message shown in status bar
 
 	// Command input
 	inputValue        string

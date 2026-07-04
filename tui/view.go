@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	storefs "github.com/jrniemiec/arc/store/fs"
 )
 
 // ── ANSI helpers ──────────────────────────────────────────────────────────────
@@ -659,7 +661,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 		case wsRowScratch:
 			prefix := "  "
 			dot := "✎ "
-			name := "scratch.md"
+			name := storefs.ScratchName(ws.name)
 			label = prefix + dot + name
 			if selected {
 				label = reverse(label)
