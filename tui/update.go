@@ -17,6 +17,7 @@ import (
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/service"
 	storefs "github.com/jrniemiec/arc/store/fs"
+	"github.com/jrniemiec/arc/tts"
 	"github.com/jrniemiec/llm"
 )
 
@@ -255,6 +256,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = ""
 			m.statusErr = false
 		}
+
+	case ttsDoneMsg:
+		if msg.gen != m.ttsGen {
+			break // stale — a new Play or Stop has superseded this one
+		}
+		m.ttsCurrentText = ""
+		// Drain resource paragraph-block queue.
+		if len(m.resourceTTSQueue) > 0 && m.focus == paneResource {
+			next := m.resourceTTSQueue[0]
+			m.resourceTTSQueue = m.resourceTTSQueue[1:]
+			m.resourceCursor = next.cursorLine
+			m.resourceTTSText = next.text
+			viewH := m.height - 4
+			if viewH < 1 {
+				viewH = 1
+			}
+			m.scrollResourceToCursor(viewH)
+			text := tts.Strip(m.resourceTTSText)
+			playFn := m.ttsPlayer.Play(text)
+			m.ttsGen = m.ttsPlayer.Gen()
+			m.ttsCurrentText = text
+			cmds = append(cmds, func() tea.Msg {
+				done := playFn()
+				return ttsDoneMsg{err: done.Err, gen: done.Gen}
+			})
+			break
+		}
+		m.resourceTTSText = ""
+		m.statusMsg = ""
 
 	case shellDoneMsg:
 		m.statusErr = false
@@ -911,6 +941,8 @@ func (m *Model) navSelect() tea.Cmd {
 			return m.openWorkspaceFile(row.wsIdx, "resources", row.resourceName)
 		case wsRowOutcome:
 			return m.openWorkspaceFile(row.wsIdx, "outcomes", row.outcomeName)
+		case wsRowScratch:
+			return m.openScratchOverlay(row.wsIdx)
 		}
 	}
 	return nil
@@ -1082,6 +1114,23 @@ func (m *Model) openWorkspaceFile(wsIdx int, subdir, filename string) tea.Cmd {
 		data = append(data[:maxBytes], []byte("\n[file truncated at 200 KB]")...)
 	}
 	m.openResourceOverlay(filename, string(data))
+	return nil
+}
+
+// openScratchOverlay reads the scratch file for the given workspace and opens it
+// in the resource overlay.
+func (m *Model) openScratchOverlay(wsIdx int) tea.Cmd {
+	if wsIdx < 0 || wsIdx >= len(m.workspaceItems) {
+		return nil
+	}
+	ws := m.workspaceItems[wsIdx]
+	path := storefs.ScratchPath(m.cfg.DataRoot, ws.name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		m.setStatusError(fmt.Sprintf("cannot read scratch: %v", err))
+		return nil
+	}
+	m.openResourceOverlay("scratch.md", string(data))
 	return nil
 }
 
@@ -1338,8 +1387,11 @@ func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case "s":
-			m.statusMsg = "TTS: not yet implemented"
-			return nil
+			return m.cmdChatTTS()
+		case "[":
+			return m.cmdChatTTSAdjustRate(-20)
+		case "]":
+			return m.cmdChatTTSAdjustRate(+20)
 		}
 	case key.Matches(msg, keys.NavUp):
 		if m.chatBoxCursor > 0 {
@@ -1436,6 +1488,12 @@ func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
 		m.scrollResourceToCursor(viewH)
 	case "e":
 		return m.cmdResourceEdit(m.resourceName)
+	case "s":
+		return m.cmdResourceTTS(viewH)
+	case "[":
+		return m.cmdResourceTTSAdjustRate(-20, viewH)
+	case "]":
+		return m.cmdResourceTTSAdjustRate(+20, viewH)
 	}
 	return nil
 }
@@ -4102,4 +4160,208 @@ func correctionResolveAPIKey(provider string) string {
 		}
 	}
 	return ""
+}
+
+// ── TTS ─────────────────────────────────────────────────────────────────────
+
+// cmdChatTTS plays or stops TTS for the selected chat box.
+// First press extracts the assistant text from the selected exchange and speaks it.
+// Second press while playing stops playback.
+func (m *Model) cmdChatTTS() tea.Cmd {
+	// Toggle: if already playing, stop.
+	if m.ttsPlayer.Playing() {
+		m.stopTTS()
+		m.statusMsg = ""
+		return nil
+	}
+
+	// Extract text from the selected chat box.
+	infos := m.chatBoxInfos()
+	if m.chatBoxCursor < 0 || m.chatBoxCursor >= len(infos) {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+	info := infos[m.chatBoxCursor]
+
+	// Collect message content from the exchange.
+	var parts []string
+	{
+		msgs := m.chatRawMsgs
+		if m.chatEngine != nil {
+			msgs = m.chatEngine.History().Msgs
+		}
+		for i := info.msgStart; i < info.msgEnd && i < len(msgs); i++ {
+			content := strings.TrimSpace(msgs[i].Content)
+			if content != "" {
+				parts = append(parts, content)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	text := tts.Strip(strings.Join(parts, "\n\n"))
+	if text == "" {
+		m.statusMsg = "nothing to speak (stripped)"
+		return nil
+	}
+
+	m.statusMsg = ""
+	m.ttsCurrentText = text
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// cmdChatTTSAdjustRate changes the TTS rate by delta wpm (e.g. -20 or +20)
+// and restarts playback from the current text. No-op if not playing.
+func (m *Model) cmdChatTTSAdjustRate(delta int) tea.Cmd {
+	if !m.ttsPlayer.Playing() || m.ttsCurrentText == "" {
+		return nil
+	}
+
+	// Clamp rate to 80–500 wpm.
+	newRate := m.cfg.TTSRate + delta
+	if m.cfg.TTSRate == 0 {
+		newRate = 200 + delta
+	}
+	if newRate < 80 {
+		newRate = 80
+	}
+	if newRate > 500 {
+		newRate = 500
+	}
+	m.cfg.TTSRate = newRate
+	m.ttsPlayer.SetRate(newRate)
+
+	// Kill current playback and restart with new rate.
+	m.ttsPlayer.Stop()
+
+	text := m.ttsCurrentText
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// ── Resource TTS ────────────────────────────────────────────────────────────
+
+// buildResourceTTSBlocks splits resource lines into paragraph-level TTS blocks
+// starting from fromLine. Each block tracks the last source line index so the
+// cursor can follow along during playback.
+func buildResourceTTSBlocks(lines []string, fromLine int) []resourceTTSBlock {
+	var blocks []resourceTTSBlock
+	var current []string
+	var lastIdx int
+
+	flush := func() {
+		joined := strings.TrimSpace(strings.Join(current, " "))
+		if joined != "" && tts.Strip(joined) != "" {
+			blocks = append(blocks, resourceTTSBlock{text: joined, cursorLine: lastIdx})
+		}
+		current = current[:0]
+	}
+
+	for i := fromLine; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+
+		if trimmed == "" {
+			flush()
+			continue
+		}
+
+		isHeading := strings.HasPrefix(trimmed, "#")
+		isList := len(trimmed) > 0 && (trimmed[0] == '-' || trimmed[0] == '*' ||
+			(trimmed[0] >= '0' && trimmed[0] <= '9'))
+		isCodeFence := strings.HasPrefix(trimmed, "```")
+
+		if isHeading || isCodeFence || isList {
+			flush()
+			lastIdx = i
+			current = append(current, trimmed)
+			flush()
+			continue
+		}
+
+		lastIdx = i
+		current = append(current, trimmed)
+
+		last := trimmed[len(trimmed)-1]
+		if last == '?' || last == '!' {
+			flush()
+		}
+	}
+	flush()
+	return blocks
+}
+
+// cmdResourceTTS plays or stops TTS from the current cursor in the resource overlay.
+func (m *Model) cmdResourceTTS(viewH int) tea.Cmd {
+	if m.ttsPlayer.Playing() {
+		m.stopTTS()
+		return nil
+	}
+
+	blocks := buildResourceTTSBlocks(m.resourceLines, m.resourceCursor)
+	if len(blocks) == 0 {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	m.resourceTTSQueue = blocks[1:]
+	m.resourceCursor = blocks[0].cursorLine
+	m.resourceTTSText = blocks[0].text
+	m.scrollResourceToCursor(viewH)
+
+	text := tts.Strip(m.resourceTTSText)
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// cmdResourceTTSAdjustRate changes the TTS rate and restarts playback of the
+// current resource block. No-op if not playing.
+func (m *Model) cmdResourceTTSAdjustRate(delta, viewH int) tea.Cmd {
+	if !m.ttsPlayer.Playing() || m.resourceTTSText == "" {
+		return nil
+	}
+
+	newRate := m.cfg.TTSRate + delta
+	if m.cfg.TTSRate == 0 {
+		newRate = 200 + delta
+	}
+	if newRate < 80 {
+		newRate = 80
+	}
+	if newRate > 500 {
+		newRate = 500
+	}
+	m.cfg.TTSRate = newRate
+	m.ttsPlayer.SetRate(newRate)
+
+	m.ttsPlayer.Stop()
+
+	text := tts.Strip(m.resourceTTSText)
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
 }

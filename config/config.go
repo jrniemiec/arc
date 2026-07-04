@@ -49,6 +49,10 @@ type Config struct {
 	// Leave empty to use the default.
 	CorrectionPrompt string `json:"correction_prompt,omitempty"`
 
+	// TTS (macOS say(1))
+	TTSVoice string `json:"tts_voice,omitempty"` // say(1) voice name; empty = system default
+	TTSRate  int    `json:"tts_rate,omitempty"`   // words per minute; 0 = 200
+
 	// Agent
 	AgentPath string `json:"agent_path,omitempty"` // default: <DataRoot>/agent
 

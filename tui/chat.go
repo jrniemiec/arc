@@ -909,9 +909,16 @@ func (m Model) renderChatStatusLine() string {
 	t := ActiveTheme
 	w := m.width
 
-	// Left: streaming indicator or status message.
+	// Left: TTS indicator > streaming indicator > status message.
 	var left string
-	if m.chatStreaming {
+	if m.ttsPlayer.Playing() {
+		rate := m.cfg.TTSRate
+		if rate <= 0 {
+			rate = 200
+		}
+		label := fmt.Sprintf("♪ #%d  say  %d wpm  [ slower  ] faster", m.chatBoxCursor+1, rate)
+		left = renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
+	} else if m.chatStreaming {
 		left = renderWaveIndicator(m.spinnerFrame, "streaming", t.StreamingText, t.Dimmed)
 	} else if m.statusMsg != "" {
 		if m.statusErr {
@@ -1347,6 +1354,7 @@ func (m *Model) openResourceOverlay(name, text string) {
 
 // closeResourceOverlay tears down the resource overlay and restores previous focus.
 func (m *Model) closeResourceOverlay() {
+	m.stopTTS()
 	m.focus = m.resourcePreFocus
 	m.resourceLines = nil
 	m.resourceName = ""

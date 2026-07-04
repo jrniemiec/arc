@@ -1625,9 +1625,18 @@ func (m Model) renderResourceOverlay() string {
 		out = append(out, "")
 	}
 
-	// Hint bar.
+	// Hint bar: separator + status/hints line.
 	out = append(out, fg(t.BoxBorder, strings.Repeat("─", w)))
-	out = append(out, " "+fg(t.Dimmed, "↑↓ / PgUp PgDn  move  ·  g/G  top/bottom  ·  e  edit  ·  Ctrl+X  close"))
+	if m.ttsPlayer.Playing() {
+		rate := m.cfg.TTSRate
+		if rate <= 0 {
+			rate = 200
+		}
+		label := fmt.Sprintf("♪ %s  say  %d wpm  [ slower  ] faster", m.resourceName, rate)
+		out = append(out, renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed))
+	} else {
+		out = append(out, " "+fg(t.Dimmed, "↑↓ / PgUp PgDn  move  ·  g/G  top/bottom  ·  s  speak  ·  e  edit  ·  Ctrl+X  close"))
+	}
 
 	// Safety clamp.
 	if len(out) > h {

@@ -31,6 +31,7 @@ var tuiCmd = &cobra.Command{
 
 		final, err := p.Run()
 		if fm, ok := final.(arctui.Model); ok {
+			fm.Cleanup()
 			arctui.CloseChromeWindow(fm.ChromeWindowID())
 			fm.SaveHistory()
 		}

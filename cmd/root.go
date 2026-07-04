@@ -64,6 +64,7 @@ Examples:
 			p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 			final, err := p.Run()
 			if fm, ok := final.(arctui.Model); ok {
+				fm.Cleanup()
 				arctui.CloseChromeWindow(fm.ChromeWindowID())
 				fm.SaveHistory()
 			}

@@ -14,7 +14,16 @@ import (
 	"github.com/jrniemiec/arc/service"
 	"github.com/jrniemiec/arc/store"
 	storefs "github.com/jrniemiec/arc/store/fs"
+	"github.com/jrniemiec/arc/tts"
 )
+
+// resourceTTSBlock is a paragraph-level TTS unit for the resource viewer.
+// text is the joined block to synthesise; cursorLine is the last line of the
+// block — the resource cursor advances to it when this block starts playing.
+type resourceTTSBlock struct {
+	text       string
+	cursorLine int
+}
 
 // tab identifies the active top-level tab.
 type tab int
@@ -344,6 +353,13 @@ type Model struct {
 	resourceCursor   int      // highlighted line index
 	resourceScroll   int      // scroll offset
 	resourcePreFocus focusPane // focus to restore on close
+
+	// TTS (macOS say(1))
+	ttsPlayer        *tts.Player
+	ttsGen           int                // tracks Player.Gen() to discard stale DoneMsgs
+	ttsCurrentText   string             // text being spoken (for restart on rate change)
+	resourceTTSText  string             // text of the resource block currently playing (for speed-change restart)
+	resourceTTSQueue []resourceTTSBlock // paragraph blocks still to be spoken
 }
 
 // cmdCompletion is one entry in the command completion popup.
@@ -515,6 +531,12 @@ type correctionDoneMsg struct {
 // correctionFlashMsg clears the correction flash after a delay.
 type correctionFlashMsg struct{}
 
+// ttsDoneMsg signals that TTS playback has completed or was interrupted.
+type ttsDoneMsg struct {
+	err error
+	gen int
+}
+
 type cmdDoneMsg struct {
 	statusMsg          string
 	statusLines        []string
@@ -678,6 +700,14 @@ func (m *Model) askConfirm(msg string, fn func() tea.Cmd) {
 	m.inputCursor = 0
 }
 
+// stopTTS kills any in-flight say(1) process and clears all TTS queues.
+func (m *Model) stopTTS() {
+	m.ttsPlayer.Stop()
+	m.ttsCurrentText = ""
+	m.resourceTTSText = ""
+	m.resourceTTSQueue = nil
+}
+
 func (m *Model) setStatusError(msg string) {
 	m.statusMsg = msg
 	m.statusErr = true
@@ -740,6 +770,7 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		paramIdx:        -1,
 		chatAutoScroll:  true,
 		programSend:     &sendFn,
+		ttsPlayer:       tts.NewPlayer(cfg.TTSVoice, cfg.TTSRate),
 	}
 	return m
 }
@@ -755,6 +786,12 @@ func (m *Model) SetProgramSend(send func(tea.Msg)) {
 // SaveHistory persists the command history to disk. Call after p.Run() exits.
 func (m Model) SaveHistory() {
 	saveCommandHistory(historyPath(m.cfg.DataRoot), m.inputHistory)
+}
+
+// Cleanup releases resources that outlive the bubbletea program.
+// Call after p.Run() exits.
+func (m Model) Cleanup() {
+	m.ttsPlayer.Stop()
 }
 
 // buildWsRows rebuilds the flat workspace tree from workspaceItems expand state.

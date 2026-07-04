@@ -103,7 +103,7 @@ func ReadScratch(dataRoot, workspace string) (string, error) {
 	return string(data), nil
 }
 
-// AppendScratch appends a line to the scratch file with a timestamp prefix.
+// AppendScratch appends a line to the scratch file.
 func AppendScratch(dataRoot, workspace, msg string) error {
 	if err := EnsureScratch(dataRoot, workspace); err != nil {
 		return err
@@ -114,8 +114,7 @@ func AppendScratch(dataRoot, workspace, msg string) error {
 		return err
 	}
 	defer f.Close()
-	stamp := time.Now().Format("2006-01-02 15:04")
-	_, err = fmt.Fprintf(f, "[%s] %s\n", stamp, msg)
+	_, err = fmt.Fprintf(f, "%s\n", msg)
 	return err
 }
 
