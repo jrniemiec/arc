@@ -122,16 +122,35 @@ func ReadScratch(dataRoot, workspace string) (string, error) {
 }
 
 // AppendScratch appends a line to the scratch file.
+// If this is the first append for today, a date separator is inserted first.
 func AppendScratch(dataRoot, workspace, msg string) error {
 	if err := EnsureScratch(dataRoot, workspace); err != nil {
 		return err
 	}
 	path := ScratchPath(dataRoot, workspace)
+
+	// Check if today's separator already exists.
+	now := time.Now()
+	dateTag := now.Format("Mon, January 2, 2006")
+	needSep := true
+	if data, err := os.ReadFile(path); err == nil {
+		if strings.Contains(string(data), dateTag) {
+			needSep = false
+		}
+	}
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	if needSep {
+		sep := fmt.Sprintf("---------- %s %s ----------\n",
+			dateTag, now.Format("15:04"))
+		if _, err := f.WriteString(sep); err != nil {
+			return err
+		}
+	}
 	_, err = fmt.Fprintf(f, "%s\n", msg)
 	return err
 }
