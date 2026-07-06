@@ -433,6 +433,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		chatViewH := m.height - 6 - m.completionCount() - 2
 		m.chatAutoScrollToBottom(chatViewH)
 
+	case askxStreamDeltaMsg:
+		m.handleAskXStreamDelta(string(msg))
+
+	case askxStreamDoneMsg:
+		m.handleAskXStreamDone(msg)
+
 	case tea.KeyMsg:
 		cmds = append(cmds, m.handleKey(msg))
 
@@ -499,6 +505,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Scratch):
 		m.toggleScratch()
 		return nil
+	case key.Matches(msg, keys.AskX):
+		m.toggleAskX()
+		return nil
 
 	case key.Matches(msg, keys.CorrectInput):
 		if !m.correcting && strings.TrimSpace(m.inputValue) != "" {
@@ -559,6 +568,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.focus = (m.focus + 1) % 4 // TabBar → Nav → Content → Command → TabBar
 		m.scratchFocused = false
+		m.askxFocused = false
 		if m.focus == paneCommand {
 			m.cursorVisible = true
 		}
@@ -572,6 +582,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.PanePrev):
 		m.focus = (m.focus + 3) % 4 // +3 mod 4 = -1 mod 4
 		m.scratchFocused = false
+		m.askxFocused = false
 		if m.focus == paneCommand {
 			m.cursorVisible = true
 		}
@@ -1337,6 +1348,10 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	// When scratch pane is focused, route scroll/view/edit keys to scratch.
 	if m.scratchOpen && m.scratchFocused {
 		return m.handleScratchKey(msg)
+	}
+	// When askX pane is focused, route keys to askX.
+	if m.askxOpen && m.askxFocused {
+		return m.handleAskXKey(msg)
 	}
 	if m.chatMode {
 		return m.handleChatContentKey(msg)
@@ -2299,6 +2314,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 	case "/scratch":
 		return m.cmdScratch(arg)
+	case "/askx":
+		return m.cmdAskX(arg)
 	case "/article":
 		return m.dispatchQualified(navSubTabArticles, arg)
 	case "/collection":
@@ -3661,26 +3678,40 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 
-		// Scratch pane wheel (bottom of content pane).
-		if msg.X > m.dividerCol() && m.scratchOpen {
+		// Scratch/AskX pane wheel (bottom of content pane).
+		if msg.X > m.dividerCol() && (m.scratchOpen || m.askxOpen) {
 			mainH := m.height - 6 - m.completionCount()
-			scratchH := mainH / 3
-			if scratchH < 3 {
-				scratchH = 3
+			splitH := mainH / 3
+			if splitH < 3 {
+				splitH = 3
 			}
-			scratchStartRow := topBarHeight + (mainH - scratchH)
-			if msg.Y >= scratchStartRow {
-				viewH := scratchH - 1
-				m.scratchScroll += delta
-				if m.scratchScroll < 0 {
-					m.scratchScroll = 0
-				}
-				maxScroll := len(m.scratchLines) - viewH
-				if maxScroll < 0 {
-					maxScroll = 0
-				}
-				if m.scratchScroll > maxScroll {
-					m.scratchScroll = maxScroll
+			splitStartRow := topBarHeight + (mainH - splitH)
+			if msg.Y >= splitStartRow {
+				viewH := splitH - 1
+				if m.scratchOpen {
+					m.scratchScroll += delta
+					if m.scratchScroll < 0 {
+						m.scratchScroll = 0
+					}
+					maxScroll := len(m.scratchLines) - viewH
+					if maxScroll < 0 {
+						maxScroll = 0
+					}
+					if m.scratchScroll > maxScroll {
+						m.scratchScroll = maxScroll
+					}
+				} else if m.askxOpen {
+					m.askxScroll += delta
+					if m.askxScroll < 0 {
+						m.askxScroll = 0
+					}
+					maxScroll := len(m.askxDisplayLines) - viewH
+					if maxScroll < 0 {
+						maxScroll = 0
+					}
+					if m.askxScroll > maxScroll {
+						m.askxScroll = maxScroll
+					}
 				}
 				return nil
 			}
@@ -3807,20 +3838,27 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			// Click in content pane.
 			m.focus = paneContent
-			// Check if click is in the scratch region.
-			if m.scratchOpen {
+			// Check if click is in the scratch or askX region.
+			splitOpen := m.scratchOpen || m.askxOpen
+			if splitOpen {
 				mainH := m.height - 6 - m.completionCount()
-				scratchH := mainH / 3
-				if scratchH < 3 {
-					scratchH = 3
+				splitH := mainH / 3
+				if splitH < 3 {
+					splitH = 3
 				}
-				scratchStartRow := topBarHeight + (mainH - scratchH)
-				if msg.Y >= scratchStartRow {
-					m.scratchFocused = true
+				splitStartRow := topBarHeight + (mainH - splitH)
+				if msg.Y >= splitStartRow {
+					if m.scratchOpen {
+						m.scratchFocused = true
+					}
+					if m.askxOpen {
+						m.askxFocused = true
+					}
 					return nil
 				}
 			}
 			m.scratchFocused = false
+			m.askxFocused = false
 			if m.chatMode {
 				m.rebuildChatLines(m.chatBuildWidth())
 				m.chatBoxCursor = 0
@@ -3995,6 +4033,10 @@ func (m *Model) toggleScratch() {
 		m.clearScratchInput()
 		return
 	}
+	// Mutual exclusion: close askX if open.
+	if m.askxOpen {
+		m.closeAskX()
+	}
 	m.scratchOpen = true
 	m.reloadScratchLines()
 	m.focus = paneCommand
@@ -4015,6 +4057,9 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 		if m.scratchOpen {
 			m.scratchOpen = false
 		} else {
+			if m.askxOpen {
+				m.closeAskX()
+			}
 			m.scratchOpen = true
 			m.reloadScratchLines()
 		}
@@ -4027,6 +4072,9 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 	}
 	m.reloadScratchLines()
 	if !m.scratchOpen {
+		if m.askxOpen {
+			m.closeAskX()
+		}
 		m.scratchOpen = true
 	}
 	// Auto-scroll to bottom.

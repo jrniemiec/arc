@@ -883,15 +883,15 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 
 // renderContentPane returns lines for the right content pane.
 func (m Model) renderContentPane(height, width int) []string {
-	// Calculate scratch split if open.
-	scratchH := 0
+	// Calculate scratch/askX split if open (mutually exclusive).
+	splitH := 0
 	contentH := height
-	if m.scratchOpen {
-		scratchH = height / 3
-		if scratchH < 3 {
-			scratchH = 3
+	if m.scratchOpen || m.askxOpen {
+		splitH = height / 3
+		if splitH < 3 {
+			splitH = 3
 		}
-		contentH = height - scratchH
+		contentH = height - splitH
 		if contentH < 3 {
 			contentH = 3
 		}
@@ -917,9 +917,11 @@ func (m Model) renderContentPane(height, width int) []string {
 	}
 	lines = lines[:contentH]
 
-	// Append scratch pane if open.
-	if m.scratchOpen && scratchH > 0 {
-		lines = append(lines, m.renderScratchPane(scratchH, width)...)
+	// Append scratch or askX pane if open.
+	if m.scratchOpen && splitH > 0 {
+		lines = append(lines, m.renderScratchPane(splitH, width)...)
+	} else if m.askxOpen && splitH > 0 {
+		lines = append(lines, m.renderAskXPane(splitH, width)...)
 	}
 
 	for len(lines) < height {
@@ -1595,6 +1597,9 @@ func (m Model) renderStatusLine() string {
 	t := ActiveTheme
 	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
 		return m.renderChatStatusLine()
+	}
+	if m.askxStreaming && !m.selectionMode {
+		return renderWaveIndicator(m.spinnerFrame, "askX streaming", t.StreamingText, t.Dimmed)
 	}
 	if m.ttsPlayer.Playing() && m.contentTTSText != "" && !m.selectionMode {
 		rate := m.cfg.TTSRate

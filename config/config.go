@@ -53,6 +53,9 @@ type Config struct {
 	TTSVoice string `json:"tts_voice,omitempty"` // say(1) voice name; empty = system default
 	TTSRate  int    `json:"tts_rate,omitempty"`   // words per minute; 0 = 200
 
+	// AskX (single-shot LLM query pane in TUI)
+	AskX AskXConfig `json:"askx"`
+
 	// Agent
 	AgentPath string `json:"agent_path,omitempty"` // default: <DataRoot>/agent
 
@@ -176,6 +179,22 @@ type IngestConfig struct {
 type FlashcardStyleConfig struct {
 	SystemPrompt string `json:"system_prompt"`
 }
+
+// AskXConfig holds configuration for the /askX single-shot LLM query pane.
+type AskXConfig struct {
+	// Profile is the arc profile name used for askX queries.
+	// Default: "haiku".
+	Profile string `json:"profile"`
+
+	// SystemPrompt is the system prompt sent with every askX query.
+	SystemPrompt string `json:"system_prompt"`
+
+	// MaxOutputTokens caps the response length. 0 uses the provider default.
+	MaxOutputTokens int `json:"max_output_tokens"`
+}
+
+// DefaultAskXSystemPrompt is the built-in system prompt for askX queries.
+const DefaultAskXSystemPrompt = `You are a concise, knowledgeable assistant. Answer directly and precisely. No preamble, no filler. Use plain text — no markdown formatting.`
 
 // builtinFlashcardStyles are the default system prompts for each flashcard style.
 var builtinFlashcardStyles = map[string]FlashcardStyleConfig{
@@ -453,6 +472,11 @@ func Default() Config {
 			VerbatimRatio:   0.4,
 			RAGMode:         "open",
 		},
+		AskX: AskXConfig{
+			Profile:         "haiku",
+			SystemPrompt:    DefaultAskXSystemPrompt,
+			MaxOutputTokens: 4096,
+		},
 		AgentPath: filepath.Join(dataRoot, "agent"),
 		LogPath:   filepath.Join(dataRoot, "arc.log"),
 		LogLevel:  "info",
@@ -487,6 +511,7 @@ func Load(path string) (Config, error) {
 		PreferredStyles []string           `json:"preferred_styles"`
 		CookieJars      map[string]string  `json:"cookie_jars"`
 		Chat            ChatConfig         `json:"chat"`
+		AskX            AskXConfig         `json:"askx"`
 		LogPath         string             `json:"log_path"`
 		LogLevel        string             `json:"log_level"`
 	}
@@ -600,6 +625,15 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Chat.RAGInstruction != "" {
 		cfg.Chat.RAGInstruction = overlay.Chat.RAGInstruction
+	}
+	if overlay.AskX.Profile != "" {
+		cfg.AskX.Profile = overlay.AskX.Profile
+	}
+	if overlay.AskX.SystemPrompt != "" {
+		cfg.AskX.SystemPrompt = overlay.AskX.SystemPrompt
+	}
+	if overlay.AskX.MaxOutputTokens != 0 {
+		cfg.AskX.MaxOutputTokens = overlay.AskX.MaxOutputTokens
 	}
 	if overlay.LogPath != "" {
 		cfg.LogPath = overlay.LogPath

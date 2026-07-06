@@ -155,6 +155,72 @@ func AppendScratch(dataRoot, workspace, msg string) error {
 	return err
 }
 
+// ── AskX helpers ────────────────────────────────────────────────────────────
+
+// AskXMessage is one turn in an askX conversation (user or assistant).
+type AskXMessage struct {
+	Role    string    `json:"role"`    // "user" or "assistant"
+	Content string    `json:"content"`
+	Time    time.Time `json:"time,omitempty"`
+}
+
+// AskXHistory is the stored askX message history.
+type AskXHistory struct {
+	Messages []AskXMessage `json:"messages"`
+}
+
+// AskXName returns the askx filename for a workspace.
+// Per-workspace: "askx-<workspace>.json"; global: "askx.json".
+func AskXName(workspace string) string {
+	if workspace != "" {
+		return "askx-" + workspace + ".json"
+	}
+	return "askx.json"
+}
+
+// AskXPath returns the path to the askx file.
+// If workspace is non-empty, returns the per-workspace askx; otherwise the global one.
+func AskXPath(dataRoot, workspace string) string {
+	if workspace != "" {
+		return filepath.Join(WorkspaceDir(dataRoot, workspace), AskXName(workspace))
+	}
+	return filepath.Join(dataRoot, "askx.json")
+}
+
+// ReadAskXHistory reads the askX history from JSON. Returns empty history if missing.
+func ReadAskXHistory(dataRoot, workspace string) (*AskXHistory, error) {
+	path := AskXPath(dataRoot, workspace)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &AskXHistory{}, nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return &AskXHistory{}, nil
+	}
+	var h AskXHistory
+	if err := json.Unmarshal(data, &h); err != nil {
+		return nil, fmt.Errorf("parse askx history: %w", err)
+	}
+	return &h, nil
+}
+
+// SaveAskXHistory writes the askX history as JSON atomically.
+func SaveAskXHistory(dataRoot, workspace string, h *AskXHistory) error {
+	path := AskXPath(dataRoot, workspace)
+	data, err := json.MarshalIndent(h, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // ReadWorkspaceMeta reads meta.json from a workspace directory.
 func ReadWorkspaceMeta(dataRoot, name string) (WorkspaceMeta, error) {
 	path := filepath.Join(WorkspaceDir(dataRoot, name), "meta.json")

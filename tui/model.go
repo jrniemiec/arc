@@ -372,6 +372,18 @@ type Model struct {
 	scratchBlocks      []scratchBlock // parsed blocks for block navigation
 	scratchBlockCursor int            // selected block index
 	scratchCollapsed   map[int]bool   // set of collapsed block indices
+	// AskX pane (split at bottom of content pane, mutually exclusive with scratch)
+	askxOpen          bool               // true when askX split is visible
+	askxFocused       bool               // true when askX region has focus (within paneContent)
+	askxScroll        int                // scroll offset into askxDisplayLines
+	askxMsgs          []chat.Message     // structured message history (user + assistant pairs)
+	askxDisplayLines  []chatLine         // rendered lines for display (reuses chat line types)
+	askxBoxCursor     int                // selected box index (each box = user+assistant exchange)
+	askxCollapsed     map[int]bool       // set of collapsed box indices
+	askxStreaming      bool              // true while LLM response is in flight
+	askxStreamBuf     string             // accumulated streaming response text
+	askxCancelStream  context.CancelFunc // cancels the in-flight askX request
+
 	// Resource overlay (active when focus == paneResource)
 	resourceLines    []string // file content split into lines
 	resourceName     string   // file name shown in top bar
@@ -403,6 +415,7 @@ var globalCommands = []cmdCompletion{
 	{"/collection", "<cmd>", "collection commands (list, show, …)"},
 	{"/workspace", "<cmd>", "workspace commands (list, new, delete, …)"},
 	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
+	{"/askX", "<prompt>", "single-shot LLM query (no history)"},
 	{"/help", "[group]", "show command reference"},
 	{"/stats", "", "show library stats"},
 	{"/log", "", "open/close debug log tail"},
@@ -458,6 +471,7 @@ var chatCommands = []cmdCompletion{
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
 	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
+	{"/askX", "<prompt>", "single-shot LLM query (no history)"},
 	{"/help", "", "show chat commands"},
 }
 
@@ -547,6 +561,15 @@ type chatStreamDoneMsg struct {
 	usage   chat.Usage
 	elapsed time.Duration
 	err     string
+}
+
+// askxStreamDeltaMsg delivers a token fragment from the askX streaming response.
+type askxStreamDeltaMsg string
+
+// askxStreamDoneMsg signals that the askX streaming response is complete.
+type askxStreamDoneMsg struct {
+	fullText string // complete response text
+	err      string
 }
 
 // correctionDoneMsg is returned by doCorrection when the LLM call completes.
