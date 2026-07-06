@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -2305,8 +2306,17 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	// ── Global commands (available in any context) ──────────────────────────
 	switch cmd {
+	case "/config":
+		m.setStatusLines(m.cmdConfigLines())
+		m.focus = paneStatus
+		return nil
+	case "/config-edit":
+		return m.cmdConfigEdit()
 	case "/stats":
 		return m.cmdStats()
+	case "/models", "/profiles":
+		m.setStatusLines(m.cmdModelsLines())
+		return nil
 	case "/log", "/logs":
 		return m.cmdLog()
 	case "/help":
@@ -2987,6 +2997,115 @@ func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
 	}
 }
 
+// cmdConfigLines returns formatted lines showing the resolved configuration,
+// following c2's /config pattern: key settings + full profile listing.
+func (m *Model) cmdConfigLines() []string {
+	home, _ := os.UserHomeDir()
+	cfgPath := filepath.Join(home, ".arc", "config.json")
+
+	row := func(label, value string) string {
+		return fmt.Sprintf("  %-20s%s", label+":", value)
+	}
+	orNone := func(s string) string {
+		if s == "" {
+			return "(none)"
+		}
+		return s
+	}
+
+	ttsRate := m.cfg.TTSRate
+	if ttsRate == 0 {
+		ttsRate = 200
+	}
+
+	lines := []string{
+		row("config file", cfgPath),
+		row("data root", m.cfg.DataRoot),
+		row("articles root", m.cfg.ArticlesRoot),
+		row("db path", m.cfg.DBPath),
+		row("tts voice", orNone(m.cfg.TTSVoice)),
+		row("tts rate", fmt.Sprintf("%d wpm", ttsRate)),
+		row("correction", orNone(m.cfg.CorrectionProfile)),
+		row("askx profile", orNone(m.cfg.AskX.Profile)),
+		row("preferred models", orNone(strings.Join(m.cfg.PreferredModels, ", "))),
+		row("preferred styles", orNone(strings.Join(m.cfg.PreferredStyles, ", "))),
+		row("log level", orNone(m.cfg.LogLevel)),
+	}
+
+	// Ingest assignments.
+	lines = append(lines, "",
+		"  Ingest assignments:",
+		fmt.Sprintf("    summary: %s (%s)  ·  flash: %s  ·  flashcard: %s (%s)  ·  embed: %s",
+			m.cfg.Ingest.SummaryProfile, orNone(m.cfg.Ingest.SummaryStyle),
+			m.cfg.Ingest.FlashProfile,
+			m.cfg.Ingest.FlashcardProfile, orNone(m.cfg.Ingest.FlashcardStyle),
+			m.cfg.Ingest.EmbedProfile),
+	)
+
+	// Profile listing — mirrors c2's approach.
+	if len(m.cfg.Profiles) > 0 {
+		lines = append(lines, "", fmt.Sprintf("  Profiles (%d):", len(m.cfg.Profiles)))
+
+		names := make([]string, 0, len(m.cfg.Profiles))
+		for code := range m.cfg.Profiles {
+			names = append(names, code)
+		}
+		sort.Strings(names)
+
+		// Build set of active profile names for markers.
+		active := map[string][]string{}
+		if v := m.cfg.Ingest.SummaryProfile; v != "" {
+			active[v] = append(active[v], "summary")
+		}
+		if v := m.cfg.Ingest.FlashProfile; v != "" {
+			active[v] = append(active[v], "flash")
+		}
+		if v := m.cfg.Ingest.FlashcardProfile; v != "" {
+			active[v] = append(active[v], "flashcard")
+		}
+		if v := m.cfg.Ingest.EmbedProfile; v != "" {
+			active[v] = append(active[v], "embed")
+		}
+		if v := m.cfg.AskX.Profile; v != "" {
+			active[v] = append(active[v], "askx")
+		}
+		if v := m.cfg.CorrectionProfile; v != "" {
+			active[v] = append(active[v], "correction")
+		}
+
+		for _, code := range names {
+			p := m.cfg.Profiles[code]
+			parts := []string{p.Provider, p.Model}
+			if p.Info.Pricing != nil {
+				parts = append(parts, fmt.Sprintf("$%.2f/$%.2f", p.Info.Pricing.Input, p.Info.Pricing.Output))
+			}
+			if p.Info.CostTier != "" {
+				parts = append(parts, p.Info.CostTier)
+			}
+			marker := ""
+			if roles, ok := active[code]; ok {
+				marker = " ← " + strings.Join(roles, ", ")
+			}
+			lines = append(lines, fmt.Sprintf("    %-16s%s%s", code, strings.Join(parts, ", "), marker))
+		}
+	}
+
+	return lines
+}
+
+// cmdConfigEdit opens the arc config file in $EDITOR.
+func (m *Model) cmdConfigEdit() tea.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		m.setStatusError("$EDITOR is not set — add 'export EDITOR=<path>' to your shell config")
+		return nil
+	}
+	home, _ := os.UserHomeDir()
+	cfgPath := filepath.Join(home, ".arc", "config.json")
+	m.openEditorInTerminal(editor, cfgPath, "config.json")
+	return nil
+}
+
 // cmdStats shows library stats in the status area.
 func (m *Model) cmdStats() tea.Cmd {
 	if !m.statsLoaded {
@@ -3000,6 +3119,75 @@ func (m *Model) cmdStats() tea.Cmd {
 	}
 	m.setStatusLines(lines)
 	return nil
+}
+
+// cmdModelsLines returns formatted lines listing all LLM profiles sorted by cost tier.
+func (m *Model) cmdModelsLines() []string {
+	tierOrder := map[string]int{
+		"local": 0, "very_low": 1, "low": 2,
+		"medium": 3, "high": 4, "premium": 5,
+	}
+
+	type namedProfile struct {
+		name string
+		p    config.Profile
+	}
+	sorted := make([]namedProfile, 0, len(m.cfg.Profiles))
+	for name, p := range m.cfg.Profiles {
+		sorted = append(sorted, namedProfile{name, p})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		ti := tierOrder[sorted[i].p.Info.CostTier]
+		tj := tierOrder[sorted[j].p.Info.CostTier]
+		if ti != tj {
+			return ti < tj
+		}
+		return sorted[i].name < sorted[j].name
+	})
+
+	var lines []string
+
+	// Active assignments header.
+	lines = append(lines,
+		"Active profiles:",
+		fmt.Sprintf("  summary: %s  ·  flash: %s  ·  flashcard: %s  ·  embed: %s",
+			m.cfg.Ingest.SummaryProfile, m.cfg.Ingest.FlashProfile,
+			m.cfg.Ingest.FlashcardProfile, m.cfg.Ingest.EmbedProfile),
+		"",
+	)
+
+	for _, np := range sorted {
+		p := np.p
+
+		// Mark active steps.
+		active := ""
+		if m.cfg.Ingest.SummaryProfile == np.name {
+			active += " summary"
+		}
+		if m.cfg.Ingest.FlashProfile == np.name {
+			active += " flash"
+		}
+		if m.cfg.Ingest.FlashcardProfile == np.name {
+			active += " flashcard"
+		}
+		if m.cfg.Ingest.EmbedProfile == np.name {
+			active += " embed"
+		}
+		if active != "" {
+			active = "  ←" + active
+		}
+
+		pricing := "free (local)"
+		if p.Info.Pricing != nil {
+			pricing = fmt.Sprintf("$%.2f/$%.2f per 1M tok", p.Info.Pricing.Input, p.Info.Pricing.Output)
+		}
+
+		line := fmt.Sprintf("%-12s  %-10s  %-36s  %-8s  %s%s",
+			np.name, p.Provider, p.Model, "["+p.Info.CostTier+"]", pricing, active)
+		lines = append(lines, line)
+	}
+
+	return lines
 }
 
 // cmdLog opens or closes a tail of the arc log file in a new terminal window.
@@ -3526,8 +3714,11 @@ var helpGroups = []struct {
 		{"q / ctrl+c", "", "quit"},
 	}},
 	{"system", []cmdCompletion{
+		{"/config", "", "show resolved configuration"},
+		{"/config-edit", "", "open config file in $EDITOR"},
 		{"/tags", "", "list all tags"},
 		{"/stats", "", "show library stats"},
+		{"/models", "", "list available LLM profiles"},
 		{"/log", "", "open/close debug log tail"},
 	}},
 }

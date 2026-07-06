@@ -417,7 +417,10 @@ var globalCommands = []cmdCompletion{
 	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
 	{"/askX", "<prompt>", "single-shot LLM query (no history)"},
 	{"/help", "[group]", "show command reference"},
+	{"/config", "", "show resolved configuration"},
+	{"/config-edit", "", "open config file in $EDITOR"},
 	{"/stats", "", "show library stats"},
+	{"/models", "", "list available LLM profiles"},
 	{"/log", "", "open/close debug log tail"},
 }
 
@@ -472,6 +475,9 @@ var chatCommands = []cmdCompletion{
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
 	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
 	{"/askX", "<prompt>", "single-shot LLM query (no history)"},
+	{"/config", "", "show resolved configuration"},
+	{"/config-edit", "", "open config file in $EDITOR"},
+	{"/models", "", "list available LLM profiles"},
 	{"/help", "", "show chat commands"},
 }
 
