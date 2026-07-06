@@ -71,15 +71,16 @@ func (m *Model) startChatCmd(workspaceName string) tea.Cmd {
 // sendChatMsg sends the user prompt to the engine with streaming deltas.
 func (m *Model) sendChatMsg(prompt string) tea.Cmd {
 	eng := m.chatEngine
-	send := m.programSend
 	ctx, cancel := context.WithCancel(context.Background())
 	m.chatCancelStream = cancel
 	m.chatStreaming = true
 	m.chatStreamBuf = ""
+	shared := &streamBuf{}
+	m.chatSharedBuf = shared
 
 	return func() tea.Msg {
 		result, err := eng.Chat(ctx, prompt, chatengine.ChatOptions{}, func(delta string) error {
-			(*send)(chatStreamDeltaMsg(delta))
+			shared.Append(delta)
 			return nil
 		})
 		if err != nil {
@@ -919,7 +920,11 @@ func (m Model) renderChatStatusLine() string {
 		label := fmt.Sprintf("♪ #%d  say  %d wpm  [ slower  ] faster", m.chatBoxCursor+1, rate)
 		left = renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
 	} else if m.chatStreaming {
-		left = renderWaveIndicator(m.spinnerFrame, "streaming", t.StreamingText, t.Dimmed)
+		streamLabel := "streaming"
+		if m.chatEngine != nil {
+			streamLabel += " · " + m.chatEngine.Profile().Model
+		}
+		left = renderWaveIndicator(m.spinnerFrame, streamLabel, t.StreamingText, t.Dimmed)
 	} else if m.statusMsg != "" {
 		if m.statusErr {
 			left = fgBold(t.StatusError, " "+m.statusMsg)
@@ -1315,6 +1320,7 @@ func (m *Model) exitChatMode() {
 	m.chatScroll = 0
 	m.chatStreaming = false
 	m.chatStreamBuf = ""
+	m.chatSharedBuf = nil
 	m.chatLastUsage = nil
 	m.chatLastElapsed = 0
 	m.chatPendingPrompt = ""

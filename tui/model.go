@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -352,6 +353,7 @@ type Model struct {
 	chatScroll         int                   // scroll offset into chatDisplayLines
 	chatStreaming       bool                  // true while LLM response is in flight
 	chatStreamBuf      string                // accumulated streaming response text
+	chatSharedBuf      *streamBuf            // goroutine-safe buffer written by streaming goroutine
 	chatCancelStream   context.CancelFunc    // cancels the in-flight chat request
 	chatLastUsage      *chat.Usage           // per-turn token counts (nil until first response)
 	chatLastElapsed    time.Duration         // per-turn elapsed time
@@ -380,9 +382,11 @@ type Model struct {
 	askxDisplayLines  []chatLine         // rendered lines for display (reuses chat line types)
 	askxBoxCursor     int                // selected box index (each box = user+assistant exchange)
 	askxCollapsed     map[int]bool       // set of collapsed box indices
-	askxStreaming      bool              // true while LLM response is in flight
-	askxStreamBuf     string             // accumulated streaming response text
-	askxCancelStream  context.CancelFunc // cancels the in-flight askX request
+	askxStreaming        bool              // true while LLM response is in flight
+	askxStreamBuf       string             // accumulated streaming response text
+	askxSharedBuf       *streamBuf         // goroutine-safe buffer written by streaming goroutine
+	askxCancelStream    context.CancelFunc // cancels the in-flight askX request
+	askxResolvedProfile string             // profile name used for current/last askX query
 
 	// Resource overlay (active when focus == paneResource)
 	resourceLines    []string // file content split into lines
@@ -559,18 +563,12 @@ type chatReadyMsg struct {
 	err       string
 }
 
-// chatStreamDeltaMsg delivers a token fragment from the streaming LLM response.
-type chatStreamDeltaMsg string
-
 // chatStreamDoneMsg signals that the streaming response is complete.
 type chatStreamDoneMsg struct {
 	usage   chat.Usage
 	elapsed time.Duration
 	err     string
 }
-
-// askxStreamDeltaMsg delivers a token fragment from the askX streaming response.
-type askxStreamDeltaMsg string
 
 // askxStreamDoneMsg signals that the askX streaming response is complete.
 type askxStreamDoneMsg struct {
@@ -604,6 +602,25 @@ type cmdDoneMsg struct {
 	navFilter          string    // non-empty = set navFilter
 	resetChatEngine    bool      // true = drop chatEngine for resetChatWorkspace (force re-init on next message)
 	resetChatWorkspace string    // workspace name whose engine should be reset
+}
+
+// streamBuf is a goroutine-safe string buffer for streaming LLM responses.
+// The streaming goroutine appends via Append; the UI reads via Get on each tick.
+type streamBuf struct {
+	mu  sync.Mutex
+	buf string
+}
+
+func (b *streamBuf) Append(s string) {
+	b.mu.Lock()
+	b.buf += s
+	b.mu.Unlock()
+}
+
+func (b *streamBuf) Get() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf
 }
 
 // ── Cmds ─────────────────────────────────────────────────────────────────────

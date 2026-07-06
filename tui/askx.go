@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jrniemiec/arc/chat"
+	"github.com/jrniemiec/arc/config"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
 	"github.com/jrniemiec/llm"
@@ -131,6 +133,90 @@ func (m *Model) saveAskXHistory() {
 	}
 }
 
+// ── @token parsing ──────────────────────────────────────────────────────────
+
+// askxTokenResult holds the parsed result of @token extraction from an askX prompt.
+type askxTokenResult struct {
+	profileOverride string   // profile name if an @profile was found
+	fileContents    []string // contents of resolved @file tokens
+	fileNames       []string // basenames of resolved files (for display)
+	cleanPrompt     string   // prompt with @tokens stripped
+}
+
+// parseAskXTokens scans leading @tokens from the prompt.
+// For each token: if it matches a known profile key, it's a profile override.
+// Otherwise it's resolved as a file path. At most one profile is allowed.
+func parseAskXTokens(prompt string, profiles map[string]config.Profile) (askxTokenResult, error) {
+	var res askxTokenResult
+
+	words := strings.Fields(prompt)
+	consumed := 0
+	for _, w := range words {
+		if !strings.HasPrefix(w, "@") {
+			break
+		}
+		token := w[1:] // strip @
+		if token == "" {
+			break
+		}
+
+		// Try profile match first.
+		if _, ok := profiles[token]; ok {
+			if res.profileOverride != "" {
+				return res, fmt.Errorf("multiple profiles: @%s and @%s", res.profileOverride, token)
+			}
+			res.profileOverride = token
+			consumed++
+			continue
+		}
+
+		// Resolve as file path.
+		path := expandHome(token)
+		if !filepath.IsAbs(path) {
+			path, _ = filepath.Abs(path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return res, fmt.Errorf("@%s: %w", token, err)
+		}
+		res.fileContents = append(res.fileContents, string(data))
+		res.fileNames = append(res.fileNames, filepath.Base(path))
+		consumed++
+	}
+
+	// Rebuild clean prompt by stripping consumed @tokens.
+	if consumed > 0 {
+		// Find the position after the last consumed token.
+		remaining := prompt
+		for i := 0; i < consumed; i++ {
+			remaining = strings.TrimLeft(remaining, " ")
+			idx := strings.IndexByte(remaining, ' ')
+			if idx < 0 {
+				remaining = ""
+				break
+			}
+			remaining = remaining[idx:]
+		}
+		res.cleanPrompt = strings.TrimLeft(remaining, " ")
+	} else {
+		res.cleanPrompt = prompt
+	}
+
+	return res, nil
+}
+
+// expandHome expands a leading ~ to the user's home directory.
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return filepath.Join(home, path[1:])
+	}
+	return path
+}
+
 // ── Command ─────────────────────────────────────────────────────────────────
 
 // cmdAskX handles /askX <prompt>. Empty prompt toggles pane; non-empty sends query.
@@ -156,10 +242,35 @@ func (m *Model) cmdAskX(prompt string) tea.Cmd {
 		return nil
 	}
 
-	// Append user message.
+	// Parse @tokens (profile override, file inclusions).
+	parsed, err := parseAskXTokens(prompt, m.cfg.Profiles)
+	if err != nil {
+		m.setStatusError("askX: " + err.Error())
+		return nil
+	}
+
+	// Store the clean prompt (without @tokens) as the user message.
+	displayPrompt := parsed.cleanPrompt
+	if displayPrompt == "" {
+		m.setStatusError("askX: empty prompt after @token parsing")
+		return nil
+	}
+
+	// Build the LLM prompt: prepend file contents as context blocks.
+	llmPrompt := displayPrompt
+	if len(parsed.fileContents) > 0 {
+		var sb strings.Builder
+		for i, content := range parsed.fileContents {
+			sb.WriteString(fmt.Sprintf("--- file: %s ---\n%s\n---\n\n", parsed.fileNames[i], content))
+		}
+		sb.WriteString(displayPrompt)
+		llmPrompt = sb.String()
+	}
+
+	// Append user message (display version, without file contents).
 	m.askxMsgs = append(m.askxMsgs, chat.Message{
 		Role:    chat.RoleUser,
-		Content: prompt,
+		Content: displayPrompt,
 		Time:    time.Now(),
 	})
 	m.saveAskXHistory()
@@ -173,18 +284,21 @@ func (m *Model) cmdAskX(prompt string) tea.Cmd {
 	m.askxScrollToBottom()
 
 	// Fire the streaming LLM call.
-	return m.sendAskXQuery(prompt)
+	return m.sendAskXQuery(llmPrompt, parsed.profileOverride)
 }
 
 // ── Streaming ───────────────────────────────────────────────────────────────
 
 // sendAskXQuery sends a single-shot query to the LLM with streaming.
-func (m *Model) sendAskXQuery(prompt string) tea.Cmd {
+// profileOverride, if non-empty, takes precedence over config.
+func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 	cfg := m.cfg
-	send := m.programSend
 
 	// Resolve profile.
-	profileName := cfg.AskX.Profile
+	profileName := profileOverride
+	if profileName == "" {
+		profileName = cfg.AskX.Profile
+	}
 	if profileName == "" {
 		profileName = "haiku"
 	}
@@ -193,6 +307,7 @@ func (m *Model) sendAskXQuery(prompt string) tea.Cmd {
 		m.setStatusError(fmt.Sprintf("askX: profile %q not found", profileName))
 		return nil
 	}
+	m.askxResolvedProfile = profileName
 
 	systemPrompt := cfg.AskX.SystemPrompt
 	if systemPrompt == "" {
@@ -205,6 +320,8 @@ func (m *Model) sendAskXQuery(prompt string) tea.Cmd {
 	m.askxCancelStream = cancel
 	m.askxStreaming = true
 	m.askxStreamBuf = ""
+	shared := &streamBuf{}
+	m.askxSharedBuf = shared
 
 	maxTokens := cfg.AskX.MaxOutputTokens
 
@@ -225,7 +342,7 @@ func (m *Model) sendAskXQuery(prompt string) tea.Cmd {
 		}
 
 		fullText, _, err := prov.ChatStream(ctx, systemPrompt, msgs, func(delta string) error {
-			(*send)(askxStreamDeltaMsg(delta))
+			shared.Append(delta)
 			return nil
 		})
 		if err != nil {
@@ -235,16 +352,10 @@ func (m *Model) sendAskXQuery(prompt string) tea.Cmd {
 	}
 }
 
-// handleAskXStreamDelta processes a streaming token fragment.
-func (m *Model) handleAskXStreamDelta(delta string) {
-	m.askxStreamBuf += delta
-	m.rebuildAskXLines()
-	m.askxScrollToBottom()
-}
-
 // handleAskXStreamDone processes the completion of an askX streaming response.
 func (m *Model) handleAskXStreamDone(msg askxStreamDoneMsg) {
 	m.askxStreaming = false
+	m.askxSharedBuf = nil
 	m.askxCancelStream = nil
 
 	if msg.err != "" {
@@ -264,7 +375,7 @@ func (m *Model) handleAskXStreamDone(msg askxStreamDoneMsg) {
 			Time:    time.Now(),
 		})
 		m.saveAskXHistory()
-		m.statusMsg = "✓ askX done"
+		m.statusMsg = "✓ askX done · " + m.askxResolvedProfile
 	}
 
 	m.askxStreamBuf = ""
@@ -340,10 +451,14 @@ func (m *Model) rebuildAskXLines() {
 		}
 	}
 
-	// Streaming buffer: render in-progress markdown.
-	if m.askxStreaming && m.askxStreamBuf != "" {
-		streamLines := m.appendMarkdown(m.askxStreamBuf, w)
-		lines = append(lines, streamLines...)
+	// Streaming buffer: render in-progress markdown or waiting indicator.
+	if m.askxStreaming {
+		if m.askxStreamBuf != "" {
+			streamLines := m.appendMarkdown(m.askxStreamBuf, w)
+			lines = append(lines, streamLines...)
+		} else {
+			lines = append(lines, chatLine{chatLineAssistant, "…"})
+		}
 	}
 
 	// Collapse consecutive blank lines.
@@ -803,6 +918,9 @@ func (m Model) renderAskXPane(height, width int) []string {
 	ws := m.askxWorkspace()
 	if ws != "" {
 		label = " AskX [" + ws + "] "
+	}
+	if m.askxResolvedProfile != "" {
+		label += "· " + m.askxResolvedProfile + " "
 	}
 	if m.askxStreaming {
 		label += "● "

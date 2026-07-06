@@ -58,11 +58,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursorVisible = false
 			}
 		}
-		// During streaming, rebuild chat lines on each tick to animate wave + show new content.
+		// During streaming, pull from shared buffer and rebuild lines on each tick.
 		if m.chatMode && m.chatStreaming {
+			if m.chatSharedBuf != nil {
+				m.chatStreamBuf = m.chatSharedBuf.Get()
+			}
 			m.rebuildChatLines(m.chatBuildWidth())
 			chatViewH := m.height - 6 - m.completionCount() - 2
 			m.chatAutoScrollToBottom(chatViewH)
+		}
+		if m.askxStreaming && m.askxSharedBuf != nil {
+			m.askxStreamBuf = m.askxSharedBuf.Get()
+			m.rebuildAskXLines()
+			m.askxScrollToBottom()
 		}
 		cmds = append(cmds, spinnerTick())
 
@@ -365,6 +373,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatAutoScroll = true
 			m.chatStreaming = false
 			m.chatStreamBuf = ""
+			m.chatSharedBuf = nil
 			m.chatLastUsage = nil
 			m.chatLastElapsed = 0
 			if msg.focus {
@@ -401,15 +410,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case chatStreamDeltaMsg:
-		m.chatStreamBuf += string(msg)
-		m.rebuildChatLines(m.chatBuildWidth())
-		chatViewH := m.height - 6 - m.completionCount() - 2 // -2 for chat header+sep
-		m.chatAutoScrollToBottom(chatViewH)
-
 	case chatStreamDoneMsg:
 		m.chatStreaming = false
 		m.chatStreamBuf = ""
+		m.chatSharedBuf = nil
 		if m.chatCancelStream != nil {
 			m.chatCancelStream = nil
 		}
@@ -433,9 +437,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		chatViewH := m.height - 6 - m.completionCount() - 2
 		m.chatAutoScrollToBottom(chatViewH)
-
-	case askxStreamDeltaMsg:
-		m.handleAskXStreamDelta(string(msg))
 
 	case askxStreamDoneMsg:
 		m.handleAskXStreamDone(msg)

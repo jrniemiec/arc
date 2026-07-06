@@ -1595,11 +1595,12 @@ func (m Model) renderCompletionLines() []string {
 // Priority: selectionMode > chatMode > pendingConfirmMsg > navFilter > statusMsg > empty.
 func (m Model) renderStatusLine() string {
 	t := ActiveTheme
+	if m.askxStreaming && !m.selectionMode {
+		label := "askX streaming · " + m.askxResolvedProfile
+		return renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
+	}
 	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
 		return m.renderChatStatusLine()
-	}
-	if m.askxStreaming && !m.selectionMode {
-		return renderWaveIndicator(m.spinnerFrame, "askX streaming", t.StreamingText, t.Dimmed)
 	}
 	if m.ttsPlayer.Playing() && m.contentTTSText != "" && !m.selectionMode {
 		rate := m.cfg.TTSRate
