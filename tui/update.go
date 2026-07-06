@@ -625,10 +625,6 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
-	// When scratch pane is focused, route scroll/view/edit keys to scratch.
-	if m.scratchOpen && m.scratchFocused {
-		return m.handleScratchKey(msg)
-	}
 	switch {
 	case key.Matches(msg, keys.ContentTabPrev):
 		return m.navLeft()
@@ -982,9 +978,6 @@ func (m *Model) navSelect() tea.Cmd {
 func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 	if m.chatMode && sub != navSubTabWorkspaces {
 		m.exitChatMode()
-	}
-	if sub != navSubTabWorkspaces && m.scratchOpen {
-		m.closeScratch()
 	}
 	m.navSubTab = sub
 	m.navRowCursor = 0
@@ -1341,6 +1334,10 @@ func (m *Model) openEditorInTerminal(editor, filePath, label string) {
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
+	// When scratch pane is focused, route scroll/view/edit keys to scratch.
+	if m.scratchOpen && m.scratchFocused {
+		return m.handleScratchKey(msg)
+	}
 	if m.chatMode {
 		return m.handleChatContentKey(msg)
 	}
@@ -2281,9 +2278,14 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 	}
 	cmd := strings.ToLower(parts[0])
+	// Preserve original formatting (newlines, whitespace) in arg
+	// by stripping the command prefix instead of re-joining Fields.
 	arg := ""
-	if len(parts) > 1 {
-		arg = strings.Join(parts[1:], " ")
+	if idx := strings.Index(val, parts[0]); idx >= 0 {
+		rest := val[idx+len(parts[0]):]
+		if trimmed := strings.TrimLeft(rest, " "); trimmed != "" {
+			arg = trimmed
+		}
 	}
 
 	// ── Global commands (available in any context) ──────────────────────────
@@ -3659,8 +3661,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 
-		// Scratch pane wheel (bottom of nav pane).
-		if msg.X < m.dividerCol() && m.scratchOpen {
+		// Scratch pane wheel (bottom of content pane).
+		if msg.X > m.dividerCol() && m.scratchOpen {
 			mainH := m.height - 6 - m.completionCount()
 			scratchH := mainH / 3
 			if scratchH < 3 {
@@ -3797,19 +3799,6 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click in nav pane (left of divider) — focus nav, update cursor row.
 			if msg.X < divCol {
 				m.focus = paneNav
-				// Check if click is in the scratch region.
-				if m.scratchOpen {
-					mainH := m.height - 6 - m.completionCount()
-					scratchH := mainH / 3
-					if scratchH < 3 {
-						scratchH = 3
-					}
-					scratchStartRow := topBarHeight + (mainH - scratchH)
-					if msg.Y >= scratchStartRow {
-						m.scratchFocused = true
-						return nil
-					}
-				}
 				m.scratchFocused = false
 				if cmd := m.clickNavRow(msg.Y); cmd != nil {
 					return cmd
@@ -3818,6 +3807,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			// Click in content pane.
 			m.focus = paneContent
+			// Check if click is in the scratch region.
+			if m.scratchOpen {
+				mainH := m.height - 6 - m.completionCount()
+				scratchH := mainH / 3
+				if scratchH < 3 {
+					scratchH = 3
+				}
+				scratchStartRow := topBarHeight + (mainH - scratchH)
+				if msg.Y >= scratchStartRow {
+					m.scratchFocused = true
+					return nil
+				}
+			}
+			m.scratchFocused = false
 			if m.chatMode {
 				m.rebuildChatLines(m.chatBuildWidth())
 				m.chatBoxCursor = 0
@@ -3846,6 +3849,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 // clickNavRow moves navCursor to the item at the given terminal row (0-based Y).
 // Library: content starts at topBarHeight + 3 (top bar + sub-tab bar + blank).
 // Other tabs: topBarHeight + 2 (top bar + label).
+// In Library tabs, row 0 is the scratch row.
 func (m *Model) clickNavRow(y int) tea.Cmd {
 	contentStartRow := topBarHeight + 2
 	if m.activeTab == tabLibrary {
@@ -3892,15 +3896,15 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 	return nil
 }
 
-// navPaneHeight returns usable item lines in the nav pane.
+// navPaneHeight returns usable item lines in the nav pane (excluding scratch row when open).
 func (m *Model) navPaneHeight() int {
 	// fixed: top bar (2) + split sep (1) + cmd (1) + status sep (1) + status bar (1) = 6
 	// plus completions expanding upward
-	// Library tab: 2 header rows (sub-tab bar + blank)
+	// Library tab: 2 header rows (sub-tab bar + blank) + optional scratch row
 	// Other tabs: 1 header row (label)
 	overhead := 1
 	if m.activeTab == tabLibrary {
-		overhead = 2
+		overhead = 2 // sub-tab bar + blank
 	}
 	h := m.height - 6 - m.completionCount() - overhead
 	if h < 1 {
@@ -3948,6 +3952,17 @@ func runShellCmd(cmd string) tea.Cmd {
 // Layout: header (4 lines) + sep + tab strip + sep = 7 fixed lines in content pane.
 func (m *Model) contentViewHeight() int {
 	mainH := m.height - 6 - m.completionCount()
+	// Subtract scratch split if open.
+	if m.scratchOpen {
+		scratchH := mainH / 3
+		if scratchH < 3 {
+			scratchH = 3
+		}
+		mainH -= scratchH
+		if mainH < 3 {
+			mainH = 3
+		}
+	}
 	h := mainH - contentHeaderLines(m.selectedNavItem())
 	if h < 1 {
 		h = 1
@@ -3971,10 +3986,13 @@ func (m *Model) scratchWorkspace() string {
 	return ""
 }
 
-// toggleScratch toggles the scratch pane. When opening, pre-fills input with "/scratch ".
+// toggleScratch toggles the scratch pane. When opening, pre-fills input with "/scratch "
+// and selects the scratch row in the nav pane.
 func (m *Model) toggleScratch() {
 	if m.scratchOpen {
 		m.scratchOpen = false
+		m.scratchFocused = false
+		m.clearScratchInput()
 		return
 	}
 	m.scratchOpen = true
@@ -3987,43 +4005,6 @@ func (m *Model) toggleScratch() {
 	m.cmdCompleteIdx = -1
 	m.paramItems = nil
 	m.paramIdx = -1
-
-	// Auto-select the scratch row in the workspace tree.
-	m.selectScratchRow()
-}
-
-// selectScratchRow navigates the workspace tree cursor to the scratch row
-// for the current workspace, expanding it if necessary.
-func (m *Model) selectScratchRow() {
-	ws := m.scratchWorkspace()
-	if ws == "" {
-		return
-	}
-	// Find the workspace index.
-	wsIdx := -1
-	for i, item := range m.workspaceItems {
-		if item.name == ws {
-			wsIdx = i
-			break
-		}
-	}
-	if wsIdx < 0 {
-		return
-	}
-	// Ensure workspace is expanded so the scratch row is visible.
-	if !m.workspaceItems[wsIdx].expanded {
-		m.workspaceItems[wsIdx].expanded = true
-		m.wsRows = m.buildWsRows()
-	}
-	// Find the scratch row for this workspace.
-	for i, row := range m.wsRows {
-		if row.kind == wsRowScratch && row.wsIdx == wsIdx {
-			m.wsCursor = i
-			m.navSubTab = navSubTabWorkspaces
-			m.clampWsScroll()
-			return
-		}
-	}
 }
 
 // cmdScratch handles /scratch [msg]. Empty msg toggles pane; non-empty appends.
@@ -4054,34 +4035,118 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 	return nil
 }
 
-// reloadScratchLines reads the scratch file and caches lines for rendering.
+// reloadScratchLines reads the scratch file and caches lines + blocks for rendering.
 func (m *Model) reloadScratchLines() {
 	ws := m.scratchWorkspace()
 	content, err := storefs.ReadScratch(m.cfg.DataRoot, ws)
 	if err != nil {
 		m.scratchLines = []string{"(error reading scratch: " + err.Error() + ")"}
+		m.scratchBlocks = nil
 		return
 	}
 	if content == "" {
 		m.scratchLines = []string{"(empty scratch — use /scratch <msg> to add notes)"}
+		m.scratchBlocks = nil
 		return
 	}
-	m.scratchLines = splitLines(content)
+	// Word-wrap lines to content pane width (scratch has no horizontal scroll).
+	w := m.width - m.navWidth() - 1
+	if w < 10 {
+		w = 10
+	}
+
+	rawLines := splitLines(content)
+	var wrapped []string
+	var blocks []scratchBlock
+
+	for _, raw := range rawLines {
+		startIdx := len(wrapped)
+		wlines := wordWrap(raw, w)
+		if len(wlines) == 0 {
+			wlines = []string{""}
+		}
+		wrapped = append(wrapped, wlines...)
+		endIdx := len(wrapped) - 1
+
+		isSep := strings.HasPrefix(raw, "----------")
+		isBullet := strings.HasPrefix(raw, "• ")
+
+		if isSep {
+			blocks = append(blocks, scratchBlock{
+				startLine: startIdx,
+				endLine:   endIdx,
+				text:      raw,
+				isSep:     true,
+			})
+		} else if isBullet {
+			blocks = append(blocks, scratchBlock{
+				startLine: startIdx,
+				endLine:   endIdx,
+				text:      strings.TrimPrefix(raw, "• "),
+			})
+		} else if raw == "" {
+			// blank lines — not a block, just spacing
+		} else {
+			// Legacy line without bullet — treat as a block.
+			blocks = append(blocks, scratchBlock{
+				startLine: startIdx,
+				endLine:   endIdx,
+				text:      raw,
+			})
+		}
+	}
+
+	m.scratchLines = wrapped
+	m.scratchBlocks = blocks
+
+	// Clamp block cursor.
+	if m.scratchBlockCursor >= len(blocks) {
+		m.scratchBlockCursor = len(blocks) - 1
+	}
+	if m.scratchBlockCursor < 0 {
+		m.scratchBlockCursor = 0
+	}
+	// Skip separator if cursor landed on one.
+	m.scratchBlockCursorSkipSep(1)
 }
 
-// scratchScrollToBottom scrolls the scratch pane to the bottom.
-func (m *Model) scratchScrollToBottom() {
-	mainH := m.height - 6 - m.completionCount()
-	scratchH := mainH / 3
-	if scratchH < 3 {
-		scratchH = 3
+// scratchBlockCursorSkipSep advances the block cursor past date separators.
+// dir should be +1 or -1 to indicate search direction.
+func (m *Model) scratchBlockCursorSkipSep(dir int) {
+	for m.scratchBlockCursor >= 0 && m.scratchBlockCursor < len(m.scratchBlocks) {
+		if !m.scratchBlocks[m.scratchBlockCursor].isSep {
+			return
+		}
+		m.scratchBlockCursor += dir
 	}
-	viewH := scratchH - 1 // minus header line
-	maxScroll := len(m.scratchLines) - viewH
+	// If we ran off the end, search the other direction.
+	if dir > 0 {
+		m.scratchBlockCursor = len(m.scratchBlocks) - 1
+	} else {
+		m.scratchBlockCursor = 0
+	}
+	for m.scratchBlockCursor >= 0 && m.scratchBlockCursor < len(m.scratchBlocks) {
+		if !m.scratchBlocks[m.scratchBlockCursor].isSep {
+			return
+		}
+		m.scratchBlockCursor -= dir
+	}
+}
+
+// scratchScrollToBottom scrolls the scratch pane to the bottom and moves cursor to last block.
+func (m *Model) scratchScrollToBottom() {
+	viewH := m.scratchViewH()
+	total := m.scratchTotalVLines()
+	maxScroll := total - viewH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
 	m.scratchScroll = maxScroll
+	// Move block cursor to last selectable block.
+	if len(m.scratchBlocks) > 0 {
+		m.scratchBlockCursor = len(m.scratchBlocks) - 1
+		m.scratchBlockCursorSkipSep(-1)
+	}
 }
 
 // closeScratch closes the scratch pane.
@@ -4090,6 +4155,18 @@ func (m *Model) closeScratch() {
 	m.scratchFocused = false
 	m.scratchScroll = 0
 	m.scratchLines = nil
+	m.scratchBlocks = nil
+	m.scratchBlockCursor = 0
+	m.scratchCollapsed = nil
+	m.clearScratchInput()
+}
+
+// clearScratchInput clears the command input if it starts with "/scratch".
+func (m *Model) clearScratchInput() {
+	if strings.HasPrefix(m.inputValue, "/scratch") {
+		m.inputValue = ""
+		m.inputCursor = 0
+	}
 }
 
 // scratchFilePath returns the file path for the current scratch file.
@@ -4097,102 +4174,73 @@ func (m *Model) scratchFilePath() string {
 	return storefs.ScratchPath(m.cfg.DataRoot, m.scratchWorkspace())
 }
 
-// handleScratchKey handles keys when the scratch pane is focused.
+// handleScratchKey handles keys when the scratch pane is focused (in content pane).
+// j/k navigate between blocks; s speaks, v opens overlay, d deletes the selected block.
 func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
-	mainH := m.height - 6 - m.completionCount()
-	scratchH := mainH / 3
-	if scratchH < 3 {
-		scratchH = 3
-	}
-	viewH := scratchH - 1 // minus header
+	numBlocks := m.scratchSelectableCount()
+	viewH := m.scratchViewH()
 
 	switch {
+	case msg.Type == tea.KeyRunes:
+		switch msg.String() {
+		case "s":
+			return m.cmdScratchTTS()
+		case "v":
+			if len(m.scratchBlocks) > 0 {
+				m.cmdScratchCollapseBlock(m.scratchBlockCursor)
+			}
+		case "x":
+			return m.cmdScratchDeleteBlock()
+		case "e":
+			// Edit scratch file in $EDITOR.
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				m.setStatusError("$EDITOR is not set")
+				return nil
+			}
+			path := m.scratchFilePath()
+			ws := m.scratchWorkspace()
+			label := "scratch"
+			if ws != "" {
+				label = ws + "/scratch"
+			}
+			m.openEditorInTerminal(editor, path, label)
+		case "[":
+			return m.cmdScratchTTSAdjustRate(-20)
+		case "]":
+			return m.cmdScratchTTSAdjustRate(+20)
+		}
+		return nil
 	case key.Matches(msg, keys.NavUp):
-		if m.scratchScroll > 0 {
-			m.scratchScroll--
-		}
+		m.scratchBlockPrev()
+		m.scrollToScratchBlock(viewH)
+		return nil
 	case key.Matches(msg, keys.NavDown):
-		maxScroll := len(m.scratchLines) - viewH
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if m.scratchScroll < maxScroll {
-			m.scratchScroll++
-		}
+		m.scratchBlockNext()
+		m.scrollToScratchBlock(viewH)
+		return nil
 	case key.Matches(msg, keys.PageUp):
-		m.scratchScroll -= viewH
-		if m.scratchScroll < 0 {
-			m.scratchScroll = 0
+		for i := 0; i < viewH && m.scratchBlockCursor > 0; i++ {
+			m.scratchBlockPrev()
 		}
+		m.scrollToScratchBlock(viewH)
 	case key.Matches(msg, keys.PageDown):
-		maxScroll := len(m.scratchLines) - viewH
-		if maxScroll < 0 {
-			maxScroll = 0
+		for i := 0; i < viewH && m.scratchBlockCursor < len(m.scratchBlocks)-1; i++ {
+			m.scratchBlockNext()
 		}
-		m.scratchScroll += viewH
-		if m.scratchScroll > maxScroll {
-			m.scratchScroll = maxScroll
-		}
+		m.scrollToScratchBlock(viewH)
 	case key.Matches(msg, keys.Home):
-		m.scratchScroll = 0
+		m.scratchBlockCursor = 0
+		m.scratchBlockCursorSkipSep(1)
+		m.scrollToScratchBlock(viewH)
 	case key.Matches(msg, keys.End):
-		maxScroll := len(m.scratchLines) - viewH
-		if maxScroll < 0 {
-			maxScroll = 0
+		if numBlocks > 0 {
+			m.scratchBlockCursor = len(m.scratchBlocks) - 1
+			m.scratchBlockCursorSkipSep(-1)
 		}
-		m.scratchScroll = maxScroll
-	case key.Matches(msg, keys.View):
-		// View scratch file in external terminal.
-		path := m.scratchFilePath()
-		ws := m.scratchWorkspace()
-		label := "scratch"
-		if ws != "" {
-			label = ws + "/scratch"
-		}
-		pid := os.Getpid()
-		scriptPath := fmt.Sprintf("%s/arc-view-%d-scratch.sh", os.TempDir(), pid)
-		script := fmt.Sprintf(
-			"#!/bin/bash\ntrap 'rm -f %q' EXIT\n"+
-				"(while kill -0 %d 2>/dev/null; do sleep 1; done; kill $$ 2>/dev/null) &\n"+
-				"cat %q\necho ''\nread -n1 -s -r -p '(press any key to close)'\n",
-			scriptPath, pid, path,
-		)
-		if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-			m.setStatusError(fmt.Sprintf("view: could not write script: %v", err))
-			return nil
-		}
-		var appleScript string
-		switch ActiveTerminal {
-		case TermITerm2:
-			appleScript = fmt.Sprintf(
-				`tell application "iTerm2" to create window with default profile command %q`,
-				scriptPath,
-			)
-		default:
-			appleScript = fmt.Sprintf(
-				`tell application "Terminal" to do script %q`,
-				scriptPath,
-			)
-		}
-		cmd := exec.Command("osascript", "-e", appleScript)
-		cmd.Start()
-		m.setStatusLines([]string{fmt.Sprintf("opened %s in terminal viewer", label)})
-	case msg.String() == "e":
-		// Edit scratch file in $EDITOR.
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			m.setStatusError("$EDITOR is not set")
-			return nil
-		}
-		path := m.scratchFilePath()
-		ws := m.scratchWorkspace()
-		label := "scratch"
-		if ws != "" {
-			label = ws + "/scratch"
-		}
-		m.openEditorInTerminal(editor, path, label)
+		m.scrollToScratchBlock(viewH)
 	case key.Matches(msg, keys.Back):
-		// Esc unfocuses scratch, returns to nav tree.
+		// Esc unfocuses scratch, returns to content pane.
 		m.scratchFocused = false
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
@@ -4201,6 +4249,308 @@ func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
 		m.inputCursor = len([]rune(m.inputValue))
 	}
 	return nil
+}
+
+// scratchSelectableCount returns the number of non-separator scratch blocks.
+func (m *Model) scratchSelectableCount() int {
+	n := 0
+	for _, b := range m.scratchBlocks {
+		if !b.isSep {
+			n++
+		}
+	}
+	return n
+}
+
+// scratchViewH returns the viewable height of the scratch pane content (excluding header).
+func (m *Model) scratchViewH() int {
+	mainH := m.height - 6 - m.completionCount()
+	scratchH := mainH / 3
+	if scratchH < 3 {
+		scratchH = 3
+	}
+	return scratchH - 1
+}
+
+// scratchBlockPrev moves the block cursor to the previous selectable block.
+func (m *Model) scratchBlockPrev() {
+	c := m.scratchBlockCursor - 1
+	for c >= 0 {
+		if !m.scratchBlocks[c].isSep {
+			m.scratchBlockCursor = c
+			return
+		}
+		c--
+	}
+}
+
+// scratchBlockNext moves the block cursor to the next selectable block.
+func (m *Model) scratchBlockNext() {
+	c := m.scratchBlockCursor + 1
+	for c < len(m.scratchBlocks) {
+		if !m.scratchBlocks[c].isSep {
+			m.scratchBlockCursor = c
+			return
+		}
+		c++
+	}
+}
+
+
+// cmdScratchCollapseBlock toggles the collapsed state of block at blockIdx.
+func (m *Model) cmdScratchCollapseBlock(blockIdx int) {
+	if m.scratchCollapsed == nil {
+		m.scratchCollapsed = make(map[int]bool)
+	}
+	m.scratchCollapsed[blockIdx] = !m.scratchCollapsed[blockIdx]
+}
+
+// buildScratchVLines builds the virtual display list for the scratch boxed view.
+// Only the selected block gets a border; all others render as plain text.
+// Returns nil when not in boxed mode (scratch not focused).
+func (m Model) buildScratchVLines() []scratchVLine {
+	if !m.scratchFocused || !m.scratchOpen || m.focus != paneContent {
+		return nil
+	}
+	if len(m.scratchBlocks) == 0 {
+		return nil
+	}
+
+	var vlines []scratchVLine
+	for i, blk := range m.scratchBlocks {
+		selected := i == m.scratchBlockCursor && !m.selectionMode
+		collapsed := m.scratchCollapsed != nil && m.scratchCollapsed[i]
+
+		if blk.isSep {
+			// Date separator: render as plain line(s), never boxed.
+			for li := blk.startLine; li <= blk.endLine; li++ {
+				vlines = append(vlines, scratchVLine{isSep: true, lineIdx: li, blockIdx: i})
+			}
+			continue
+		}
+
+		totalLines := blk.endLine - blk.startLine + 1
+
+		if selected {
+			vlines = append(vlines, scratchVLine{isBoxTop: true, lineIdx: -1, blockIdx: i, isSelected: true})
+
+			// Header with hints.
+			expandHint := "v expand"
+			if collapsed {
+				expandHint = "v collapse"
+			}
+			hintsStr := expandHint + " · s speak · e edit · x delete"
+			vlines = append(vlines, scratchVLine{isHeader: true, metaText: hintsStr, lineIdx: -1, blockIdx: i, isSelected: true})
+
+			if collapsed {
+				limit := blk.startLine + 1
+				if limit > blk.endLine+1 {
+					limit = blk.endLine + 1
+				}
+				for li := blk.startLine; li < limit; li++ {
+					vlines = append(vlines, scratchVLine{lineIdx: li, blockIdx: i, isSelected: true})
+				}
+				if totalLines > 1 {
+					vlines = append(vlines, scratchVLine{
+						isEllipsis: true,
+						metaText:   fmt.Sprintf("... (%d more lines)", totalLines-1),
+						lineIdx:    -1, blockIdx: i, isSelected: true,
+					})
+				}
+			} else {
+				for li := blk.startLine; li <= blk.endLine; li++ {
+					vlines = append(vlines, scratchVLine{lineIdx: li, blockIdx: i, isSelected: true})
+				}
+			}
+
+			vlines = append(vlines, scratchVLine{isBoxBottom: true, lineIdx: -1, blockIdx: i, isSelected: true})
+		} else {
+			if collapsed {
+				limit := blk.startLine + 1
+				if limit > blk.endLine+1 {
+					limit = blk.endLine + 1
+				}
+				for li := blk.startLine; li < limit; li++ {
+					vlines = append(vlines, scratchVLine{lineIdx: li, blockIdx: i})
+				}
+				if totalLines > 1 {
+					vlines = append(vlines, scratchVLine{
+						isEllipsis: true,
+						metaText:   fmt.Sprintf("... (%d more lines)", totalLines-1),
+						lineIdx:    -1, blockIdx: i,
+					})
+				}
+			} else {
+				for li := blk.startLine; li <= blk.endLine; li++ {
+					vlines = append(vlines, scratchVLine{lineIdx: li, blockIdx: i})
+				}
+			}
+		}
+	}
+	return vlines
+}
+
+// scratchTotalVLines returns the total number of virtual lines for the scratch pane.
+func (m *Model) scratchTotalVLines() int {
+	if vlines := m.buildScratchVLines(); vlines != nil {
+		return len(vlines)
+	}
+	return len(m.scratchLines)
+}
+
+// scrollToScratchBlock adjusts scratchScroll so that the selected block is visible
+// using the virtual line list.
+func (m *Model) scrollToScratchBlock(viewH int) {
+	vlines := m.buildScratchVLines()
+	if len(vlines) == 0 {
+		return
+	}
+	first, last := -1, -1
+	for i, vl := range vlines {
+		if vl.blockIdx == m.scratchBlockCursor {
+			if first == -1 {
+				first = i
+			}
+			last = i
+		}
+	}
+	if first == -1 {
+		return
+	}
+	if first >= m.scratchScroll && last < m.scratchScroll+viewH {
+		return
+	}
+	m.scratchScroll = first
+	maxScroll := len(vlines) - viewH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.scratchScroll > maxScroll {
+		m.scratchScroll = maxScroll
+	}
+}
+
+// cmdScratchDeleteBlock deletes the selected block from the scratch file.
+func (m *Model) cmdScratchDeleteBlock() tea.Cmd {
+	if m.scratchBlockCursor < 0 || m.scratchBlockCursor >= len(m.scratchBlocks) {
+		return nil
+	}
+	blk := m.scratchBlocks[m.scratchBlockCursor]
+	if blk.isSep {
+		return nil
+	}
+
+	// Read raw file, find and remove the block line.
+	ws := m.scratchWorkspace()
+	content, err := storefs.ReadScratch(m.cfg.DataRoot, ws)
+	if err != nil {
+		m.setStatusError("delete: " + err.Error())
+		return nil
+	}
+	rawLines := splitLines(content)
+	// Match either bulleted or legacy (raw) form.
+	bulletTarget := "• " + blk.text
+	var newLines []string
+	found := false
+	for _, l := range rawLines {
+		if !found && (l == bulletTarget || l == blk.text) {
+			found = true
+			continue // skip this line
+		}
+		newLines = append(newLines, l)
+	}
+	if !found {
+		m.setStatusError("block not found in file")
+		return nil
+	}
+
+	// Write back.
+	path := m.scratchFilePath()
+	newContent := strings.Join(newLines, "\n")
+	if len(newLines) > 0 {
+		newContent += "\n"
+	}
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		m.setStatusError("delete: " + err.Error())
+		return nil
+	}
+
+	// Shift collapsed keys.
+	if m.scratchCollapsed != nil {
+		newCollapsed := make(map[int]bool)
+		for k, v := range m.scratchCollapsed {
+			if k < m.scratchBlockCursor {
+				newCollapsed[k] = v
+			} else if k > m.scratchBlockCursor {
+				newCollapsed[k-1] = v
+			}
+		}
+		m.scratchCollapsed = newCollapsed
+	}
+
+	m.reloadScratchLines()
+	m.statusMsg = "✓ deleted block"
+	return nil
+}
+
+// cmdScratchTTS speaks the selected scratch block via TTS.
+func (m *Model) cmdScratchTTS() tea.Cmd {
+	if m.ttsPlayer.Playing() {
+		m.stopTTS()
+		m.statusMsg = ""
+		return nil
+	}
+
+	if m.scratchBlockCursor < 0 || m.scratchBlockCursor >= len(m.scratchBlocks) {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+	blk := m.scratchBlocks[m.scratchBlockCursor]
+	if blk.isSep || blk.text == "" {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	text := tts.Strip(blk.text)
+	m.contentTTSText = blk.text
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// cmdScratchTTSAdjustRate adjusts TTS rate while speaking a scratch block.
+func (m *Model) cmdScratchTTSAdjustRate(delta int) tea.Cmd {
+	if !m.ttsPlayer.Playing() || m.contentTTSText == "" {
+		return nil
+	}
+	newRate := m.cfg.TTSRate + delta
+	if m.cfg.TTSRate == 0 {
+		newRate = 200 + delta
+	}
+	if newRate < 80 {
+		newRate = 80
+	}
+	if newRate > 500 {
+		newRate = 500
+	}
+	m.cfg.TTSRate = newRate
+	m.ttsPlayer.SetRate(newRate)
+
+	text := tts.Strip(m.contentTTSText)
+	m.ttsPlayer.Stop()
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
 }
 
 // ── Input correction (Ctrl+G) ────────────────────────────────────────────────

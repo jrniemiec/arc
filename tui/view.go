@@ -368,20 +368,6 @@ func (m Model) renderMainArea(height int) string {
 func (m Model) renderNavPane(height int) []string {
 	t := ActiveTheme
 
-	// Calculate scratch split if open.
-	scratchH := 0
-	navH := height
-	if m.scratchOpen {
-		scratchH = height / 3
-		if scratchH < 3 {
-			scratchH = 3
-		}
-		navH = height - scratchH
-		if navH < 3 {
-			navH = 3
-		}
-	}
-
 	var lines []string
 
 	if m.activeTab == tabLibrary {
@@ -390,11 +376,11 @@ func (m Model) renderNavPane(height int) []string {
 		lines = append(lines, "")
 		switch m.navSubTab {
 		case navSubTabArticles:
-			lines = append(lines, m.renderNavLibrary(navH-2)...)
+			lines = append(lines, m.renderNavLibrary(height-2)...)
 		case navSubTabCollections:
-			lines = append(lines, m.renderNavCollections(navH-2)...)
+			lines = append(lines, m.renderNavCollections(height-2)...)
 		case navSubTabWorkspaces:
-			lines = append(lines, m.renderNavWorkspaces(navH-2)...)
+			lines = append(lines, m.renderNavWorkspaces(height-2)...)
 		}
 	} else {
 		// Non-Library tabs keep a single label header + content.
@@ -420,17 +406,6 @@ func (m Model) renderNavPane(height int) []string {
 		}
 	}
 
-	// Pad nav portion to navH.
-	for len(lines) < navH {
-		lines = append(lines, "")
-	}
-	lines = lines[:navH]
-
-	// Append scratch pane if open.
-	if m.scratchOpen && scratchH > 0 {
-		lines = append(lines, m.renderScratchPane(scratchH)...)
-	}
-
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
@@ -438,9 +413,8 @@ func (m Model) renderNavPane(height int) []string {
 }
 
 // renderScratchPane renders the scratch split pane content.
-func (m Model) renderScratchPane(height int) []string {
+func (m Model) renderScratchPane(height, width int) []string {
 	t := ActiveTheme
-	w := m.navWidth()
 	var lines []string
 
 	// Header separator with label.
@@ -449,36 +423,115 @@ func (m Model) renderScratchPane(height int) []string {
 	if ws != "" {
 		label = " Scratch [" + ws + "] "
 	}
-	sepLen := w - len([]rune(label))
+	sepLen := width - len([]rune(label))
 	if sepLen < 0 {
 		sepLen = 0
 	}
 	leftSep := sepLen / 2
 	rightSep := sepLen - leftSep
 	headerColor := t.Dimmed
-	if m.scratchFocused && m.focus == paneNav {
+	if m.scratchFocused && m.focus == paneContent {
 		headerColor = t.Accent
 	}
 	header := fg(headerColor, strings.Repeat("─", leftSep)+label+strings.Repeat("─", rightSep))
 	lines = append(lines, header)
 
-	// Content lines.
 	viewH := height - 1 // minus header
 	if viewH < 1 {
 		viewH = 1
 	}
+
+	// Boxed mode: when scratch is focused, render with box borders around selected block.
+	if vlines := m.buildScratchVLines(); vlines != nil {
+		innerW := width - 4
+		if innerW < 4 {
+			innerW = 4
+		}
+		topRule := fg(t.BoxBorder, "╭"+strings.Repeat("─", width-2)+"╮")
+		botRule := fg(t.BoxBorder, "╰"+strings.Repeat("─", width-2)+"╯")
+		bL := fg(t.BoxBorder, "│ ")
+		bR := fg(t.BoxBorder, " │")
+
+		total := len(vlines)
+		start := m.scratchScroll
+		if start > total-viewH {
+			start = total - viewH
+		}
+		if start < 0 {
+			start = 0
+		}
+		end := start + viewH
+		if end > total {
+			end = total
+		}
+
+		for _, vl := range vlines[start:end] {
+			switch {
+			case vl.isBoxTop:
+				lines = append(lines, topRule)
+			case vl.isBoxBottom:
+				lines = append(lines, botRule)
+			case vl.isSep:
+				// Date separator rendered in dimmed.
+				if vl.lineIdx >= 0 && vl.lineIdx < len(m.scratchLines) {
+					lines = append(lines, fg(t.Dimmed, m.scratchLines[vl.lineIdx]))
+				} else {
+					lines = append(lines, "")
+				}
+			case vl.isHeader:
+				// Header inside selected box: hints right-aligned.
+				hintsW := lipgloss.Width(vl.metaText)
+				pad := innerW - hintsW
+				if pad < 0 {
+					pad = 0
+				}
+				headerContent := strings.Repeat(" ", pad) + fg(t.ContentDimmed, vl.metaText)
+				lines = append(lines, bL+headerContent+bR)
+			case vl.isEllipsis:
+				if vl.isSelected {
+					text := fg(t.ContentDimmed, vl.metaText)
+					visW := lipgloss.Width(vl.metaText)
+					if visW < innerW {
+						text += strings.Repeat(" ", innerW-visW)
+					}
+					lines = append(lines, bL+text+bR)
+				} else {
+					lines = append(lines, fg(t.ContentDimmed, vl.metaText))
+				}
+			default:
+				// Content line.
+				if vl.lineIdx < 0 || vl.lineIdx >= len(m.scratchLines) {
+					lines = append(lines, "")
+					continue
+				}
+				text := m.scratchLines[vl.lineIdx]
+				if vl.isSelected {
+					visW := lipgloss.Width(text)
+					if visW < innerW {
+						text = text + strings.Repeat(" ", innerW-visW)
+					} else if visW > innerW {
+						text = truncate(text, innerW)
+					}
+					lines = append(lines, bL+fg(t.ContentText, text)+bR)
+				} else {
+					lines = append(lines, fg(t.NavDimmed, text))
+				}
+			}
+		}
+
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+
+	// Flat mode: plain scroll (scratch not focused).
 	end := m.scratchScroll + viewH
 	if end > len(m.scratchLines) {
 		end = len(m.scratchLines)
 	}
 	for i := m.scratchScroll; i < end; i++ {
-		line := m.scratchLines[i]
-		// Truncate to nav width.
-		runes := []rune(line)
-		if len(runes) > w {
-			line = string(runes[:w-1]) + "…"
-		}
-		lines = append(lines, fg(t.NavDimmed, line))
+		lines = append(lines, fg(t.NavDimmed, m.scratchLines[i]))
 	}
 
 	for len(lines) < height {
@@ -830,17 +883,49 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 
 // renderContentPane returns lines for the right content pane.
 func (m Model) renderContentPane(height, width int) []string {
+	// Calculate scratch split if open.
+	scratchH := 0
+	contentH := height
+	if m.scratchOpen {
+		scratchH = height / 3
+		if scratchH < 3 {
+			scratchH = 3
+		}
+		contentH = height - scratchH
+		if contentH < 3 {
+			contentH = 3
+		}
+	}
+
+	var lines []string
 	if m.chatMode {
-		return m.renderChatPane(height, width)
+		lines = m.renderChatPane(contentH, width)
+	} else {
+		switch m.activeTab {
+		case tabLibrary:
+			lines = m.renderContentLibrary(contentH, width)
+		case tabStats:
+			lines = m.renderContentStats(contentH, width)
+		default:
+			lines = m.renderContentPlaceholder(contentH, width)
+		}
 	}
-	switch m.activeTab {
-	case tabLibrary:
-		return m.renderContentLibrary(height, width)
-	case tabStats:
-		return m.renderContentStats(height, width)
-	default:
-		return m.renderContentPlaceholder(height, width)
+
+	// Pad content to contentH.
+	for len(lines) < contentH {
+		lines = append(lines, "")
 	}
+	lines = lines[:contentH]
+
+	// Append scratch pane if open.
+	if m.scratchOpen && scratchH > 0 {
+		lines = append(lines, m.renderScratchPane(scratchH, width)...)
+	}
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
 }
 
 // contentHeaderLines returns the number of lines above the scrollable content.

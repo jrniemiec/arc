@@ -25,6 +25,28 @@ type resourceTTSBlock struct {
 	cursorLine int
 }
 
+// scratchBlock is one navigable entry in the scratch pane.
+// startLine/endLine are indices into Model.scratchLines (inclusive).
+type scratchBlock struct {
+	startLine int    // first display line of this block
+	endLine   int    // last display line (inclusive)
+	text      string // raw block text (for TTS / deletion)
+	isSep     bool   // true for date separator headers (non-selectable)
+}
+
+// scratchVLine is one virtual display line in the scratch boxed view.
+type scratchVLine struct {
+	isBoxTop    bool
+	isBoxBottom bool
+	isSep       bool   // date separator line
+	isHeader    bool   // header line inside selected box (hints)
+	isEllipsis  bool   // collapsed indicator
+	metaText    string // header/ellipsis text
+	lineIdx     int    // index into scratchLines; -1 for non-content lines
+	blockIdx    int    // which logical block this line belongs to
+	isSelected  bool   // true when blockIdx == scratchBlockCursor
+}
+
 // tab identifies the active top-level tab.
 type tab int
 
@@ -342,12 +364,14 @@ type Model struct {
 	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
 
-	// Scratch pane (split at bottom of nav)
-	scratchOpen    bool     // true when scratch split is visible
-	scratchFocused bool     // true when scratch region has focus (within paneNav)
-	scratchScroll  int      // scroll offset into scratchLines
-	scratchLines   []string // cached content for rendering
-
+	// Scratch pane (split at bottom of content pane)
+	scratchOpen        bool           // true when scratch split is visible
+	scratchFocused     bool           // true when scratch region has focus (within paneContent)
+	scratchScroll      int            // scroll offset into scratchLines
+	scratchLines       []string       // cached content for rendering
+	scratchBlocks      []scratchBlock // parsed blocks for block navigation
+	scratchBlockCursor int            // selected block index
+	scratchCollapsed   map[int]bool   // set of collapsed block indices
 	// Resource overlay (active when focus == paneResource)
 	resourceLines    []string // file content split into lines
 	resourceName     string   // file name shown in top bar

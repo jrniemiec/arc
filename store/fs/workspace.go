@@ -151,7 +151,7 @@ func AppendScratch(dataRoot, workspace, msg string) error {
 			return err
 		}
 	}
-	_, err = fmt.Fprintf(f, "%s\n", msg)
+	_, err = fmt.Fprintf(f, "• %s\n", msg)
 	return err
 }
 
