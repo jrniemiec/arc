@@ -364,6 +364,7 @@ func (m *Model) handleAskXStreamDone(msg askxStreamDoneMsg) {
 			m.askxMsgs = append(m.askxMsgs, chat.Message{
 				Role:    chat.RoleAssistant,
 				Content: msg.fullText,
+				Profile: m.askxResolvedProfile,
 				Time:    time.Now(),
 			})
 			m.saveAskXHistory()
@@ -372,6 +373,7 @@ func (m *Model) handleAskXStreamDone(msg askxStreamDoneMsg) {
 		m.askxMsgs = append(m.askxMsgs, chat.Message{
 			Role:    chat.RoleAssistant,
 			Content: msg.fullText,
+			Profile: m.askxResolvedProfile,
 			Time:    time.Now(),
 		})
 		m.saveAskXHistory()
@@ -480,6 +482,7 @@ func (m *Model) rebuildAskXLines() {
 // askxBoxInfo holds per-box metadata derived from askX message history.
 type askxBoxInfo struct {
 	ts       string
+	profile  string
 	msgStart int // inclusive index into askxMsgs
 	msgEnd   int // exclusive index into askxMsgs
 }
@@ -499,6 +502,9 @@ func (m *Model) askxBoxInfos() []askxBoxInfo {
 		case chat.RoleAssistant:
 			if len(infos) > 0 {
 				infos[len(infos)-1].msgEnd = i + 1
+				if msg.Profile != "" && infos[len(infos)-1].profile == "" {
+					infos[len(infos)-1].profile = msg.Profile
+				}
 			}
 		}
 	}
@@ -842,11 +848,14 @@ func (m Model) buildAskXVLines() []chatVLine {
 		if selected {
 			vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1, boxIdx: e, isSelected: true})
 
-			// Header: timestamp + hints.
+			// Header: timestamp + profile + hints.
 			var leftParts []string
 			if e < len(infos) {
 				if infos[e].ts != "" {
 					leftParts = append(leftParts, infos[e].ts)
+				}
+				if infos[e].profile != "" {
+					leftParts = append(leftParts, infos[e].profile)
 				}
 			}
 			metaLeft := strings.Join(leftParts, "  ")
