@@ -89,7 +89,7 @@ func (m Model) renderSplitSep(width int, isTop bool) string {
 	t := ActiveTheme
 
 	// Shell mode: bottom separator (above input) goes bright red.
-	if !isTop && strings.HasPrefix(m.inputValue, "!") {
+	if !isTop && strings.HasPrefix(m.input.Value(), "!") {
 		return shellBorderColor + strings.Repeat("─", width) + "\033[0m"
 	}
 
@@ -223,9 +223,10 @@ func (m Model) View() string {
 		return m.renderResourceOverlay()
 	}
 
-	// Fixed rows: top bar (2) + split sep (1) + cmd (1) + status sep (1) + completions (N) + status bar (1) = 6+N
+	// Fixed rows: top bar (2) + split sep (1) + cmd (N) + status sep (1) + completions (N) + status bar (1) = 5+inputH+N
 	compLines := m.renderCompletionLines()
-	fixedRows := 6 + len(compLines)
+	inputH := m.inputVisualHeight()
+	fixedRows := 5 + inputH + len(compLines)
 	mainHeight := m.height - fixedRows
 	if mainHeight < 1 {
 		mainHeight = 1
@@ -234,9 +235,10 @@ func (m Model) View() string {
 	// Build each section into a []string of exactly the right line count.
 	topLines := []string{m.renderTabBar(), m.renderSplitSep(m.width, true)}
 	mainLines := strings.Split(m.renderMainArea(mainHeight), "\n")
-	botLines := make([]string, 0, 4+len(compLines))
+	cmdInput := m.renderCommandInput()
+	botLines := make([]string, 0, 4+inputH+len(compLines))
 	botLines = append(botLines, m.renderSplitSep(m.width, false))
-	botLines = append(botLines, m.renderCommandInput())
+	botLines = append(botLines, strings.Split(cmdInput, "\n")...)
 	botLines = append(botLines, m.renderStatusSep())
 	botLines = append(botLines, compLines...)
 	botLines = append(botLines, m.renderStatusLine())
@@ -1426,84 +1428,150 @@ func fgShellInput(shellMode bool, col lipgloss.Color, text string) string {
 	return fg(col, text)
 }
 
-// renderCommandInput renders the command input line with real text and cursor.
+// renderCommandInput renders the command input with multi-line support.
+// Ported from c2: uses textarea.Model for editing state but renders manually
+// with raw ANSI to avoid background color issues.
 func (m Model) renderCommandInput() string {
 	t := ActiveTheme
-	shellMode := strings.HasPrefix(m.inputValue, "!")
+	shellMode := strings.HasPrefix(m.input.Value(), "!")
 
-	promptStr := "> "
-	if m.chatMode {
-		promptStr = m.chatWorkspace + "> "
-	}
-	prompt := fg(t.InputPrompt, promptStr)
-	promptW := len([]rune(promptStr))
+	promptStr := m.inputPrompt()
+	promptRunes := []rune(promptStr)
+	const padW = 1
+
+	var line0W, contW int
 	if shellMode {
-		prompt = ""
-		promptW = 0
-	}
-	availW := m.width - promptW
-	if availW < 4 {
-		availW = 4
-	}
-
-	if m.focus != paneCommand {
-		if m.inputValue == "" {
-			return prompt + fg(t.Dimmed, "esc · type a command")
-		}
-		return prompt + fgShellInput(shellMode, t.InputText, truncate(m.inputValue, availW))
-	}
-
-	// Focused: render inputValue with cursor, scrolling viewport to keep cursor visible.
-	runes := []rune(m.inputValue)
-	cursor := m.inputCursor
-	if cursor > len(runes) {
-		cursor = len(runes)
-	}
-
-	// Compute scroll offset so cursor is always within [offset, offset+availW).
-	offset := 0
-	if cursor >= availW {
-		offset = cursor - availW + 1
-	}
-
-	// Slice the visible window.
-	visEnd := offset + availW
-	if visEnd > len(runes) {
-		visEnd = len(runes)
-	}
-	visible := runes[offset:visEnd]
-	cursorInView := cursor - offset
-
-	// Build: before cursor | cursor char (reversed) | after cursor
-	var sb strings.Builder
-	sb.WriteString(prompt)
-	if cursorInView > 0 {
-		sb.WriteString(fgShellInput(shellMode, t.InputText, string(visible[:cursorInView])))
-	}
-	// Cursor block: the char at cursor, or a space if at end.
-	if m.cursorVisible {
-		var cursorChar string
-		if cursorInView < len(visible) {
-			cursorChar = string(visible[cursorInView])
-		} else {
-			cursorChar = " "
-		}
-		sb.WriteString(reverse(cursorChar))
-		if cursorInView+1 < len(visible) {
-			sb.WriteString(fgShellInput(shellMode, t.InputText, string(visible[cursorInView+1:])))
-		}
+		line0W = m.width
+		contW = m.width
 	} else {
-		// Cursor invisible — render all visible text normally.
-		sb.WriteString(fgShellInput(shellMode, t.InputText, string(visible[cursorInView:])))
+		line0W = m.width - padW - len(promptRunes)
+		contW = m.width - padW
 	}
-	return sb.String()
+	if line0W < 1 {
+		line0W = 1
+	}
+	if contW < 1 {
+		contW = 1
+	}
+
+	// Unfocused: show placeholder or truncated value.
+	if m.focus != paneCommand {
+		prompt := fg(t.InputPrompt, promptStr)
+		if shellMode {
+			prompt = ""
+		}
+		availW := m.width - len(promptRunes)
+		if shellMode {
+			availW = m.width
+		}
+		if availW < 4 {
+			availW = 4
+		}
+		if m.input.Value() == "" {
+			return strings.Repeat(" ", padW) + prompt + fg(t.Dimmed, "esc · type a command")
+		}
+		return strings.Repeat(" ", padW) + prompt + fgShellInput(shellMode, t.InputText, truncate(m.input.Value(), availW))
+	}
+
+	// Focused: render multi-line with cursor, word-wrapping logical lines.
+	curLogLine := m.input.Line()
+	curLineInfo := m.input.LineInfo()
+	curLogCol := curLineInfo.StartColumn + curLineInfo.ColumnOffset
+
+	logicalLines := strings.Split(m.input.Value(), "\n")
+	if len(logicalLines) == 0 {
+		logicalLines = []string{""}
+	}
+
+	var rendered []string
+	firstVisualLine := true
+
+	for li, line := range logicalLines {
+		runes := []rune(line)
+		wW := contW
+		if li == 0 {
+			wW = line0W
+		}
+
+		// Split logical line into visual chunks (word-wrap).
+		type chunk struct {
+			runes    []rune
+			logStart int // column offset within logical line
+		}
+		var chunks []chunk
+		if len(runes) == 0 {
+			chunks = []chunk{{runes: []rune{}, logStart: 0}}
+		} else {
+			for start := 0; start < len(runes); start += wW {
+				end := start + wW
+				if end > len(runes) {
+					end = len(runes)
+				}
+				chunks = append(chunks, chunk{runes: runes[start:end], logStart: start})
+			}
+		}
+
+		for ci, ch := range chunks {
+			// Build prefix.
+			var prefix string
+			if firstVisualLine {
+				if shellMode {
+					prefix = ""
+				} else {
+					prefix = strings.Repeat(" ", padW) + fg(t.InputPrompt, promptStr)
+				}
+				firstVisualLine = false
+			} else {
+				if shellMode {
+					prefix = ""
+				} else {
+					prefix = strings.Repeat(" ", padW)
+				}
+			}
+
+			// Is cursor in this chunk?
+			if li == curLogLine && m.focus == paneCommand {
+				chunkEnd := ch.logStart + len(ch.runes)
+				isLast := ci == len(chunks)-1
+				if curLogCol >= ch.logStart && (curLogCol < chunkEnd || isLast) {
+					colInChunk := curLogCol - ch.logStart
+					if colInChunk > len(ch.runes) {
+						colInChunk = len(ch.runes)
+					}
+					before := string(ch.runes[:colInChunk])
+					var curChar, after string
+					if colInChunk < len(ch.runes) {
+						curChar = string(ch.runes[colInChunk])
+						after = string(ch.runes[colInChunk+1:])
+					} else {
+						curChar = " "
+					}
+					var cursorSeq string
+					if m.cursorVisible {
+						cursorSeq = "\033[7m" + curChar + "\033[27m"
+					} else {
+						cursorSeq = fg(t.InputText, curChar)
+						if curChar == " " {
+							cursorSeq = " "
+						}
+					}
+					rendered = append(rendered,
+						prefix+fgShellInput(shellMode, t.InputText, before)+cursorSeq+fgShellInput(shellMode, t.InputText, after))
+					continue
+				}
+			}
+			rendered = append(rendered, prefix+fgShellInput(shellMode, t.InputText, string(ch.runes)))
+		}
+	}
+
+	return strings.Join(rendered, "\n")
 }
 
 // renderStatusSep renders the separator between the command input and the status bar.
 // Accent-colored when the command pane is focused; bright red in shell mode.
 func (m Model) renderStatusSep() string {
 	t := ActiveTheme
-	if strings.HasPrefix(m.inputValue, "!") {
+	if strings.HasPrefix(m.input.Value(), "!") {
 		return shellBorderColor + strings.Repeat("─", m.width) + "\033[0m"
 	}
 	if m.focus == paneCommand || m.focus == paneStatus {

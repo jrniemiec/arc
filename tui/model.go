@@ -7,7 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jrniemiec/arc/chat"
 	chatengine "github.com/jrniemiec/arc/chat/engine"
@@ -315,9 +317,8 @@ type Model struct {
 	correctionPrefix string // command prefix stripped before sending to LLM
 	correctionFlash  string // non-empty: flash message shown in status bar
 
-	// Command input
-	inputValue        string
-	inputCursor       int      // rune index into inputValue
+	// Command input (textarea for multi-line editing; rendering is manual)
+	input             textarea.Model
 	inputHistory      []string // oldest first, max 128
 	inputHistoryIdx   int      // -1 = live editing; ≥0 = browsing history
 	inputHistorySaved string   // draft saved when history browsing starts
@@ -769,8 +770,69 @@ func (m *Model) askConfirm(msg string, fn func() tea.Cmd) {
 	m.pendingConfirm = fn
 	m.focus = paneCommand
 	m.cursorVisible = true
-	m.inputValue = ""
-	m.inputCursor = 0
+	m.input.SetValue("")
+	m.input.CursorEnd()
+}
+
+// inputPrompt returns the prompt prefix for the command input pane.
+func (m Model) inputPrompt() string {
+	if m.chatMode {
+		return m.chatWorkspace + "> "
+	}
+	return "> "
+}
+
+// inputVisualHeight returns the number of visual (wrapped) lines the input
+// text occupies given the current terminal width, accounting for the prompt.
+func (m Model) inputVisualHeight() int {
+	if m.width == 0 {
+		return 1
+	}
+	prompt := m.inputPrompt()
+	const padW = 1
+	line0W := m.width - padW - len([]rune(prompt))
+	contW := m.width - padW
+	if line0W < 1 {
+		line0W = 1
+	}
+	if contW < 1 {
+		contW = 1
+	}
+	total := 0
+	for i, line := range strings.Split(m.input.Value(), "\n") {
+		runes := []rune(line)
+		wW := contW
+		if i == 0 {
+			wW = line0W
+		}
+		if len(runes) == 0 {
+			total++
+		} else {
+			total += (len(runes) + wW - 1) / wW
+		}
+	}
+	if total < 1 {
+		total = 1
+	}
+	if total > 3 {
+		total = 3
+	}
+	return total
+}
+
+// syncInputPrompt updates the textarea's prompt and width for layout calculation.
+func (m *Model) syncInputPrompt() {
+	prompt := m.inputPrompt()
+	m.input.Prompt = prompt
+	m.input.SetWidth(m.width - len([]rune(prompt)))
+}
+
+// syncInputHeight recalculates the textarea visual height and updates layout.
+func (m *Model) syncInputHeight() {
+	visualH := m.inputVisualHeight()
+	if visualH != m.input.Height() {
+		m.input.SetHeight(visualH)
+	}
 }
 
 // stopTTS kills any in-flight say(1) process and clears all TTS queues.
@@ -831,6 +893,31 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 	ApplyTheme(themeMode)
 	AdjustThemeForTerminal()
 
+	ta := textarea.New()
+	ta.Placeholder = ""
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.SetHeight(1)
+	ta.Focus()
+
+	// Style textarea with no background (raw ANSI rendering handles colors).
+	noStyle := lipgloss.NewStyle()
+	dimStyle := noStyle.Foreground(ActiveTheme.Dimmed)
+	textStyle := noStyle.Foreground(ActiveTheme.TopBarText)
+	promptStyle := noStyle.Foreground(ActiveTheme.InputPrompt)
+	fullReset := textarea.Style{
+		Base:             noStyle,
+		CursorLine:       noStyle,
+		CursorLineNumber: noStyle,
+		EndOfBuffer:      noStyle,
+		LineNumber:       dimStyle,
+		Placeholder:      dimStyle,
+		Prompt:           promptStyle,
+		Text:             textStyle,
+	}
+	ta.FocusedStyle = fullReset
+	ta.BlurredStyle = fullReset
+
 	sendFn := func(tea.Msg) {} // placeholder, overwritten by SetProgramSend
 	m := Model{
 		activeTab:       tabLibrary,
@@ -839,6 +926,7 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		cursorVisible:   true,
 		svc:             svc,
 		cfg:             cfg,
+		input:           ta,
 		inputHistory:    loadCommandHistory(historyPath(cfg.DataRoot)),
 		inputHistoryIdx: -1,
 		cmdCompleteIdx:  -1,

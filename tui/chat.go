@@ -1021,6 +1021,16 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 	}
 	cmd := strings.ToLower(parts[0])
 
+	// Preserve original formatting (newlines, whitespace) in fullArg
+	// by stripping the command prefix instead of re-joining Fields.
+	fullArg := ""
+	if idx := strings.Index(val, parts[0]); idx >= 0 {
+		rest := val[idx+len(parts[0]):]
+		if trimmed := strings.TrimLeft(rest, " "); trimmed != "" {
+			fullArg = trimmed
+		}
+	}
+
 	switch cmd {
 	case "/clear":
 		if m.chatEngine != nil {
@@ -1092,11 +1102,7 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		return nil
 
 	case "/resource-add":
-		arg := ""
-		if len(parts) > 1 {
-			arg = strings.Join(parts[1:], " ")
-		}
-		return m.cmdResourceAdd(arg)
+		return m.cmdResourceAdd(fullArg)
 
 	case "/resource-remove", "/resource-delete":
 		arg := ""
@@ -1129,25 +1135,13 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		return m.cmdResourceNew(arg)
 
 	case "/resource-save":
-		arg := ""
-		if len(parts) > 1 {
-			arg = strings.Join(parts[1:], " ")
-		}
-		return m.chatSaveResource(arg)
+		return m.chatSaveResource(fullArg)
 
 	case "/scratch":
-		arg := ""
-		if len(parts) > 1 {
-			arg = strings.Join(parts[1:], " ")
-		}
-		return m.cmdScratch(arg)
+		return m.cmdScratch(fullArg)
 
 	case "/askx":
-		arg := ""
-		if len(parts) > 1 {
-			arg = strings.Join(parts[1:], " ")
-		}
-		return m.cmdAskX(arg)
+		return m.cmdAskX(fullArg)
 
 	default:
 		// Fall through to global command dispatcher so /log, /stats, /help etc. work.

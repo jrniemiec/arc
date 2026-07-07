@@ -38,8 +38,8 @@ func (m *Model) toggleAskX() {
 	m.rebuildAskXLines()
 	m.focus = paneCommand
 	m.cursorVisible = true
-	m.inputValue = "/askX "
-	m.inputCursor = len([]rune(m.inputValue))
+	m.input.SetValue("/askX ")
+	m.input.CursorEnd()
 	m.cmdComplete = nil
 	m.cmdCompleteIdx = -1
 	m.paramItems = nil
@@ -63,9 +63,10 @@ func (m *Model) closeAskX() {
 
 // clearAskXInput clears the input if it has the /askX prefix.
 func (m *Model) clearAskXInput() {
-	if strings.HasPrefix(m.inputValue, "/askX") || strings.HasPrefix(m.inputValue, "/askx") {
-		m.inputValue = ""
-		m.inputCursor = 0
+	if strings.HasPrefix(m.input.Value(), "/askX") || strings.HasPrefix(m.input.Value(), "/askx") {
+		m.input.SetValue("")
+		m.input.CursorEnd()
+		m.syncInputHeight()
 	}
 }
 
@@ -791,8 +792,8 @@ func (m *Model) handleAskXKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
-		m.inputValue = "/askX "
-		m.inputCursor = len([]rune(m.inputValue))
+		m.input.SetValue("/askX ")
+		m.input.CursorEnd()
 	}
 	return nil
 }

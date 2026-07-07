@@ -47,6 +47,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.syncInputPrompt()
+		m.syncInputHeight()
 
 	case spinnerTickMsg:
 		m.spinnerFrame++
@@ -240,14 +242,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil && msg.text != "" {
 			corrected := m.correctionPrefix + msg.text
 			m.correctionPrefix = ""
-			if corrected != m.inputValue {
+			if corrected != m.input.Value() {
 				m.statusMsg = "✓ corrected"
 			} else {
 				m.statusMsg = "✓ no changes"
 			}
 			m.statusErr = false
-			m.inputValue = corrected
-			m.inputCursor = len([]rune(corrected))
+			m.input.SetValue(corrected)
+			m.input.CursorEnd()
+			m.syncInputHeight()
 		} else if msg.err != nil {
 			errStr := msg.err.Error()
 			if len(errStr) > 40 {
@@ -477,8 +480,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		// One final redraw shows the status message, then screen freezes.
 		return tea.DisableMouse
-	case msg.String() == "ctrl+c" && m.focus == paneCommand && m.inputValue != "":
-		m.copyToClipboard(m.inputValue)
+	case msg.String() == "ctrl+c" && m.focus == paneCommand && m.input.Value() != "":
+		m.copyToClipboard(m.input.Value())
 		return nil
 	case key.Matches(msg, keys.Quit) && !(m.focus == paneCommand && msg.String() == "q"):
 		return tea.Quit
@@ -496,9 +499,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.statusLines = nil
 		m.pendingConfirm = nil
 		m.pendingConfirmMsg = ""
-		m.inputValue = ""
-		m.inputCursor = 0
+		m.input.SetValue("")
+		m.input.CursorEnd()
 		m.pastedBlob = ""
+		m.syncInputHeight()
 		// In chat mode, Esc always returns focus to command input — never exits chat.
 		// Use /exit or q to leave chat.
 		m.focus = paneCommand
@@ -512,12 +516,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 
 	case key.Matches(msg, keys.CorrectInput):
-		if !m.correcting && strings.TrimSpace(m.inputValue) != "" {
+		if !m.correcting && strings.TrimSpace(m.input.Value()) != "" {
 			m.correcting = true
 			m.statusMsg = "correcting…"
 			m.statusErr = false
 			// Strip command prefix (e.g. "/scratch ", "//") so the LLM only sees prose.
-			text := m.inputValue
+			text := m.input.Value()
 			m.correctionPrefix = ""
 			if strings.HasPrefix(text, "//") {
 				m.correctionPrefix = "//"
@@ -737,8 +741,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
-		m.inputValue = "/"
-		m.inputCursor = 1
+		m.input.SetValue("/")
+		m.input.CursorEnd()
 		m.updateCompletions()
 	case key.Matches(msg, keys.Help):
 		m.setStatusLines(m.helpLines("keys"))
@@ -1587,9 +1591,9 @@ func (m *Model) cmdResourceDeleteLine(viewH int) tea.Cmd {
 func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 	// Ctrl+T: insert compact timestamp (2006-01-02 15:04).
 	if msg.String() == "ctrl+t" {
-		ts := []rune(time.Now().Format("2006-01-02 15:04"))
 		m.inputExitHistory()
-		m.inputInsert(ts)
+		m.input.InsertString(time.Now().Format("2006-01-02 15:04"))
+		m.syncInputHeight()
 		m.updateCompletions()
 		return nil
 	}
@@ -1598,51 +1602,20 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		m.pasteFromClipboard()
 		return nil
 	}
-	// Bracketed paste: buffer multi-line content.
+	// Bracketed paste.
 	if msg.Paste {
 		m.pasteContent(string(msg.Runes))
 		return nil
 	}
+	// Ctrl+J (Shift+Enter): insert newline.
+	if msg.String() == "ctrl+j" {
+		m.inputExitHistory()
+		m.input.InsertString("\n")
+		m.syncInputHeight()
+		return nil
+	}
+
 	switch msg.Type {
-	case tea.KeyRunes:
-		m.inputExitHistory()
-		m.inputInsert(msg.Runes)
-		m.updateCompletions()
-	case tea.KeySpace:
-		m.inputExitHistory()
-		m.inputInsert([]rune{' '})
-		m.updateCompletions()
-	case tea.KeyBackspace, tea.KeyCtrlH:
-		m.inputExitHistory()
-		m.inputDeleteBefore()
-		m.updateCompletions()
-	case tea.KeyDelete:
-		m.inputExitHistory()
-		m.inputDeleteAt()
-		m.updateCompletions()
-	case tea.KeyLeft, tea.KeyCtrlB:
-		if m.inputCursor > 0 {
-			m.inputCursor--
-		}
-	case tea.KeyRight, tea.KeyCtrlF:
-		runes := []rune(m.inputValue)
-		if m.inputCursor < len(runes) {
-			m.inputCursor++
-		}
-	case tea.KeyHome, tea.KeyCtrlA:
-		m.inputCursor = 0
-	case tea.KeyEnd, tea.KeyCtrlE:
-		m.inputCursor = len([]rune(m.inputValue))
-	case tea.KeyCtrlU:
-		m.inputExitHistory()
-		m.inputValue = ""
-		m.inputCursor = 0
-		m.updateCompletions()
-	case tea.KeyCtrlK:
-		m.inputExitHistory()
-		runes := []rune(m.inputValue)
-		m.inputValue = string(runes[:m.inputCursor])
-		m.updateCompletions()
 	case tea.KeyTab:
 		m.acceptCompletion()
 	case tea.KeyUp:
@@ -1729,15 +1702,15 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 				// No arg needed — execute immediately.
 				m.cmdComplete = nil
 				m.cmdCompleteIdx = -1
-				m.inputValue = ""
-				m.inputCursor = 0
+				m.input.SetValue("")
+				m.syncInputHeight()
 				return m.dispatchCommand(c.cmd)
 			}
 			// Has arg — fill + space and show param picker, same as Tab.
 			m.acceptCompletion()
 			return nil
 		}
-		val := strings.TrimSpace(m.inputValue)
+		val := strings.TrimSpace(m.input.Value())
 		m.inputSubmit()
 		m.cmdComplete = nil
 		m.cmdCompleteIdx = -1
@@ -1790,6 +1763,23 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return m.dispatchCommand(val)
 		}
+	default:
+		// Delegate all other keys (runes, space, backspace, delete, arrows,
+		// home, end, ctrl+u, ctrl+k, etc.) to the textarea model.
+		if m.inputHistoryIdx != -1 {
+			m.inputHistoryIdx = -1
+			m.inputHistorySaved = ""
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.syncInputHeight()
+		// Auto-insert space after '!' so the command reads "! cmd" not "!cmd".
+		if m.input.Value() == "!" {
+			m.input.SetValue("! ")
+			m.input.CursorEnd()
+		}
+		m.updateCompletions()
+		return cmd
 	}
 	return nil
 }
@@ -1831,19 +1821,6 @@ func (m *Model) handleStatusKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// inputInsert inserts runes at the cursor position.
-func (m *Model) inputInsert(runes []rune) {
-	r := []rune(m.inputValue)
-	r = append(r[:m.inputCursor], append(runes, r[m.inputCursor:]...)...)
-	m.inputValue = string(r)
-	m.inputCursor += len(runes)
-	// Auto-insert space after '!' so the command reads "! cmd" not "!cmd".
-	if m.inputValue == "!" {
-		m.inputValue = "! "
-		m.inputCursor = 2
-	}
-}
-
 // pasteFromClipboard reads the system clipboard and pastes into the input.
 func (m *Model) pasteFromClipboard() {
 	out, err := exec.Command("pbpaste").Output()
@@ -1866,51 +1843,27 @@ func (m *Model) copyToClipboard(text string) {
 	m.statusErr = false
 }
 
-// pasteContent handles pasted text: single-line goes inline, multi-line is buffered.
+// pasteContent handles pasted text: small pastes go inline, large ones are buffered.
 func (m *Model) pasteContent(raw string) {
 	m.inputExitHistory()
 	content := strings.ReplaceAll(raw, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")
 	content = strings.TrimRight(content, "\n")
 	lines := strings.Split(content, "\n")
-	if len(lines) > 1 || len([]rune(content)) > 256 {
-		pre := m.inputValue
-		blob := pre
-		if blob != "" && !strings.HasSuffix(blob, "\n") {
-			blob += "\n"
-		}
-		blob += content
+	if len(lines) > 20 || len([]rune(content)) > 256 {
+		pre := m.input.Value()
+		blob := pre + content
 		m.pastedBlob = blob
-		lineCount := len(lines)
+		lineCount := strings.Count(content, "\n") + 1
 		kb := float64(len(content)) / 1024.0
 		label := fmt.Sprintf("[pasted: %d lines · %.1f KB]", lineCount, kb)
-		m.inputValue = pre + label
-		m.inputCursor = len([]rune(m.inputValue))
+		m.input.SetValue(pre + label)
+		m.input.CursorEnd()
 	} else {
-		m.inputInsert([]rune(content))
+		m.input.InsertString(content)
 	}
+	m.syncInputHeight()
 	m.updateCompletions()
-}
-
-// inputDeleteBefore deletes the rune immediately before the cursor (backspace).
-func (m *Model) inputDeleteBefore() {
-	if m.inputCursor == 0 {
-		return
-	}
-	r := []rune(m.inputValue)
-	r = append(r[:m.inputCursor-1], r[m.inputCursor:]...)
-	m.inputValue = string(r)
-	m.inputCursor--
-}
-
-// inputDeleteAt deletes the rune at the cursor position (delete key).
-func (m *Model) inputDeleteAt() {
-	r := []rune(m.inputValue)
-	if m.inputCursor >= len(r) {
-		return
-	}
-	r = append(r[:m.inputCursor], r[m.inputCursor+1:]...)
-	m.inputValue = string(r)
 }
 
 // inputExitHistory exits history browsing mode, keeping the current value.
@@ -1925,15 +1878,16 @@ func (m *Model) inputHistoryPrev() {
 		return
 	}
 	if m.inputHistoryIdx == -1 {
-		m.inputHistorySaved = m.inputValue
+		m.inputHistorySaved = m.input.Value()
 		m.inputHistoryIdx = len(m.inputHistory) - 1
 	} else if m.inputHistoryIdx > 0 {
 		m.inputHistoryIdx--
 	} else {
 		return
 	}
-	m.inputValue = m.inputHistory[m.inputHistoryIdx]
-	m.inputCursor = len([]rune(m.inputValue))
+	m.input.SetValue(m.inputHistory[m.inputHistoryIdx])
+	m.input.CursorEnd()
+	m.syncInputHeight()
 }
 
 // inputHistoryNext navigates to the next (newer) history entry, or restores draft.
@@ -1943,25 +1897,27 @@ func (m *Model) inputHistoryNext() {
 	}
 	if m.inputHistoryIdx < len(m.inputHistory)-1 {
 		m.inputHistoryIdx++
-		m.inputValue = m.inputHistory[m.inputHistoryIdx]
+		m.input.SetValue(m.inputHistory[m.inputHistoryIdx])
 	} else {
-		m.inputValue = m.inputHistorySaved
+		m.input.SetValue(m.inputHistorySaved)
 		m.inputHistoryIdx = -1
 		m.inputHistorySaved = ""
 	}
-	m.inputCursor = len([]rune(m.inputValue))
+	m.input.CursorEnd()
+	m.syncInputHeight()
 }
 
 // inputSubmit pushes the current value to history and clears the input.
 func (m *Model) inputSubmit() {
-	val := strings.TrimSpace(m.inputValue)
+	val := strings.TrimSpace(m.input.Value())
 	if val != "" {
 		m.pushHistory(val)
 	}
-	m.inputValue = ""
-	m.inputCursor = 0
+	m.input.SetValue("")
+	m.input.CursorEnd()
 	m.inputHistoryIdx = -1
 	m.inputHistorySaved = ""
+	m.syncInputHeight()
 }
 
 // pushHistory appends val to history, deduplicating consecutive identical entries.
@@ -2066,7 +2022,7 @@ func (m *Model) clampNavScroll() {
 // Shows completions when input starts with "/" and contains no space.
 // Shows param suggestions when input is a known command followed by a space.
 func (m *Model) updateCompletions() {
-	val := m.inputValue
+	val := m.input.Value()
 	m.statusLines = nil
 
 	if !strings.HasPrefix(val, "/") {
@@ -2237,12 +2193,12 @@ func (m *Model) acceptParam() {
 	}
 	val := m.paramItems[m.paramIdx].cmd
 	// Find the last space in the input and replace everything after it with val.
-	input := m.inputValue
+	input := m.input.Value()
 	if idx := strings.LastIndex(input, " "); idx >= 0 {
 		input = input[:idx]
 	}
-	m.inputValue = input + " " + val
-	m.inputCursor = len([]rune(m.inputValue))
+	m.input.SetValue(input + " " + val)
+	m.input.CursorEnd()
 	m.paramItems = nil
 	m.paramIdx = -1
 }
@@ -2255,11 +2211,11 @@ func (m *Model) acceptCompletion() {
 	}
 	c := m.cmdComplete[m.cmdCompleteIdx]
 	if c.arg != "" {
-		m.inputValue = c.cmd + " "
+		m.input.SetValue(c.cmd + " ")
 	} else {
-		m.inputValue = c.cmd
+		m.input.SetValue(c.cmd)
 	}
-	m.inputCursor = len([]rune(m.inputValue))
+	m.input.CursorEnd()
 	m.cmdComplete = nil
 	m.cmdCompleteIdx = -1
 	// Immediately show param picker if this command has suggestions.
@@ -4233,8 +4189,8 @@ func (m *Model) toggleScratch() {
 	m.reloadScratchLines()
 	m.focus = paneCommand
 	m.cursorVisible = true
-	m.inputValue = "/scratch "
-	m.inputCursor = len([]rune(m.inputValue))
+	m.input.SetValue("/scratch ")
+	m.input.CursorEnd()
 	m.cmdComplete = nil
 	m.cmdCompleteIdx = -1
 	m.paramItems = nil
@@ -4327,12 +4283,18 @@ func (m *Model) reloadScratchLines() {
 		} else if raw == "" {
 			// blank lines — not a block, just spacing
 		} else {
-			// Legacy line without bullet — treat as a block.
-			blocks = append(blocks, scratchBlock{
-				startLine: startIdx,
-				endLine:   endIdx,
-				text:      raw,
-			})
+			// Continuation of previous block (e.g. multi-line pasted note).
+			if len(blocks) > 0 && !blocks[len(blocks)-1].isSep {
+				blocks[len(blocks)-1].endLine = endIdx
+				blocks[len(blocks)-1].text += "\n" + raw
+			} else {
+				// No preceding block to continue — standalone block.
+				blocks = append(blocks, scratchBlock{
+					startLine: startIdx,
+					endLine:   endIdx,
+					text:      raw,
+				})
+			}
 		}
 	}
 
@@ -4403,9 +4365,10 @@ func (m *Model) closeScratch() {
 
 // clearScratchInput clears the command input if it starts with "/scratch".
 func (m *Model) clearScratchInput() {
-	if strings.HasPrefix(m.inputValue, "/scratch") {
-		m.inputValue = ""
-		m.inputCursor = 0
+	if strings.HasPrefix(m.input.Value(), "/scratch") {
+		m.input.SetValue("")
+		m.input.CursorEnd()
+		m.syncInputHeight()
 	}
 }
 
@@ -4485,8 +4448,8 @@ func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
-		m.inputValue = "/scratch "
-		m.inputCursor = len([]rune(m.inputValue))
+		m.input.SetValue("/scratch ")
+		m.input.CursorEnd()
 	}
 	return nil
 }
@@ -4689,12 +4652,26 @@ func (m *Model) cmdScratchDeleteBlock() tea.Cmd {
 	}
 	rawLines := splitLines(content)
 	// Match either bulleted or legacy (raw) form.
-	bulletTarget := "• " + blk.text
+	// For multi-line blocks, find the first line then skip continuations.
+	textLines := strings.Split(blk.text, "\n")
+	bulletTarget := "• " + textLines[0]
 	var newLines []string
 	found := false
+	skipping := false
 	for _, l := range rawLines {
-		if !found && (l == bulletTarget || l == blk.text) {
+		if skipping {
+			// Continue skipping until we hit a new bullet or separator.
+			if strings.HasPrefix(l, "• ") || strings.HasPrefix(l, "----------") {
+				skipping = false
+				newLines = append(newLines, l)
+			}
+			continue
+		}
+		if !found && (l == bulletTarget || (len(textLines) == 1 && l == blk.text)) {
 			found = true
+			if len(textLines) > 1 {
+				skipping = true
+			}
 			continue // skip this line
 		}
 		newLines = append(newLines, l)
