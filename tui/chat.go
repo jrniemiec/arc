@@ -733,10 +733,16 @@ func (m Model) renderChatPane(height, width int) []string {
 	header += fg(t.ContentDimmed, fmt.Sprintf("  ·  %d msgs", msgCount))
 	header += fg(t.ContentDimmed, fmt.Sprintf("  ·  %d articles", m.chatArticleCount))
 	lines = append(lines, truncate(header, width-1))
+	// Show workspace description if available.
+	ws := m.selectedWorkspace()
+	if ws != nil && ws.description != "" {
+		lines = append(lines, fg(lipgloss.Color("#8890A0"), truncate(ws.description, width-1)))
+	}
 	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
 
 	// Chat content area.
-	chatH := height - 2 // header + separator
+	headerLines := len(lines) // header + optional description + separator
+	chatH := height - headerLines
 	if chatH < 1 {
 		chatH = 1
 	}

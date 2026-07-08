@@ -51,7 +51,7 @@ Examples:
 		svc := svcFrom(cmd)
 
 		var last int
-		err := svc.Reindex(cmd.Context(), func(indexed, total int) {
+		result, err := svc.Reindex(cmd.Context(), func(indexed, total int) {
 			last = indexed
 			fmt.Fprintf(cmd.ErrOrStderr(), "\r  indexing %d/%d", indexed, total)
 		})
@@ -61,7 +61,7 @@ Examples:
 		if err != nil {
 			return fmt.Errorf("reindex: %w", err)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "reindexed %d articles\n", last)
+		fmt.Fprintf(cmd.OutOrStdout(), "reindexed %d articles, %d collections\n", result.Articles, result.Collections)
 
 		if reindexNoEmbed {
 			return nil

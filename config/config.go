@@ -173,6 +173,7 @@ type IngestConfig struct {
 	// Collection suggestion
 	CollectionSuggestProfile  string `json:"collection_suggest_profile"`  // profile for arc collections suggest; default: flash_profile
 	CollectionSuggestPrompt   string `json:"collection_suggest_prompt"`   // system prompt override for collection suggestion
+	CollectionDescribePrompt  string `json:"collection_describe_prompt"`  // system prompt override for collection description generation
 }
 
 // FlashcardStyleConfig holds the system prompt for one flashcard style.
@@ -292,6 +293,28 @@ func (c *Config) CollectionSuggestPrompt() string {
 		return c.Ingest.CollectionSuggestPrompt
 	}
 	return DefaultCollectionSuggestPrompt
+}
+
+// DefaultCollectionDescribePrompt is the system prompt for generating a
+// one-sentence collection description from its slug and member article titles.
+const DefaultCollectionDescribePrompt = `You are organizing a personal knowledge base.
+
+Given a collection slug and a list of its member article titles, write a single
+sentence describing what this collection covers.
+
+Rules:
+- One sentence only, no more
+- Be specific — mention the actual topics, not generic filler
+- Do not start with "This collection..." or "A collection of..."
+- Return only the description text, no JSON, no quotes, no commentary`
+
+// CollectionDescribePrompt returns the effective system prompt for collection
+// description generation, preferring user config over built-in default.
+func (c *Config) CollectionDescribePrompt() string {
+	if c.Ingest.CollectionDescribePrompt != "" {
+		return c.Ingest.CollectionDescribePrompt
+	}
+	return DefaultCollectionDescribePrompt
 }
 
 // CollectionSuggestProfileName returns the effective profile name for collection
@@ -586,6 +609,9 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Ingest.CollectionSuggestPrompt != "" {
 		cfg.Ingest.CollectionSuggestPrompt = overlay.Ingest.CollectionSuggestPrompt
+	}
+	if overlay.Ingest.CollectionDescribePrompt != "" {
+		cfg.Ingest.CollectionDescribePrompt = overlay.Ingest.CollectionDescribePrompt
 	}
 	for k, v := range overlay.Ingest.FlashcardStyles {
 		cfg.Ingest.FlashcardStyles[k] = v

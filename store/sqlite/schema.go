@@ -80,4 +80,10 @@ ALTER TABLE articles ADD COLUMN agent_reason   TEXT;
 CREATE INDEX IF NOT EXISTS idx_articles_agent_run ON articles(agent_run_id);
 ALTER TABLE articles ADD COLUMN favorited_at   TEXT;
 CREATE INDEX IF NOT EXISTS idx_articles_favorited ON articles(favorited_at);
+CREATE VIRTUAL TABLE IF NOT EXISTS collections_fts USING fts5(
+    collection_id,
+    name,
+    description,
+    tokenize = 'porter unicode61'
+);
 `

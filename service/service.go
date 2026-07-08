@@ -45,10 +45,17 @@ func (s *Service) Library() *library.Library {
 	return s.lib
 }
 
+// ReindexResult holds counts from a reindex operation.
+type ReindexResult struct {
+	Articles    int
+	Collections int
+}
+
 // Reindex rebuilds the SQLite index from the filesystem.
 // progress is called with (indexed, total) after each article; may be nil.
-func (s *Service) Reindex(ctx context.Context, progress func(indexed, total int)) error {
-	return s.lib.Reindex(ctx, progress)
+func (s *Service) Reindex(ctx context.Context, progress func(indexed, total int)) (ReindexResult, error) {
+	r, err := s.lib.Reindex(ctx, progress)
+	return ReindexResult{Articles: r.Articles, Collections: r.Collections}, err
 }
 
 // ReindexEmbed generates embeddings for articles that have a summary but no
@@ -174,7 +181,7 @@ func (s *Service) Reprocess(ctx context.Context, req ReprocessRequest) (Reproces
 	}
 
 	// Rebuild SQLite index from updated filesystem state.
-	if err := s.lib.Reindex(ctx, nil); err != nil {
+	if _, err := s.lib.Reindex(ctx, nil); err != nil {
 		return result, fmt.Errorf("reindex: %w", err)
 	}
 
@@ -808,13 +815,14 @@ func (s *Service) RemoveFromCollection(ctx context.Context, articleSlug, collect
 	return s.lib.RemoveArticleFromCollection(ctx, articleSlug, collectionSlug)
 }
 
-// SetCollectionDescription writes a description to the collection's system.txt.
+// SetCollectionDescription updates the description in the collection's meta.json.
 func (s *Service) SetCollectionDescription(ctx context.Context, slug, text string) error {
-	if _, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug); err != nil {
+	m, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug)
+	if err != nil {
 		return fmt.Errorf("collection %q not found", slug)
 	}
-	colDir := fs.CollectionDir(s.cfg.DataRoot, slug)
-	return os.WriteFile(filepath.Join(colDir, "system.txt"), []byte(text+"\n"), 0644)
+	m.Description = text
+	return fs.WriteCollectionMeta(s.cfg.DataRoot, m)
 }
 
 // ListCollectionArticles returns article slugs linked in a collection.
@@ -911,6 +919,26 @@ func (s *Service) ResolveCollectionSlug(ctx context.Context, query string) (stri
 		}
 		return "", fmt.Errorf("%s", strings.TrimRight(msg, "\n"))
 	}
+}
+
+// SearchCollections searches collections by name or description using FTS5.
+func (s *Service) SearchCollections(ctx context.Context, query string) ([]CollectionInfo, error) {
+	cols, err := s.lib.SearchCollections(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("search collections: %w", err)
+	}
+	counts, _ := s.lib.CollectionCounts(ctx)
+	out := make([]CollectionInfo, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, CollectionInfo{
+			Slug:         c.ID,
+			Name:         c.Name,
+			Description:  c.Description,
+			CreatedAt:    c.CreatedAt,
+			ArticleCount: counts[c.ID],
+		})
+	}
+	return out, nil
 }
 
 // SuggestCollections calls the LLM to propose a set of collections for the whole library.
@@ -1013,6 +1041,35 @@ func (s *Service) SuggestCollectionsForArticle(ctx context.Context, articleSlug,
 		})
 	}
 	return out, nil
+}
+
+// GenerateCollectionDescription calls the LLM to generate a one-sentence description
+// for a collection based on its slug and member article titles.
+func (s *Service) GenerateCollectionDescription(ctx context.Context, slug, profile string, progress func(string)) (string, error) {
+	// Get member article titles
+	articleSlugs, _, err := fs.ListCollectionArticles(s.cfg.DataRoot, slug)
+	if err != nil {
+		return "", fmt.Errorf("list collection articles: %w", err)
+	}
+	if len(articleSlugs) == 0 {
+		return "", fmt.Errorf("collection %q has no articles", slug)
+	}
+
+	titles := make([]string, 0, len(articleSlugs))
+	for _, as := range articleSlugs {
+		a, err := s.lib.Get(ctx, as)
+		if err != nil {
+			continue // skip broken links
+		}
+		titles = append(titles, a.Title)
+	}
+
+	return pipeline.CollectionDescribe(ctx, s.cfg, pipeline.CollectionDescribeRequest{
+		Slug:     slug,
+		Titles:   titles,
+		Profile:  profile,
+		Progress: progress,
+	})
 }
 
 // Relate creates a relation between two articles.
@@ -1429,7 +1486,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 	}
 
 	// Index the new article into SQLite
-	if err := s.lib.Reindex(ctx, nil); err != nil {
+	if _, err := s.lib.Reindex(ctx, nil); err != nil {
 		slog.Error("reindex after ingest failed", "err", err)
 		return IngestResult{}, fmt.Errorf("reindex after ingest: %w", err)
 	}

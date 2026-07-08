@@ -21,7 +21,11 @@ func init() {
 	collectionsCmd.AddCommand(collectionsAddCmd)
 	collectionsCmd.AddCommand(collectionsRemoveCmd)
 	collectionsCmd.AddCommand(collectionsDescribeCmd)
+	collectionsCmd.AddCommand(collectionsDescribeAllCmd)
+	collectionsCmd.AddCommand(collectionsGenerateDescriptionCmd)
+	collectionsCmd.AddCommand(collectionsGenerateDescriptionAllCmd)
 	collectionsCmd.AddCommand(collectionsSuggestCmd)
+	collectionsCmd.AddCommand(collectionsSearchCmd)
 	collectionsCmd.AddCommand(collectionsReadCmd)
 	collectionsCmd.AddCommand(collectionsDeleteCmd)
 	collectionsCmd.AddCommand(collectionsRenameCmd)
@@ -29,6 +33,19 @@ func init() {
 	collectionsShowCmd.Flags().StringVar(&collectionsShowArticle, "article", "", "show collections that contain this article slug")
 	collectionsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
 	collectionsDeleteCmd.Flags().Bool("purge", false, "also delete articles that belong only to this collection")
+
+	collectionsGenerateDescriptionCmd.Flags().Bool("dry-run", false, "print generated description without writing")
+	collectionsGenerateDescriptionCmd.Flags().Bool("edit", false, "review and optionally modify before saving")
+	collectionsGenerateDescriptionCmd.Flags().Bool("force", false, "overwrite existing description")
+	collectionsGenerateDescriptionCmd.Flags().String("profile", "", "LLM profile override")
+	collectionsGenerateDescriptionCmd.MarkFlagsMutuallyExclusive("dry-run", "edit")
+
+	collectionsGenerateDescriptionAllCmd.Flags().Bool("dry-run", false, "print generated descriptions without writing")
+	collectionsGenerateDescriptionAllCmd.Flags().Bool("edit", false, "review and optionally modify each before saving")
+	collectionsGenerateDescriptionAllCmd.Flags().Bool("force", false, "overwrite existing descriptions")
+	collectionsGenerateDescriptionAllCmd.Flags().Int("limit", 0, "process at most N collections (0 = no limit)")
+	collectionsGenerateDescriptionAllCmd.Flags().String("profile", "", "LLM profile override")
+	collectionsGenerateDescriptionAllCmd.MarkFlagsMutuallyExclusive("dry-run", "edit")
 
 	collectionsSuggestCmd.Flags().String("profile", "", "LLM profile override")
 	collectionsSuggestCmd.Flags().Bool("apply", false, "interactively create collections and link articles")
@@ -256,6 +273,213 @@ var collectionsDescribeCmd = &cobra.Command{
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "description set for collection: %s\n", slug)
+		return nil
+	},
+}
+
+var collectionsGenerateDescriptionCmd = &cobra.Command{
+	Use:   "generate-description <slug>",
+	Short: "Generate a description for a collection using AI",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		svc := svcFrom(cmd)
+		slug, err := resolveCollectionSlug(cmd, args[0])
+		if err != nil {
+			return err
+		}
+
+		force, _ := cmd.Flags().GetBool("force")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		edit, _ := cmd.Flags().GetBool("edit")
+		profile, _ := cmd.Flags().GetString("profile")
+
+		info, err := svc.GetCollection(cmd.Context(), slug)
+		if err != nil {
+			return err
+		}
+		if info.Description != "" && !force {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s already has a description: %s\n", slug, info.Description)
+			fmt.Fprintln(cmd.OutOrStdout(), "use --force to overwrite")
+			return nil
+		}
+
+		progress := func(msg string) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
+		}
+
+		desc, err := svc.GenerateCollectionDescription(cmd.Context(), slug, profile, progress)
+		if err != nil {
+			return fmt.Errorf("generate description: %w", err)
+		}
+
+		tty := isTTY(os.Stdout)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s → %s\n", bold(slug, tty), desc)
+
+		if dryRun {
+			return nil
+		}
+
+		if edit {
+			fmt.Fprint(cmd.OutOrStdout(), "[Enter=accept, type replacement, n=skip]: ")
+			scanner := bufio.NewScanner(os.Stdin)
+			if !scanner.Scan() {
+				return fmt.Errorf("aborted")
+			}
+			input := strings.TrimSpace(scanner.Text())
+			if strings.ToLower(input) == "n" {
+				fmt.Fprintln(cmd.OutOrStdout(), "skipped")
+				return nil
+			}
+			if input != "" {
+				desc = input
+			}
+		}
+
+		if err := svc.SetCollectionDescription(cmd.Context(), slug, desc); err != nil {
+			return fmt.Errorf("set description: %w", err)
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "description saved")
+		return nil
+	},
+}
+
+var collectionsGenerateDescriptionAllCmd = &cobra.Command{
+	Use:   "generate-description-all",
+	Short: "Generate descriptions for all collections missing one",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		svc := svcFrom(cmd)
+		force, _ := cmd.Flags().GetBool("force")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		edit, _ := cmd.Flags().GetBool("edit")
+		limit, _ := cmd.Flags().GetInt("limit")
+		profile, _ := cmd.Flags().GetString("profile")
+
+		cols, err := svc.ListCollections(cmd.Context())
+		if err != nil {
+			return fmt.Errorf("list collections: %w", err)
+		}
+
+		// Filter to collections needing descriptions.
+		var pending []service.CollectionInfo
+		for _, c := range cols {
+			if c.Description == "" || force {
+				pending = append(pending, c)
+			}
+		}
+		if len(pending) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "all collections already have descriptions")
+			return nil
+		}
+		if limit > 0 && len(pending) > limit {
+			pending = pending[:limit]
+		}
+
+		tty := isTTY(os.Stdout)
+		generated := 0
+		for i, c := range pending {
+			progress := func(msg string) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "[%d/%d] ", i+1, len(pending))
+
+			desc, err := svc.GenerateCollectionDescription(cmd.Context(), c.Slug, profile, progress)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s: error: %v\n", c.Slug, err)
+				continue
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "%s → %s\n", bold(c.Slug, tty), desc)
+
+			if dryRun {
+				generated++
+				continue
+			}
+
+			if edit {
+				fmt.Fprint(cmd.OutOrStdout(), "[Enter=accept, type replacement, n=skip]: ")
+				scanner := bufio.NewScanner(os.Stdin)
+				if !scanner.Scan() {
+					return fmt.Errorf("aborted")
+				}
+				input := strings.TrimSpace(scanner.Text())
+				if strings.ToLower(input) == "n" {
+					fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
+					continue
+				}
+				if input != "" {
+					desc = input
+				}
+			}
+
+			if err := svc.SetCollectionDescription(cmd.Context(), c.Slug, desc); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  %s: write error: %v\n", c.Slug, err)
+				continue
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "  description saved")
+			generated++
+		}
+
+		action := "generated"
+		if dryRun {
+			action = "would generate"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "\n%s descriptions for %d/%d collections\n", action, generated, len(pending))
+		return nil
+	},
+}
+
+var collectionsDescribeAllCmd = &cobra.Command{
+	Use:   "describe-all",
+	Short: "Show descriptions for all collections",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		svc := svcFrom(cmd)
+		cols, err := svc.ListCollections(cmd.Context())
+		if err != nil {
+			return fmt.Errorf("list collections: %w", err)
+		}
+		if len(cols) == 0 {
+			fmt.Println("no collections")
+			return nil
+		}
+		tty := isTTY(os.Stdout)
+		for i, c := range cols {
+			desc := c.Description
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%3d. %s  %s\n", i+1, bold(c.Slug, tty), dim(desc, tty))
+		}
+		return nil
+	},
+}
+
+var collectionsSearchCmd = &cobra.Command{
+	Use:   "search <query>",
+	Short: "Search collections by name or description",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		svc := svcFrom(cmd)
+		query := strings.Join(args, " ")
+
+		results, err := svc.SearchCollections(cmd.Context(), query)
+		if err != nil {
+			return fmt.Errorf("search collections: %w", err)
+		}
+		if len(results) == 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "no collections matching %q\n", query)
+			return nil
+		}
+
+		tty := isTTY(os.Stdout)
+		for i, c := range results {
+			desc := c.Description
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%3d. %s  %s articles  %s\n",
+				i+1, bold(c.Slug, tty), fmt.Sprintf("%3d", c.ArticleCount), dim(desc, tty))
+		}
 		return nil
 	},
 }

@@ -302,7 +302,7 @@ func (s *Store) UpsertCollection(ctx context.Context, c store.Collection) error 
 		return err
 	}
 	defer s.pool.Put(conn)
-	return sqlitex.Execute(conn, `
+	if err := sqlitex.Execute(conn, `
 		INSERT INTO collections (id, name, description, created_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
@@ -310,7 +310,50 @@ func (s *Store) UpsertCollection(ctx context.Context, c store.Collection) error 
 			description = excluded.description
 	`, &sqlitex.ExecOptions{
 		Args: []any{c.ID, c.Name, c.Description, c.CreatedAt.UTC().Format(time.RFC3339)},
+	}); err != nil {
+		return err
+	}
+
+	// Update FTS entry: delete existing row then insert fresh.
+	if err := sqlitex.Execute(conn,
+		`DELETE FROM collections_fts WHERE collection_id = ?`,
+		&sqlitex.ExecOptions{Args: []any{c.ID}}); err != nil {
+		_ = err // best-effort: row may not exist yet
+	}
+	return sqlitex.Execute(conn,
+		`INSERT INTO collections_fts (collection_id, name, description) VALUES (?, ?, ?)`,
+		&sqlitex.ExecOptions{Args: []any{c.ID, c.Name, c.Description}})
+}
+
+// SearchCollections searches collections by name or description using FTS5.
+func (s *Store) SearchCollections(ctx context.Context, query string) ([]store.Collection, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	var results []store.Collection
+	err = sqlitex.Execute(conn, `
+		SELECT collection_id, name, description
+		FROM collections_fts
+		WHERE collections_fts MATCH ?
+		ORDER BY rank
+	`, &sqlitex.ExecOptions{
+		Args: []any{query},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			results = append(results, store.Collection{
+				ID:          stmt.ColumnText(0),
+				Name:        stmt.ColumnText(1),
+				Description: stmt.ColumnText(2),
+			})
+			return nil
+		},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("fts search collections: %w", err)
+	}
+	return results, nil
 }
 
 // CollectionCounts returns a map of collection_id → article count.

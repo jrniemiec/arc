@@ -1060,6 +1060,63 @@ func CollectionArticleSuggest(ctx context.Context, cfg config.Config, req Collec
 	return parseCollectionMatches(resp)
 }
 
+// CollectionDescribeRequest describes a request to generate a description for one collection.
+type CollectionDescribeRequest struct {
+	Slug     string
+	Titles   []string // member article titles
+	Profile  string
+	Progress func(string)
+}
+
+// CollectionDescribe calls the LLM to generate a one-sentence description for a collection.
+func CollectionDescribe(ctx context.Context, cfg config.Config, req CollectionDescribeRequest) (string, error) {
+	profileName := req.Profile
+	if profileName == "" {
+		profileName = cfg.CollectionSuggestProfileName()
+	}
+	prof, err := lookupProfile(cfg, profileName)
+	if err != nil {
+		return "", fmt.Errorf("profile: %w", err)
+	}
+	p, err := llm.New(llm.ProviderConfig{
+		Provider: prof.Provider,
+		Model:    prof.Model,
+		Host:     prof.Host,
+		APIKey:   resolveAPIKey(prof.Provider),
+	})
+	if err != nil {
+		return "", fmt.Errorf("llm provider: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Collection: %s\n\nMember articles:\n", req.Slug))
+	for _, t := range req.Titles {
+		sb.WriteString(fmt.Sprintf("- %s\n", t))
+	}
+
+	userMsg := sb.String()
+	systemPrompt := cfg.CollectionDescribePrompt()
+
+	slog.Info("collection describe request",
+		"profile", profileName,
+		"model", prof.Model,
+		"slug", req.Slug,
+		"articles", len(req.Titles),
+	)
+	if req.Progress != nil {
+		req.Progress(fmt.Sprintf("generating description for %s (model: %s)...", req.Slug, prof.Model))
+	}
+
+	resp, _, err := p.Chat(ctx, systemPrompt, []llm.Message{
+		{Role: llm.RoleUser, Content: userMsg},
+	})
+	if err != nil {
+		return "", fmt.Errorf("llm: %w", err)
+	}
+
+	return strings.TrimSpace(resp), nil
+}
+
 // parseCollectionSuggestions parses the LLM JSON response for library-wide suggestions.
 func parseCollectionSuggestions(resp string) ([]CollectionSuggestResult, error) {
 	// Strip markdown code fences if present

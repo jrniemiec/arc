@@ -85,6 +85,11 @@ func (l *Library) Search(ctx context.Context, q store.Query) ([]store.Result, er
 	return results, nil
 }
 
+// SearchCollections searches collections by name or description using FTS5.
+func (l *Library) SearchCollections(ctx context.Context, query string) ([]store.Collection, error) {
+	return l.db.SearchCollections(ctx, query)
+}
+
 // ReadBody reads the body text for an article.
 func (l *Library) ReadBody(a store.Article) (string, error) {
 	return l.fs.ReadBody(a)
@@ -105,16 +110,24 @@ func (l *Library) ReadFlashcards(a store.Article) ([]byte, error) {
 	return l.fs.ReadFlashcards(a)
 }
 
+// ReindexResult holds counts from a reindex operation.
+type ReindexResult struct {
+	Articles    int
+	Collections int
+}
+
 // Reindex walks the filesystem and rebuilds the SQLite index from scratch.
 // progress is called with (indexed, total) after each article; may be nil.
-func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)) error {
+func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)) (ReindexResult, error) {
+	var result ReindexResult
+
 	// First pass: count articles for progress reporting
 	total := 0
 	if err := l.fs.Walk(func(_ string, _ store.Files) error {
 		total++
 		return nil
 	}); err != nil {
-		return fmt.Errorf("count articles: %w", err)
+		return result, fmt.Errorf("count articles: %w", err)
 	}
 
 	// Migrate old meta.json collections to symlinks (one-time, idempotent)
@@ -123,25 +136,27 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 	// Sync collections from symlinks to SQLite
 	membership, err := fs.ScanCollectionMembership(l.cfg.DataRoot)
 	if err != nil {
-		return fmt.Errorf("scan collections: %w", err)
+		return result, fmt.Errorf("scan collections: %w", err)
 	}
 	// Upsert all discovered collections
 	colMetas, _ := fs.ListCollections(l.cfg.DataRoot)
 	for _, m := range colMetas {
 		if err := l.db.UpsertCollection(ctx, store.Collection{
-			ID:        m.Slug,
-			Name:      m.Name,
-			CreatedAt: m.CreatedAt,
+			ID:          m.Slug,
+			Name:        m.Name,
+			Description: m.Description,
+			CreatedAt:   m.CreatedAt,
 		}); err != nil {
-			return fmt.Errorf("upsert collection %s: %w", m.Slug, err)
+			return result, fmt.Errorf("upsert collection %s: %w", m.Slug, err)
 		}
 	}
+	result.Collections = len(colMetas)
 	// membership is used below during article upsert
 	_ = membership
 
 	// Second pass: index each article
 	indexed := 0
-	return l.fs.Walk(func(id string, files store.Files) error {
+	err = l.fs.Walk(func(id string, files store.Files) error {
 		meta, err := fs.ReadMeta(files.Meta)
 		if err != nil {
 			return fmt.Errorf("read meta %s: %w", id, err)
@@ -170,6 +185,8 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 		}
 		return nil
 	})
+	result.Articles = indexed
+	return result, err
 }
 
 // MarkRead records that an article was read at time t.

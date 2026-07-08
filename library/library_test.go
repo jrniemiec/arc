@@ -50,7 +50,7 @@ func TestReindex(t *testing.T) {
 	lib := openTestLibrary(t)
 
 	var indexed, total int
-	err := lib.Reindex(ctx, func(i, tot int) {
+	_, err := lib.Reindex(ctx, func(i, tot int) {
 		indexed = i
 		total = tot
 	})
@@ -70,7 +70,7 @@ func TestGet(t *testing.T) {
 	ctx := context.Background()
 	lib := openTestLibrary(t)
 
-	if err := lib.Reindex(ctx, nil); err != nil {
+	if _, err := lib.Reindex(ctx, nil); err != nil {
 		t.Fatalf("reindex: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestFileResolution(t *testing.T) {
 	ctx := context.Background()
 	lib := openTestLibrary(t)
 
-	if err := lib.Reindex(ctx, nil); err != nil {
+	if _, err := lib.Reindex(ctx, nil); err != nil {
 		t.Fatalf("reindex: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestReadContent(t *testing.T) {
 	ctx := context.Background()
 	lib := openTestLibrary(t)
 
-	if err := lib.Reindex(ctx, nil); err != nil {
+	if _, err := lib.Reindex(ctx, nil); err != nil {
 		t.Fatalf("reindex: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestSearch(t *testing.T) {
 	ctx := context.Background()
 	lib := openTestLibrary(t)
 
-	if err := lib.Reindex(ctx, nil); err != nil {
+	if _, err := lib.Reindex(ctx, nil); err != nil {
 		t.Fatalf("reindex: %v", err)
 	}
 
@@ -210,7 +210,7 @@ func TestListByCollection(t *testing.T) {
 	ctx := context.Background()
 	lib := openTestLibrary(t)
 
-	if err := lib.Reindex(ctx, nil); err != nil {
+	if _, err := lib.Reindex(ctx, nil); err != nil {
 		t.Fatalf("reindex: %v", err)
 	}
 

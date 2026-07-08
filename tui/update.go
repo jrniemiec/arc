@@ -2138,7 +2138,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 	case "/workspace":
 		return []cmdCompletion{
 			{cmd: "list", desc: "go to Workspaces sub-tab"},
-			{cmd: "new", arg: "<name>", desc: "create a new workspace"},
+			{cmd: "new", arg: "<name> [description]", desc: "create a new workspace"},
 			{cmd: "delete", desc: "delete selected workspace"},
 			{cmd: "rename", arg: "<name>", desc: "rename selected workspace"},
 			{cmd: "describe", arg: "<text>", desc: "set workspace description"},
@@ -3437,18 +3437,29 @@ func (m *Model) selectedWorkspace() *workspaceItem {
 }
 
 // cmdNewWorkspace creates a new workspace.
-func (m *Model) cmdNewWorkspace(name string) tea.Cmd {
+func (m *Model) cmdNewWorkspace(arg string) tea.Cmd {
 	if m.svc == nil {
 		m.statusMsg = "✗ service unavailable"
 		return nil
 	}
+	// Parse: /new <name> [description]
+	parts := strings.SplitN(arg, " ", 2)
+	name := parts[0]
+	description := ""
+	if len(parts) == 2 {
+		description = strings.TrimSpace(parts[1])
+	}
 	svc := m.svc
 	m.statusMsg = "⠸ creating workspace " + name + "…"
 	return func() tea.Msg {
-		if err := svc.CreateWorkspace(context.Background(), name, ""); err != nil {
+		if err := svc.CreateWorkspace(context.Background(), name, description); err != nil {
 			return cmdDoneMsg{err: err.Error()}
 		}
-		return cmdDoneMsg{statusMsg: "✓ created workspace " + name, reloadWorkspaces: true}
+		msg := "✓ created workspace " + name
+		if description != "" {
+			msg += " — " + description
+		}
+		return cmdDoneMsg{statusMsg: msg, reloadWorkspaces: true}
 	}
 }
 

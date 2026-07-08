@@ -144,7 +144,7 @@ func runAgentRun(cmd *cobra.Command, _ []string) error {
 		if isTTY {
 			fmt.Print("indexing...")
 		}
-		if err := svc.Library().Reindex(ctx, nil); err != nil {
+		if _, err := svc.Library().Reindex(ctx, nil); err != nil {
 			slog.Warn("reindex after agent run failed", "err", err)
 		}
 		if isTTY {
