@@ -1797,7 +1797,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		// Confirmation flow
 		if m.pendingConfirm != nil {
-			if val == "y" || val == "yes" {
+			if val == "yes" {
 				fn := m.pendingConfirm
 				m.pendingConfirm = nil
 				m.pendingConfirmMsg = ""
@@ -2851,7 +2851,7 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 		return nil
 	}
 	item := *sel
-	m.askConfirm(fmt.Sprintf("delete %q? (y/n)", item.title), func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete %q? (yes/N)", item.title), func() tea.Cmd {
 		id := item.id
 		svc := m.svc
 		// Remove from in-memory lists immediately
@@ -3423,7 +3423,7 @@ func (m *Model) cmdDeleteCollection() tea.Cmd {
 	}
 	slug := col.colSlug
 	svc := m.svc
-	m.askConfirm(fmt.Sprintf("delete collection %q? (y/n)", slug), func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete collection %q? (yes/N)", slug), func() tea.Cmd {
 		return func() tea.Msg {
 			_, err := svc.DeleteCollection(context.Background(), slug, false)
 			if err != nil {
@@ -3442,7 +3442,7 @@ func (m *Model) cmdDeleteArticleBySlug(slug string) tea.Cmd {
 		return nil
 	}
 	svc := m.svc
-	m.askConfirm(fmt.Sprintf("delete article %q? (y/n)", slug), func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete article %q? (yes/N)", slug), func() tea.Cmd {
 		m.navItems = removeNavItem(m.navItems, slug)
 		m.navItemsAll = removeNavItem(m.navItemsAll, slug)
 		if m.navCursor >= len(m.navItems) {
@@ -3468,7 +3468,7 @@ func (m *Model) cmdDeleteCollectionByName(slug string) tea.Cmd {
 		return nil
 	}
 	svc := m.svc
-	m.askConfirm(fmt.Sprintf("delete collection %q? (y/n)", slug), func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete collection %q? (yes/N)", slug), func() tea.Cmd {
 		return func() tea.Msg {
 			_, err := svc.DeleteCollection(context.Background(), slug, false)
 			if err != nil {
@@ -3487,7 +3487,7 @@ func (m *Model) cmdDeleteWorkspaceByName(name string) tea.Cmd {
 		return nil
 	}
 	svc := m.svc
-	m.askConfirm(fmt.Sprintf("delete workspace %q? (y/n)", name), func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete workspace %q? (yes/N)", name), func() tea.Cmd {
 		return func() tea.Msg {
 			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
 				return cmdDoneMsg{err: err.Error()}
@@ -3552,7 +3552,7 @@ func (m *Model) cmdDeleteWorkspace() tea.Cmd {
 	}
 	name := ws.name
 	svc := m.svc
-	m.askConfirm(fmt.Sprintf("delete workspace %q? (y/n)", name), func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete workspace %q? (yes/N)", name), func() tea.Cmd {
 		return func() tea.Msg {
 			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
 				return cmdDoneMsg{err: err.Error()}

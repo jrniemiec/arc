@@ -1501,9 +1501,9 @@ func (m *Model) cmdResourceRemove(name string) {
 	cfg := m.cfg
 	// Check if it's a directory for a clearer confirmation prompt.
 	resPath := filepath.Join(storefs.WorkspaceDir(cfg.DataRoot, ws), "resources", name)
-	prompt := fmt.Sprintf("delete resource %q? (y/n)", name)
+	prompt := fmt.Sprintf("delete resource %q? (yes/N)", name)
 	if info, err := os.Stat(resPath); err == nil && info.IsDir() {
-		prompt = fmt.Sprintf("delete resource folder %q and all its contents? (y/n)", name)
+		prompt = fmt.Sprintf("delete resource folder %q and all its contents? (yes/N)", name)
 	}
 	m.askConfirm(prompt, func() tea.Cmd {
 		return func() tea.Msg {
@@ -1527,7 +1527,7 @@ func (m *Model) cmdUnlinkArticle(row *wsRow) {
 
 	if row.colSlug != "" {
 		col := row.colSlug
-		m.askConfirm(fmt.Sprintf("unlink %q from collection %q? (y/n)", title, col), func() tea.Cmd {
+		m.askConfirm(fmt.Sprintf("unlink %q from collection %q? (yes/N)", title, col), func() tea.Cmd {
 			return func() tea.Msg {
 				if err := storefs.RemoveArticleFromCollection(cfg.DataRoot, col, slug); err != nil {
 					return cmdDoneMsg{err: "unlink: " + err.Error()}
@@ -1537,7 +1537,7 @@ func (m *Model) cmdUnlinkArticle(row *wsRow) {
 		})
 	} else {
 		wsName := ws.name
-		m.askConfirm(fmt.Sprintf("unlink %q from workspace %q? (y/n)", title, wsName), func() tea.Cmd {
+		m.askConfirm(fmt.Sprintf("unlink %q from workspace %q? (yes/N)", title, wsName), func() tea.Cmd {
 			return func() tea.Msg {
 				if err := storefs.RemoveArticleFromWorkspace(cfg.DataRoot, wsName, slug); err != nil {
 					return cmdDoneMsg{err: "unlink: " + err.Error()}
@@ -1556,7 +1556,7 @@ func (m *Model) cmdOutcomeRemove(name string) {
 	}
 	ws := m.chatWorkspace
 	cfg := m.cfg
-	m.askConfirm(fmt.Sprintf("delete outcome %q? (y/n)", name), func() tea.Cmd {
+	m.askConfirm(fmt.Sprintf("delete outcome %q? (yes/N)", name), func() tea.Cmd {
 		return func() tea.Msg {
 			if err := storefs.RemoveWorkspaceOutcome(cfg.DataRoot, ws, name); err != nil {
 				return cmdDoneMsg{err: "outcome-remove: " + err.Error()}

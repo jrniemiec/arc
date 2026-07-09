@@ -792,6 +792,9 @@ func (m *Model) askConfirm(msg string, fn func() tea.Cmd) {
 
 // inputPrompt returns the prompt prefix for the command input pane.
 func (m Model) inputPrompt() string {
+	if m.pendingConfirmMsg != "" {
+		return " " + m.pendingConfirmMsg + " "
+	}
 	if m.chatMode {
 		return m.chatWorkspace + "> "
 	}

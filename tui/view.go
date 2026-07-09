@@ -1701,9 +1701,6 @@ func (m Model) renderStatusLine() string {
 	if m.selectionMode {
 		return fgBold(t.Accent, truncate(" selection mode — drag to select · Cmd+C to copy · Ctrl+S or Esc to exit", m.width))
 	}
-	if m.pendingConfirmMsg != "" {
-		return fg(t.Accent, truncate(" "+m.pendingConfirmMsg, m.width))
-	}
 	if m.navFilter != "" {
 		return fg(t.Accent, truncate(" "+m.navFilter, m.width))
 	}
