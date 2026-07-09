@@ -32,6 +32,9 @@ type keyMap struct {
 	Refresh      key.Binding // Ctrl+R — refresh current view
 	Scratch      key.Binding // Ctrl+L — toggle scratch pane
 	AskX         key.Binding // Ctrl+X — toggle askX pane
+	FocusNav     key.Binding // Alt+1 — jump to nav pane
+	FocusContent key.Binding // Alt+2 — jump to content pane
+	FocusTabBar  key.Binding // Alt+3 — jump to tab bar
 	Quit         key.Binding // q / Ctrl+C
 }
 
@@ -135,6 +138,18 @@ var keys = keyMap{
 	AskX: key.NewBinding(
 		key.WithKeys("ctrl+x"),
 		key.WithHelp("ctrl+x", "toggle askX"),
+	),
+	FocusNav: key.NewBinding(
+		key.WithKeys("alt+1", "¡"), // ¡ = macOS Option+1
+		key.WithHelp("alt+1", "nav pane"),
+	),
+	FocusContent: key.NewBinding(
+		key.WithKeys("alt+2", "™"), // ™ = macOS Option+2
+		key.WithHelp("alt+2", "content pane"),
+	),
+	FocusTabBar: key.NewBinding(
+		key.WithKeys("alt+3", "£"), // £ = macOS Option+3
+		key.WithHelp("alt+3", "tab bar"),
 	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),

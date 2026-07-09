@@ -592,6 +592,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.statusMsg = "↻ refreshed"
 		return tea.Batch(batch...)
 
+	case key.Matches(msg, keys.FocusNav):
+		slog.Debug("FocusNav matched", "key", msg.String())
+		m.setFocusPane(paneNav)
+		return nil
+	case key.Matches(msg, keys.FocusContent):
+		slog.Debug("FocusContent matched", "key", msg.String())
+		m.setFocusPane(paneContent)
+		return nil
+	case key.Matches(msg, keys.FocusTabBar):
+		slog.Debug("FocusTabBar matched", "key", msg.String())
+		m.setFocusPane(paneTabBar)
+		return nil
+
 	case key.Matches(msg, keys.PaneNext):
 		// If param picker active, Tab fills selected param into input.
 		if len(m.paramItems) > 0 && m.paramIdx >= 0 {
@@ -603,32 +616,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.acceptCompletion()
 			return nil
 		}
-		m.focus = nextPane[m.focus] // Nav → Content → Command → TabBar → Nav
-		m.scratchFocused = false
-		m.askxFocused = false
-		if m.focus == paneCommand {
-			m.cursorVisible = true
-		}
-		if m.chatMode {
-			m.rebuildChatLines(m.chatBuildWidth())
-			if m.focus == paneContent {
-				m.chatBoxCursor = 0
-			}
-		}
+		m.setFocusPane(nextPane[m.focus])
 		return nil
 	case key.Matches(msg, keys.PanePrev):
-		m.focus = (m.focus + 3) % 4 // +3 mod 4 = -1 mod 4
-		m.scratchFocused = false
-		m.askxFocused = false
-		if m.focus == paneCommand {
-			m.cursorVisible = true
-		}
-		if m.chatMode {
-			m.rebuildChatLines(m.chatBuildWidth())
-			if m.focus == paneContent {
-				m.chatBoxCursor = 0
-			}
-		}
+		m.setFocusPane(prevPane[m.focus])
 		return nil
 	}
 
@@ -649,6 +640,22 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	return nil
+}
+
+// setFocusPane switches focus to the given pane and resets related state.
+func (m *Model) setFocusPane(p focusPane) {
+	m.focus = p
+	m.scratchFocused = false
+	m.askxFocused = false
+	if p == paneCommand {
+		m.cursorVisible = true
+	}
+	if m.chatMode {
+		m.rebuildChatLines(m.chatBuildWidth())
+		if p == paneContent {
+			m.chatBoxCursor = 0
+		}
+	}
 }
 
 // handleTabBarKey handles keys when the top tab bar has focus.
@@ -3745,6 +3752,7 @@ var helpGroups = []struct {
 		{"esc", "", "back / dismiss"},
 		{"tab", "", "next pane"},
 		{"shift+tab", "", "previous pane"},
+		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
 		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
 		{"h / ←", "", "previous content tab"},
 		{"r", "", "mark article as read"},
