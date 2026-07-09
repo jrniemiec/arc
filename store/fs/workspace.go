@@ -490,6 +490,9 @@ func AddFileResource(dataRoot, workspaceName, srcPath, into string) (string, err
 // Symlinks inside the source are skipped; hidden files are included.
 // Returns the relative path of the stored directory within resources/.
 func AddDirResource(dataRoot, workspaceName, srcPath, into string) (string, error) {
+	// Trailing slash means "copy contents of directory" (rsync convention).
+	copyContents := strings.HasSuffix(srcPath, "/") || strings.HasSuffix(srcPath, string(filepath.Separator))
+
 	if strings.HasPrefix(srcPath, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -506,11 +509,22 @@ func AddDirResource(dataRoot, workspaceName, srcPath, into string) (string, erro
 		return "", fmt.Errorf("%q is not a directory", srcPath)
 	}
 
-	dirname := filepath.Base(srcPath)
-	relPath := filepath.Join(into, dirname)
-	destDir := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", relPath)
+	var relPath, destDir string
+	if copyContents {
+		if into == "" {
+			return "", fmt.Errorf("trailing slash (copy contents) requires --into <dir>")
+		}
+		relPath = into
+	} else {
+		relPath = filepath.Join(into, filepath.Base(srcPath))
+	}
+	destDir = filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", relPath)
 
-	if _, err := os.Stat(destDir); err == nil {
+	if copyContents {
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return "", fmt.Errorf("create target dir: %w", err)
+		}
+	} else if _, err := os.Stat(destDir); err == nil {
 		return "", fmt.Errorf("resource %q already exists in workspace", relPath)
 	}
 
