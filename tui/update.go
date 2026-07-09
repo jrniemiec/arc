@@ -4271,19 +4271,18 @@ func (m *Model) scratchWorkspace() string {
 	return ""
 }
 
-// toggleScratch toggles the scratch pane. When opening, pre-fills input with "/scratch "
-// and selects the scratch row in the nav pane.
+// toggleScratch toggles the global scratch pane. When opening, pre-fills input with "/scratch ".
+// Always opens global scratch regardless of cursor context.
 func (m *Model) toggleScratch() {
 	if m.scratchOpen {
-		m.scratchOpen = false
-		m.scratchFocused = false
-		m.clearScratchInput()
+		m.closeScratch()
 		return
 	}
 	// Mutual exclusion: close askX if open.
 	if m.askxOpen {
 		m.closeAskX()
 	}
+	m.scratchGlobal = true
 	m.scratchOpen = true
 	m.reloadScratchLines()
 	m.scratchScrollToBottom()
@@ -4303,11 +4302,12 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 	if msg == "" {
 		// Toggle pane visibility.
 		if m.scratchOpen {
-			m.scratchOpen = false
+			m.closeScratch()
 		} else {
 			if m.askxOpen {
 				m.closeAskX()
 			}
+			m.scratchGlobal = false
 			m.scratchOpen = true
 			m.reloadScratchLines()
 			m.scratchScrollToBottom()
@@ -4324,6 +4324,7 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 		if m.askxOpen {
 			m.closeAskX()
 		}
+		m.scratchGlobal = false
 		m.scratchOpen = true
 	}
 	// Auto-scroll to bottom.
@@ -4333,8 +4334,12 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 }
 
 // reloadScratchLines reads the scratch file and caches lines + blocks for rendering.
+// Uses scratchWorkspace() unless scratchGlobal is set (always "").
 func (m *Model) reloadScratchLines() {
-	ws := m.scratchWorkspace()
+	ws := ""
+	if !m.scratchGlobal {
+		ws = m.scratchWorkspace()
+	}
 	m.scratchLoadedWs = ws
 	content, err := storefs.ReadScratch(m.cfg.DataRoot, ws)
 	if err != nil {
@@ -4415,8 +4420,9 @@ func (m *Model) reloadScratchLines() {
 }
 
 // maybeReloadScratch reloads the scratch pane if the cursor moved to a different workspace.
+// No-op when scratch was opened as global (via Ctrl+L).
 func (m *Model) maybeReloadScratch() {
-	if !m.scratchOpen {
+	if !m.scratchOpen || m.scratchGlobal {
 		return
 	}
 	ws := m.scratchWorkspace()
@@ -4541,6 +4547,7 @@ func (m *Model) closeScratch() {
 	m.scratchBlockCursor = 0
 	m.scratchCollapsed = nil
 	m.scratchLoadedWs = ""
+	m.scratchGlobal = false
 	m.clearScratchInput()
 }
 

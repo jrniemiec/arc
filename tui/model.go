@@ -385,6 +385,7 @@ type Model struct {
 	scratchBlocks      []scratchBlock // parsed blocks for block navigation
 	scratchBlockCursor int            // selected block index
 	scratchLoadedWs    string         // workspace name scratch was last loaded for ("" = global)
+	scratchGlobal      bool           // true when opened via Ctrl+L (always global, cursor won't switch)
 	scratchCollapsed   map[int]bool   // set of collapsed block indices
 	// AskX pane (split at bottom of content pane, mutually exclusive with scratch)
 	askxOpen          bool               // true when askX split is visible
