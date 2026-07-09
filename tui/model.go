@@ -85,6 +85,10 @@ const (
 	paneResource                 // full-screen resource file overlay
 )
 
+// Tab rotation order: Nav → Content → Command → TabBar → Nav
+var nextPane = [4]focusPane{paneNav, paneContent, paneCommand, paneTabBar}
+var prevPane = [4]focusPane{paneCommand, paneTabBar, paneNav, paneContent}
+
 // contentTab identifies the active sub-tab in the content pane.
 type contentTab int
 

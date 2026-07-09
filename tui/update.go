@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
@@ -602,7 +603,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.acceptCompletion()
 			return nil
 		}
-		m.focus = (m.focus + 1) % 4 // TabBar → Nav → Content → Command → TabBar
+		m.focus = nextPane[m.focus] // Nav → Content → Command → TabBar → Nav
 		m.scratchFocused = false
 		m.askxFocused = false
 		if m.focus == paneCommand {
