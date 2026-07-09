@@ -1147,10 +1147,12 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		return m.chatSaveResource(fullArg)
 
 	case "/scratch":
-		return m.cmdScratch(fullArg)
+		global := parts[0] == "/Scratch"
+		return m.cmdScratch(fullArg, global)
 
 	case "/askx":
-		return m.cmdAskX(fullArg)
+		global := parts[0] == "/AskX"
+		return m.cmdAskX(fullArg, global)
 
 	default:
 		// Fall through to global command dispatcher so /log, /stats, /help etc. work.

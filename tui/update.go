@@ -874,6 +874,7 @@ func (m *Model) navCursorUp() tea.Cmd {
 			m.wsCursor--
 			m.clampWsScroll()
 			m.maybeReloadScratch()
+			m.maybeCloseAskX()
 			return m.triggerWorkspaceChatLoad()
 		}
 	}
@@ -900,6 +901,7 @@ func (m *Model) navCursorDown() tea.Cmd {
 			m.wsCursor++
 			m.clampWsScroll()
 			m.maybeReloadScratch()
+			m.maybeCloseAskX()
 			return m.triggerWorkspaceChatLoad()
 		}
 	}
@@ -931,6 +933,7 @@ func (m *Model) navPageUp() tea.Cmd {
 		}
 		m.clampWsScroll()
 		m.maybeReloadScratch()
+		m.maybeCloseAskX()
 	}
 	return nil
 }
@@ -969,6 +972,7 @@ func (m *Model) navPageDown() tea.Cmd {
 		}
 		m.clampWsScroll()
 		m.maybeReloadScratch()
+		m.maybeCloseAskX()
 	}
 	return nil
 }
@@ -988,6 +992,7 @@ func (m *Model) navHome() tea.Cmd {
 		m.wsCursor = 0
 		m.clampWsScroll()
 		m.maybeReloadScratch()
+		m.maybeCloseAskX()
 	}
 	return nil
 }
@@ -1012,6 +1017,7 @@ func (m *Model) navEnd() tea.Cmd {
 			m.wsCursor = len(m.wsRows) - 1
 			m.clampWsScroll()
 			m.maybeReloadScratch()
+			m.maybeCloseAskX()
 		}
 	}
 	return nil
@@ -1088,6 +1094,7 @@ func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 	if m.chatMode && sub != navSubTabWorkspaces {
 		m.exitChatMode()
 	}
+	m.maybeCloseAskX()
 	m.navSubTab = sub
 	m.navRowCursor = 0
 	m.navRowScroll = 0
@@ -1485,6 +1492,21 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 
+	// AskX pane-level shortcuts (V view) — work whenever askX is visible.
+	if m.askxOpen && msg.Type == tea.KeyRunes && msg.String() == "V" {
+		content := m.askxAsText()
+		if content == "" {
+			m.setStatusError("askX is empty")
+			return nil
+		}
+		name := "askX"
+		if ws := m.askxWorkspace(); ws != "" {
+			name = ws + "/askX"
+		}
+		m.openResourceOverlay(name, content)
+		return nil
+	}
+
 	// When scratch pane is focused, route scroll/view/edit keys to scratch.
 	if m.scratchOpen && m.scratchFocused {
 		return m.handleScratchKey(msg)
@@ -1813,6 +1835,16 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		// Completion list: Enter on a no-arg command executes; on commands with args, fills like Tab.
 		if len(m.cmdComplete) > 0 && m.cmdCompleteIdx >= 0 {
 			c := m.cmdComplete[m.cmdCompleteIdx]
+			inputVal := strings.TrimSpace(m.input.Value())
+			// If input is already a full command match (e.g. "/Scratch" matches "/scratch"),
+			// dispatch directly with the original input to preserve casing.
+			if strings.EqualFold(inputVal, c.cmd) {
+				m.cmdComplete = nil
+				m.cmdCompleteIdx = -1
+				m.input.SetValue("")
+				m.syncInputHeight()
+				return m.dispatchCommand(inputVal)
+			}
 			if c.arg == "" {
 				// No arg needed — execute immediately.
 				m.cmdComplete = nil
@@ -1894,6 +1926,8 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			m.input.CursorEnd()
 		}
 		m.updateCompletions()
+		m.statusMsg = ""
+		m.statusErr = false
 		return cmd
 	}
 	return nil
@@ -2175,11 +2209,11 @@ func (m *Model) updateCompletions() {
 		return
 	}
 
-	// Completion mode: "/prefix" with no space
-	prefix := strings.ToLower(val)
+	// Completion mode: "/prefix" with no space.
+	// Use case-sensitive matching so /S shows /Scratch but not /scratch.
 	var filtered []cmdCompletion
 	for _, c := range m.allCommands() {
-		if strings.HasPrefix(c.cmd, prefix) {
+		if strings.HasPrefix(c.cmd, val) {
 			filtered = append(filtered, c)
 		}
 	}
@@ -2395,9 +2429,11 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		m.setStatusLines(m.helpLines(arg))
 		return nil
 	case "/scratch":
-		return m.cmdScratch(arg)
+		global := parts[0] == "/Scratch"
+		return m.cmdScratch(arg, global)
 	case "/askx":
-		return m.cmdAskX(arg)
+		global := parts[0] == "/AskX"
+		return m.cmdAskX(arg, global)
 	case "/article":
 		return m.dispatchQualified(navSubTabArticles, arg)
 	case "/collection":
@@ -3816,6 +3852,10 @@ var helpGroups = []struct {
 		{"q / ctrl+c", "", "quit"},
 	}},
 	{"system", []cmdCompletion{
+		{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
+		{"/Scratch", "[msg]", "global scratch (append / toggle)"},
+		{"/askX", "<prompt>", "workspace-local LLM query"},
+		{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
 		{"/config", "", "show resolved configuration"},
 		{"/config-edit", "", "open config file in $EDITOR"},
 		{"/tags", "", "list all tags"},
@@ -4204,6 +4244,7 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 		if idx >= 0 && idx < len(m.wsRows) {
 			m.wsCursor = idx
 			m.maybeReloadScratch()
+			m.maybeCloseAskX()
 			row := m.wsRows[idx]
 			switch row.kind {
 			case wsRowWorkspace:
@@ -4350,8 +4391,8 @@ func (m *Model) toggleScratch() {
 }
 
 // cmdScratch handles /scratch [msg]. Empty msg toggles pane; non-empty appends.
-func (m *Model) cmdScratch(msg string) tea.Cmd {
-	ws := m.scratchWorkspace()
+// global=true targets the global scratch; global=false uses workspace-local.
+func (m *Model) cmdScratch(msg string, global bool) tea.Cmd {
 	if msg == "" {
 		// Toggle pane visibility.
 		if m.scratchOpen {
@@ -4360,7 +4401,7 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 			if m.askxOpen {
 				m.closeAskX()
 			}
-			m.scratchGlobal = false
+			m.scratchGlobal = global
 			m.scratchOpen = true
 			m.reloadScratchLines()
 			m.scratchScrollToBottom()
@@ -4368,6 +4409,10 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 		return nil
 	}
 	// Append message.
+	if !m.scratchOpen {
+		m.scratchGlobal = global
+	}
+	ws := m.scratchWorkspace()
 	if err := storefs.AppendScratch(m.cfg.DataRoot, ws, msg); err != nil {
 		m.setStatusError("scratch: " + err.Error())
 		return nil
@@ -4377,7 +4422,6 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 		if m.askxOpen {
 			m.closeAskX()
 		}
-		m.scratchGlobal = false
 		m.scratchOpen = true
 	}
 	// Auto-scroll to bottom.
@@ -4484,6 +4528,15 @@ func (m *Model) maybeReloadScratch() {
 	}
 	m.reloadScratchLines()
 	m.scratchScrollToBottom()
+}
+
+// maybeCloseAskX closes the workspace-local askX pane when the cursor moves away.
+// No-op when askX is global (opened via Ctrl+X) or not open.
+func (m *Model) maybeCloseAskX() {
+	if !m.askxOpen || m.askxGlobal {
+		return
+	}
+	m.closeAskX()
 }
 
 // scratchBlockCursorSkipSep advances the block cursor past date separators.
@@ -4605,9 +4658,9 @@ func (m *Model) closeScratch() {
 	m.clearScratchInput()
 }
 
-// clearScratchInput clears the command input if it starts with "/scratch".
+// clearScratchInput clears the command input if it starts with "/scratch" or "/Scratch".
 func (m *Model) clearScratchInput() {
-	if strings.HasPrefix(m.input.Value(), "/scratch") {
+	if strings.HasPrefix(m.input.Value(), "/scratch") || strings.HasPrefix(m.input.Value(), "/Scratch") {
 		m.input.SetValue("")
 		m.input.CursorEnd()
 		m.syncInputHeight()
@@ -4690,7 +4743,11 @@ func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
-		m.input.SetValue("/scratch ")
+		if m.scratchGlobal {
+			m.input.SetValue("/Scratch ")
+		} else {
+			m.input.SetValue("/scratch ")
+		}
 		m.input.CursorEnd()
 	}
 	return nil

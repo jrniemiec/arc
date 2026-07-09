@@ -137,7 +137,7 @@ var keys = keyMap{
 	),
 	AskX: key.NewBinding(
 		key.WithKeys("ctrl+x"),
-		key.WithHelp("ctrl+x", "toggle askX"),
+		key.WithHelp("ctrl+x", "toggle global askX"),
 	),
 	FocusNav: key.NewBinding(
 		key.WithKeys("alt+1", "¡"), // ¡ = macOS Option+1

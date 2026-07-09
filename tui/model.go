@@ -388,6 +388,7 @@ type Model struct {
 	scratchGlobal      bool           // true when opened via Ctrl+L (always global, cursor won't switch)
 	scratchCollapsed   map[int]bool   // set of collapsed block indices
 	// AskX pane (split at bottom of content pane, mutually exclusive with scratch)
+	askxGlobal        bool               // true when opened via Ctrl+X (always global, ignores workspace)
 	askxOpen          bool               // true when askX split is visible
 	askxFocused       bool               // true when askX region has focus (within paneContent)
 	askxScroll        int                // scroll offset into askxDisplayLines
@@ -431,8 +432,10 @@ var globalCommands = []cmdCompletion{
 	{"/article", "<cmd>", "article commands (list, search, ingest, …)"},
 	{"/collection", "<cmd>", "collection commands (list, show, …)"},
 	{"/workspace", "<cmd>", "workspace commands (list, new, delete, …)"},
-	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
-	{"/askX", "<prompt>", "single-shot LLM query (no history)"},
+	{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
+	{"/Scratch", "[msg]", "global scratch (append / toggle)"},
+	{"/askX", "<prompt>", "workspace-local LLM query"},
+	{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
 	{"/help", "[group]", "show command reference"},
 	{"/config", "", "show resolved configuration"},
 	{"/config-edit", "", "open config file in $EDITOR"},
@@ -495,8 +498,10 @@ var chatCommands = []cmdCompletion{
 	{"/resource-edit", "<name>", "open resource file in $EDITOR"},
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
-	{"/scratch", "[msg]", "append to scratch / toggle scratch pane"},
-	{"/askX", "<prompt>", "single-shot LLM query (no history)"},
+	{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
+	{"/Scratch", "[msg]", "global scratch (append / toggle)"},
+	{"/askX", "<prompt>", "workspace-local LLM query"},
+	{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
 	{"/article", "<cmd>", "article commands (list, search, ingest, …)"},
 	{"/collection", "<cmd>", "collection commands (list, show, …)"},
 	{"/workspace", "<cmd>", "workspace commands (list, new, delete, …)"},

@@ -21,11 +21,10 @@ import (
 
 // ── Toggle & lifecycle ──────────────────────────────────────────────────────
 
-// toggleAskX toggles the askX pane. When opening, pre-fills input with "/askX ".
+// toggleAskX toggles the global askX pane (Ctrl+X). Pre-fills input with "/AskX ".
 func (m *Model) toggleAskX() {
 	if m.askxOpen {
-		m.askxOpen = false
-		m.askxFocused = false
+		m.closeAskX()
 		m.clearAskXInput()
 		return
 	}
@@ -33,12 +32,13 @@ func (m *Model) toggleAskX() {
 	if m.scratchOpen {
 		m.closeScratch()
 	}
+	m.askxGlobal = true
 	m.askxOpen = true
 	m.loadAskXHistory()
 	m.rebuildAskXLines()
 	m.focus = paneCommand
 	m.cursorVisible = true
-	m.input.SetValue("/askX ")
+	m.input.SetValue("/AskX ")
 	m.input.CursorEnd()
 	m.cmdComplete = nil
 	m.cmdCompleteIdx = -1
@@ -54,6 +54,7 @@ func (m *Model) closeAskX() {
 	}
 	m.askxOpen = false
 	m.askxFocused = false
+	m.askxGlobal = false
 	m.askxScroll = 0
 	m.askxMsgs = nil
 	m.askxDisplayLines = nil
@@ -61,9 +62,9 @@ func (m *Model) closeAskX() {
 	m.askxStreamBuf = ""
 }
 
-// clearAskXInput clears the input if it has the /askX prefix.
+// clearAskXInput clears the input if it has the /askX or /AskX prefix.
 func (m *Model) clearAskXInput() {
-	if strings.HasPrefix(m.input.Value(), "/askX") || strings.HasPrefix(m.input.Value(), "/askx") {
+	if strings.HasPrefix(m.input.Value(), "/askX") || strings.HasPrefix(m.input.Value(), "/askx") || strings.HasPrefix(m.input.Value(), "/AskX") {
 		m.input.SetValue("")
 		m.input.CursorEnd()
 		m.syncInputHeight()
@@ -71,8 +72,43 @@ func (m *Model) clearAskXInput() {
 }
 
 // askxWorkspace returns the workspace name for askX file operations.
+// Returns "" (global) when askxGlobal is set (opened via Ctrl+X).
 func (m *Model) askxWorkspace() string {
-	return m.scratchWorkspace() // same logic as scratch
+	if m.askxGlobal {
+		return ""
+	}
+	// Nav cursor workspace takes priority — it reflects what the user is looking at.
+	if m.navSubTab == navSubTabWorkspaces {
+		if ws := m.selectedWorkspace(); ws != nil {
+			return ws.name
+		}
+	}
+	// Fall back to chatWorkspace when not on workspaces tab.
+	if m.chatMode && m.chatWorkspace != "" {
+		return m.chatWorkspace
+	}
+	return ""
+}
+
+// askxAsText formats askX message history as plain text for the resource overlay.
+func (m *Model) askxAsText() string {
+	if len(m.askxMsgs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, msg := range m.askxMsgs {
+		if i > 0 {
+			b.WriteString("\n---\n\n")
+		}
+		label := "User"
+		if msg.Role == "assistant" {
+			label = "Assistant"
+		}
+		b.WriteString("## " + label + "\n\n")
+		b.WriteString(msg.Content)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // askxFilePath returns the path to the askX file.
@@ -221,16 +257,18 @@ func expandHome(path string) string {
 // ── Command ─────────────────────────────────────────────────────────────────
 
 // cmdAskX handles /askX <prompt>. Empty prompt toggles pane; non-empty sends query.
-func (m *Model) cmdAskX(prompt string) tea.Cmd {
+// global=true targets the global askX context; global=false uses workspace-local.
+func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 	if prompt == "" {
 		// Toggle pane visibility.
 		if m.askxOpen {
-			m.askxOpen = false
+			m.closeAskX()
 		} else {
 			// Mutual exclusion: close scratch.
 			if m.scratchOpen {
 				m.closeScratch()
 			}
+			m.askxGlobal = global
 			m.askxOpen = true
 			m.loadAskXHistory()
 			m.rebuildAskXLines()
@@ -241,6 +279,11 @@ func (m *Model) cmdAskX(prompt string) tea.Cmd {
 	if m.askxStreaming {
 		m.setStatusError("askX: already streaming")
 		return nil
+	}
+
+	// Set global flag early so askxWorkspace() resolves correctly.
+	if !m.askxOpen {
+		m.askxGlobal = global
 	}
 
 	// Parse @tokens (profile override, file inclusions).
@@ -792,7 +835,11 @@ func (m *Model) handleAskXKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
-		m.input.SetValue("/askX ")
+		if m.askxGlobal {
+			m.input.SetValue("/AskX ")
+		} else {
+			m.input.SetValue("/askX ")
+		}
 		m.input.CursorEnd()
 	}
 	return nil

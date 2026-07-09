@@ -69,6 +69,10 @@ func CreateWorkspace(dataRoot, name, description string, chatCfg config.ChatConf
 	if err := EnsureScratch(dataRoot, name); err != nil {
 		return err
 	}
+	// Create empty askX file.
+	if err := EnsureAskX(dataRoot, name); err != nil {
+		return err
+	}
 	return WriteChatConfig(dataRoot, name, chatCfg)
 }
 
@@ -192,6 +196,15 @@ func AskXPath(dataRoot, workspace string) string {
 		return filepath.Join(WorkspaceDir(dataRoot, workspace), AskXName(workspace))
 	}
 	return filepath.Join(dataRoot, "askx.json")
+}
+
+// EnsureAskX creates the askX file with empty history if it does not exist.
+func EnsureAskX(dataRoot, workspace string) error {
+	path := AskXPath(dataRoot, workspace)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	return SaveAskXHistory(dataRoot, workspace, &AskXHistory{})
 }
 
 // ReadAskXHistory reads the askX history from JSON. Returns empty history if missing.
