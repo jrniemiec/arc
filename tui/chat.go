@@ -1442,6 +1442,36 @@ func (m *Model) cmdResourceAdd(rawArgs string) tea.Cmd {
 				expanded = filepath.Join(home, expanded[2:])
 			}
 		}
+
+		// Glob expansion: if path contains wildcard characters, expand and add each match.
+		if strings.ContainsAny(expanded, "*?[") {
+			matches, err := filepath.Glob(expanded)
+			if err != nil {
+				return cmdDoneMsg{err: "resource-add: invalid glob pattern: " + err.Error()}
+			}
+			if len(matches) == 0 {
+				return cmdDoneMsg{err: "resource-add: no files match " + path}
+			}
+			var names []string
+			for _, match := range matches {
+				info, err := os.Stat(match)
+				if err != nil {
+					return cmdDoneMsg{err: "resource-add: " + err.Error()}
+				}
+				var name string
+				if info.IsDir() {
+					name, err = storefs.AddDirResource(cfg.DataRoot, ws, match, into)
+				} else {
+					name, err = storefs.AddFileResource(cfg.DataRoot, ws, match, into)
+				}
+				if err != nil {
+					return cmdDoneMsg{err: "resource-add: " + err.Error()}
+				}
+				names = append(names, name)
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ %d resources added to workspace %q: %s", len(names), ws, strings.Join(names, ", ")), reloadWorkspaces: true}
+		}
+
 		info, err := os.Stat(expanded)
 		if err != nil {
 			return cmdDoneMsg{err: "resource-add: " + err.Error()}

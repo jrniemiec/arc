@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ func historyPath(dataRoot string) string {
 func loadCommandHistory(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		slog.Debug("loadCommandHistory: read failed", "path", path, "err", err)
 		return nil
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
@@ -30,12 +32,15 @@ func loadCommandHistory(path string) []string {
 			out = append(out, l)
 		}
 	}
-	return dedupeHistory(out)
+	result := dedupeHistory(out)
+	slog.Debug("loadCommandHistory", "path", path, "rawLines", len(lines), "slashCmds", len(out), "afterDedup", len(result))
+	return result
 }
 
 // saveCommandHistory filters to /commands, deduplicates, caps at historyMaxLines,
 // and writes to path. Errors are silently ignored — history is best-effort.
 func saveCommandHistory(path string, history []string) {
+	slog.Debug("saveCommandHistory", "path", path, "totalEntries", len(history))
 	var cmds []string
 	for _, h := range history {
 		if strings.HasPrefix(h, "/") {
@@ -46,6 +51,7 @@ func saveCommandHistory(path string, history []string) {
 	if len(cmds) > historyMaxLines {
 		cmds = cmds[len(cmds)-historyMaxLines:]
 	}
+	slog.Debug("saveCommandHistory: writing", "slashCmds", len(cmds))
 	_ = os.WriteFile(path, []byte(strings.Join(cmds, "\n")+"\n"), 0o644)
 }
 
