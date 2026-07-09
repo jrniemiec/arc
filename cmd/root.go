@@ -6,14 +6,12 @@ import (
 	"os"
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/internal/clog"
 	"github.com/jrniemiec/arc/library"
 	"github.com/jrniemiec/arc/service"
-	arctui "github.com/jrniemiec/arc/tui"
 )
 
 // contextKey is used to store values in cobra's context.
@@ -55,23 +53,7 @@ Examples:
   arc collections suggest --apply`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !noTUI && isTTY(os.Stdout) {
-			themeMode, _ := cmd.Flags().GetString("theme")
-			svc := svcFrom(cmd)
-			cfg := cfgFrom(cmd)
-			m := arctui.New(svc, cfg, themeMode)
-			cleanup := arctui.SetupTerminal()
-			defer cleanup()
-			p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
-			final, err := p.Run()
-			if fm, ok := final.(arctui.Model); ok {
-				fm.Cleanup()
-				arctui.CloseChromeWindow(fm.ChromeWindowID())
-				fm.SaveHistory()
-			}
-			if err != nil {
-				return fmt.Errorf("tui: %w", err)
-			}
-			return nil
+			return runTUI(cmd)
 		}
 		return cmd.Help()
 	},

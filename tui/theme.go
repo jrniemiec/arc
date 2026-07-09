@@ -73,24 +73,24 @@ var Nord = Theme{
 
 	NavText:   "#D8DEE9", // nord4  — soft white
 	NavGroup:  "#81A1C1", // nord9  — steel blue
-	NavDimmed: "#4C566A", // nord3  — dark gray
+	NavDimmed: "#8890A0", // mid-gray (was #4C566A nord3)
 	NavMark:   "#A3BE8C", // nord14 — green
 
 	ContentTitle:  "#C79BFF", // purple
 	ContentText:   "#D8DEE9", // nord4  — soft white
-	ContentDimmed: "#4C566A", // nord3  — dark gray
+	ContentDimmed: "#8890A0", // mid-gray (was #4C566A nord3)
 
 	ContentTabActive:   "#D8DEE9", // soft white
-	ContentTabInactive: "#4C566A", // dark gray
+	ContentTabInactive: "#8890A0", // mid-gray (was #4C566A nord3)
 
 	InputPrompt: "#81A1C1", // nord9
 	InputText:   "#D8DEE9", // nord4
 
-	StatusText: "#4C566A", // nord3
+	StatusText: "#8890A0", // mid-gray (was #4C566A nord3)
 	Spinner:    "#88C0D0", // nord8  — light cyan
 	Accent:     "#88C0D0", // nord8
 	BoxBorder:  "#88C0D0", // nord8
-	Dimmed:     "#4C566A", // nord3
+	Dimmed:     "#8890A0", // mid-gray (was #4C566A nord3)
 	Favorite:   "#F5A623", // amber
 
 	StatusError: "#BF616A", // nord11 — red
@@ -99,7 +99,7 @@ var Nord = Theme{
 	ChatUser:      "#A3BE8C", // nord14 — green
 	ChatAssistant: "#D8DEE9", // nord4 — soft white
 	ChatHeader:    "#88C0D0", // nord8 — cyan for headings
-	ChatQuote:     "#4C566A", // nord3 — dimmed for blockquotes
+	ChatQuote:     "#8890A0", // mid-gray (was #4C566A nord3) — dimmed for blockquotes
 	ChatCode:      "#EBCB8B", // nord13 — yellow for code
 }
 
@@ -111,24 +111,24 @@ var ClaudeCode = Theme{
 
 	NavText:   "#D7D7D7",
 	NavGroup:  "#7AB4E8", // steel blue
-	NavDimmed: "#505050",
+	NavDimmed: "#8890A0", // mid-gray (was #505050)
 	NavMark:   "#88C0D0", // cyan
 
 	ContentTitle:  "#C79BFF",
 	ContentText:   "#D7D7D7",
-	ContentDimmed: "#505050",
+	ContentDimmed: "#8890A0", // mid-gray (was #505050)
 
 	ContentTabActive:   "#D7D7D7",
-	ContentTabInactive: "#505050",
+	ContentTabInactive: "#8890A0", // mid-gray (was #505050)
 
 	InputPrompt: "#7AB4E8",
 	InputText:   "#D7D7D7",
 
-	StatusText: "#505050",
+	StatusText: "#8890A0", // mid-gray (was #505050)
 	Spinner:    "#6598FF",
 	Accent:     "#6598FF",
 	BoxBorder:  "#6598FF",
-	Dimmed:     "#505050",
+	Dimmed:     "#8890A0", // mid-gray (was #505050)
 	Favorite:   "#F5A623", // amber
 
 	StatusError: "#E06C75", // red
@@ -137,7 +137,7 @@ var ClaudeCode = Theme{
 	ChatUser:      "#88C0D0",
 	ChatAssistant: "#D7D7D7",
 	ChatHeader:    "#7AB4E8", // steel blue for headings
-	ChatQuote:     "#505050", // dimmed for blockquotes
+	ChatQuote:     "#8890A0", // mid-gray (was #505050) — dimmed for blockquotes
 	ChatCode:      "#E5C07B", // warm yellow for code
 }
 

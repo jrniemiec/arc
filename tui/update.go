@@ -84,16 +84,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.navItemsAll = msg.items
 			m.navCursor = 0
 			m.navScroll = 0
+			// Restore article cursor from saved state.
+			if slug := m.restoredState.Article; slug != "" {
+				for i, item := range m.navItems {
+					if item.id == slug {
+						m.navCursor = i
+						break
+					}
+				}
+				m.restoredState.Article = ""
+			}
 			// Rebuild wsRows now that article titles are available.
 			if m.workspacesLoaded {
 				m.wsRows = m.buildWsRows()
 			}
 		}
 		m.navLoaded = true
-		// Trigger content load for the first item.
-		if len(m.navItems) > 0 && m.navItems[0].root != "" {
+		// Trigger content load for the selected item.
+		if m.navCursor >= 0 && m.navCursor < len(m.navItems) && m.navItems[m.navCursor].root != "" {
 			m.contentLoading = true
-			cmds = append(cmds, loadContent(m.navItems[0].root, m.cfg.PreferredStyles, m.cfg.PreferredModels))
+			cmds = append(cmds, loadContent(m.navItems[m.navCursor].root, m.cfg.PreferredStyles, m.cfg.PreferredModels))
 		}
 
 	case collectionsLoadedMsg:
@@ -117,6 +127,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.navRowsAll = rows
 			m.navRowCursor = 0
 			m.navRowScroll = 0
+			// Restore collection cursor from saved state.
+			if slug := m.restoredState.Collection; slug != "" {
+				for i, r := range m.navRows {
+					if r.kind == rowCollection && r.colSlug == slug {
+						m.navRowCursor = i
+						break
+					}
+				}
+				m.restoredState.Collection = ""
+			}
 		}
 		m.collectionsLoaded = true
 
@@ -173,7 +193,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspaceItemsAll = msg.items
 			m.workspaceItems = msg.items
 			m.wsRows = m.buildWsRows()
-			// Clamp cursor/scroll to new bounds instead of resetting.
+			// Restore workspace cursor from saved state, or clamp to bounds.
+			if name := m.restoredState.Workspace; name != "" {
+				for i, row := range m.wsRows {
+					if row.kind == wsRowWorkspace && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) && m.workspaceItems[row.wsIdx].name == name {
+						m.wsCursor = i
+						break
+					}
+				}
+				m.restoredState.Workspace = ""
+			}
 			if m.wsCursor >= len(m.wsRows) {
 				m.wsCursor = len(m.wsRows) - 1
 			}
@@ -1351,6 +1380,41 @@ func (m *Model) openEditorInTerminal(editor, filePath, label string) {
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
+	// Scratch pane-level shortcuts (V view, E edit) — work whenever scratch is visible.
+	if m.scratchOpen && msg.Type == tea.KeyRunes {
+		switch msg.String() {
+		case "V":
+			content, err := storefs.ReadScratch(m.cfg.DataRoot, m.scratchWorkspace())
+			if err != nil {
+				m.setStatusError("scratch: " + err.Error())
+				return nil
+			}
+			if content == "" {
+				m.setStatusError("scratch is empty")
+				return nil
+			}
+			name := "scratch"
+			if ws := m.scratchWorkspace(); ws != "" {
+				name = ws + "/scratch"
+			}
+			m.openResourceOverlay(name, content)
+			return nil
+		case "E":
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				m.setStatusError("$EDITOR is not set")
+				return nil
+			}
+			path := m.scratchFilePath()
+			label := "scratch"
+			if ws := m.scratchWorkspace(); ws != "" {
+				label = ws + "/scratch"
+			}
+			m.openEditorInTerminal(editor, path, label)
+			return nil
+		}
+	}
+
 	// When scratch pane is focused, route scroll/view/edit keys to scratch.
 	if m.scratchOpen && m.scratchFocused {
 		return m.handleScratchKey(msg)
@@ -4198,6 +4262,7 @@ func (m *Model) toggleScratch() {
 	}
 	m.scratchOpen = true
 	m.reloadScratchLines()
+	m.scratchScrollToBottom()
 	m.focus = paneCommand
 	m.cursorVisible = true
 	m.input.SetValue("/scratch ")
@@ -4221,6 +4286,7 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 			}
 			m.scratchOpen = true
 			m.reloadScratchLines()
+			m.scratchScrollToBottom()
 		}
 		return nil
 	}

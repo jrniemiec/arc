@@ -425,7 +425,8 @@ func (m Model) renderScratchPane(height, width int) []string {
 	if ws != "" {
 		label = " Scratch [" + ws + "] "
 	}
-	sepLen := width - len([]rune(label))
+	hints := " V view · E edit "
+	sepLen := width - len([]rune(label)) - len([]rune(hints))
 	if sepLen < 0 {
 		sepLen = 0
 	}
@@ -435,7 +436,7 @@ func (m Model) renderScratchPane(height, width int) []string {
 	if m.scratchFocused && m.focus == paneContent {
 		headerColor = t.Accent
 	}
-	header := fg(headerColor, strings.Repeat("─", leftSep)+label+strings.Repeat("─", rightSep))
+	header := fg(headerColor, strings.Repeat("─", leftSep)+label+strings.Repeat("─", rightSep)+hints)
 	lines = append(lines, header)
 
 	viewH := height - 1 // minus header

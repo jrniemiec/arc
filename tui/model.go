@@ -332,6 +332,9 @@ type Model struct {
 	paramItems []cmdCompletion // candidate values (cmd=value to insert, desc=display hint)
 	paramIdx   int             // -1 = none highlighted; ≥0 = index
 
+	// Restored state — loaded from disk in New(), consumed once after async data loads.
+	restoredState tuiState
+
 	// Nav filter
 	navItemsAll []navItem // unfiltered copy; set on first load
 	navFilter   string    // active filter description ("" = no filter)
@@ -925,14 +928,18 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 	ta.FocusedStyle = fullReset
 	ta.BlurredStyle = fullReset
 
+	restored := loadTUIState(cfg.DataRoot)
+
 	sendFn := func(tea.Msg) {} // placeholder, overwritten by SetProgramSend
 	m := Model{
-		activeTab:       tabLibrary,
+		activeTab:       tabFromString(restored.ActiveTab),
+		navSubTab:       subTabFromString(restored.SubTab),
 		focus:           paneNav,
 		themeMode:       themeMode,
 		cursorVisible:   true,
 		svc:             svc,
 		cfg:             cfg,
+		restoredState:   restored,
 		input:           ta,
 		inputHistory:    loadCommandHistory(historyPath(cfg.DataRoot)),
 		inputHistoryIdx: -1,
@@ -956,6 +963,32 @@ func (m *Model) SetProgramSend(send func(tea.Msg)) {
 // SaveHistory persists the command history to disk. Call after p.Run() exits.
 func (m Model) SaveHistory() {
 	saveCommandHistory(historyPath(m.cfg.DataRoot), m.inputHistory)
+}
+
+// SaveState persists UI selection state to disk. Call after p.Run() exits.
+func (m Model) SaveState() {
+	s := tuiState{
+		ActiveTab: tabToString(m.activeTab),
+		SubTab:    subTabToString(m.navSubTab),
+	}
+// Store currently selected workspace name.
+	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
+		wsIdx := m.wsRows[m.wsCursor].wsIdx
+		if wsIdx >= 0 && wsIdx < len(m.workspaceItems) {
+			s.Workspace = m.workspaceItems[wsIdx].name
+		}
+	}
+	// Store currently selected article slug.
+	if m.navCursor >= 0 && m.navCursor < len(m.navItems) {
+		s.Article = m.navItems[m.navCursor].id
+	}
+	// Store currently selected collection slug.
+	if m.navRowCursor >= 0 && m.navRowCursor < len(m.navRows) {
+		if m.navRows[m.navRowCursor].kind == rowCollection {
+			s.Collection = m.navRows[m.navRowCursor].colSlug
+		}
+	}
+	saveTUIState(m.cfg.DataRoot, s)
 }
 
 // Cleanup releases resources that outlive the bubbletea program.
@@ -1054,6 +1087,9 @@ func (m Model) Init() tea.Cmd {
 	}
 	if m.svc != nil {
 		cmds = append(cmds, loadNav(m.svc), loadStats(m.svc), loadWorkspaces(m.svc))
+		if m.navSubTab == navSubTabCollections {
+			cmds = append(cmds, loadCollectionsTree(m.svc))
+		}
 	}
 	return tea.Batch(cmds...)
 }
