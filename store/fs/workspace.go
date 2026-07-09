@@ -156,6 +156,12 @@ func AppendScratch(dataRoot, workspace, msg string) error {
 	return err
 }
 
+// ClearScratch truncates the scratch file to zero length.
+func ClearScratch(dataRoot, workspace string) error {
+	path := ScratchPath(dataRoot, workspace)
+	return os.WriteFile(path, nil, 0644)
+}
+
 // ── AskX helpers ────────────────────────────────────────────────────────────
 
 // AskXMessage is one turn in an askX conversation (user or assistant).

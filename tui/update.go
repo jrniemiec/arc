@@ -259,6 +259,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = paneNav
 			cmds = append(cmds, loadWorkspaces(m.svc))
 		}
+		if m.scratchOpen {
+			m.reloadScratchLines()
+		}
 		if msg.resetChatEngine && msg.resetChatWorkspace != "" &&
 			m.chatMode && m.chatWorkspace == msg.resetChatWorkspace {
 			m.chatEngine = nil
@@ -715,6 +718,9 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				case wsRowOutcome:
 					m.cmdOutcomeRemove(row.outcomeName)
 					return nil
+				case wsRowScratch:
+					m.cmdClearScratch(row.wsIdx)
+					return nil
 				case wsRowArticle:
 					return m.cmdDeleteArticle()
 				case wsRowWorkspace:
@@ -732,16 +738,27 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Open):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
-			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome || row.kind == wsRowScratch) {
-				return m.openWsFileExternal()
+			if row != nil {
+				if row.kind == wsRowScratch {
+					m.openScratchPaneForRow(row)
+					return nil
+				}
+				if row.kind == wsRowResource || row.kind == wsRowOutcome {
+					return m.openWsFileExternal()
+				}
 			}
 		}
 		return m.openCurrentURL()
 	case key.Matches(msg, keys.View):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
-			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome || row.kind == wsRowScratch) {
-				return m.viewWsFileInTerminal()
+			if row != nil {
+				if row.kind == wsRowScratch {
+					return m.openScratchOverlay(row.wsIdx)
+				}
+				if row.kind == wsRowResource || row.kind == wsRowOutcome {
+					return m.viewWsFileInTerminal()
+				}
 			}
 		}
 		return m.cmdViewArticle()
@@ -825,6 +842,7 @@ func (m *Model) navCursorUp() tea.Cmd {
 		if m.wsCursor > 0 {
 			m.wsCursor--
 			m.clampWsScroll()
+			m.maybeReloadScratch()
 			return m.triggerWorkspaceChatLoad()
 		}
 	}
@@ -850,6 +868,7 @@ func (m *Model) navCursorDown() tea.Cmd {
 		if m.wsCursor < len(m.wsRows)-1 {
 			m.wsCursor++
 			m.clampWsScroll()
+			m.maybeReloadScratch()
 			return m.triggerWorkspaceChatLoad()
 		}
 	}
@@ -880,6 +899,7 @@ func (m *Model) navPageUp() tea.Cmd {
 			m.wsCursor = 0
 		}
 		m.clampWsScroll()
+		m.maybeReloadScratch()
 	}
 	return nil
 }
@@ -917,6 +937,7 @@ func (m *Model) navPageDown() tea.Cmd {
 			m.wsCursor = 0
 		}
 		m.clampWsScroll()
+		m.maybeReloadScratch()
 	}
 	return nil
 }
@@ -935,6 +956,7 @@ func (m *Model) navHome() tea.Cmd {
 	case navSubTabWorkspaces:
 		m.wsCursor = 0
 		m.clampWsScroll()
+		m.maybeReloadScratch()
 	}
 	return nil
 }
@@ -958,6 +980,7 @@ func (m *Model) navEnd() tea.Cmd {
 		if len(m.wsRows) > 0 {
 			m.wsCursor = len(m.wsRows) - 1
 			m.clampWsScroll()
+			m.maybeReloadScratch()
 		}
 	}
 	return nil
@@ -4131,6 +4154,7 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 		idx := m.wsScroll + (y - contentStartRow)
 		if idx >= 0 && idx < len(m.wsRows) {
 			m.wsCursor = idx
+			m.maybeReloadScratch()
 			row := m.wsRows[idx]
 			switch row.kind {
 			case wsRowWorkspace:
@@ -4234,13 +4258,15 @@ func (m *Model) contentViewHeight() int {
 // scratchWorkspace returns the workspace name to use for scratch operations.
 // Returns "" (global scratch) if no workspace is active.
 func (m *Model) scratchWorkspace() string {
-	if m.chatMode && m.chatWorkspace != "" {
-		return m.chatWorkspace
-	}
+	// Nav cursor workspace takes priority — it reflects what the user is looking at.
 	if m.navSubTab == navSubTabWorkspaces {
 		if ws := m.selectedWorkspace(); ws != nil {
 			return ws.name
 		}
+	}
+	// Fall back to chatWorkspace when not on workspaces tab (e.g. articles tab with active chat).
+	if m.chatMode && m.chatWorkspace != "" {
+		return m.chatWorkspace
 	}
 	return ""
 }
@@ -4309,6 +4335,7 @@ func (m *Model) cmdScratch(msg string) tea.Cmd {
 // reloadScratchLines reads the scratch file and caches lines + blocks for rendering.
 func (m *Model) reloadScratchLines() {
 	ws := m.scratchWorkspace()
+	m.scratchLoadedWs = ws
 	content, err := storefs.ReadScratch(m.cfg.DataRoot, ws)
 	if err != nil {
 		m.scratchLines = []string{"(error reading scratch: " + err.Error() + ")"}
@@ -4387,6 +4414,19 @@ func (m *Model) reloadScratchLines() {
 	m.scratchBlockCursorSkipSep(1)
 }
 
+// maybeReloadScratch reloads the scratch pane if the cursor moved to a different workspace.
+func (m *Model) maybeReloadScratch() {
+	if !m.scratchOpen {
+		return
+	}
+	ws := m.scratchWorkspace()
+	if ws == m.scratchLoadedWs {
+		return
+	}
+	m.reloadScratchLines()
+	m.scratchScrollToBottom()
+}
+
 // scratchBlockCursorSkipSep advances the block cursor past date separators.
 // dir should be +1 or -1 to indicate search direction.
 func (m *Model) scratchBlockCursorSkipSep(dir int) {
@@ -4426,6 +4466,71 @@ func (m *Model) scratchScrollToBottom() {
 	}
 }
 
+// openScratchPaneForRow toggles the scratch split pane for the workspace of the given row.
+// If scratch is already open for this workspace, closes it. Otherwise opens it,
+// pre-fills /scratch in input, and focuses command pane.
+func (m *Model) openScratchPaneForRow(row *wsRow) {
+	if row == nil || row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		return
+	}
+	ws := m.workspaceItems[row.wsIdx]
+	// Toggle off if already open for this workspace.
+	if m.scratchOpen && m.scratchLoadedWs == ws.name {
+		m.closeScratch()
+		return
+	}
+	// Close existing scratch if open for a different workspace.
+	if m.scratchOpen {
+		m.closeScratch()
+	}
+	// Close askX if open (mutual exclusion).
+	if m.askxOpen {
+		m.closeAskX()
+	}
+	// Move cursor to this row's workspace so scratchWorkspace() resolves correctly.
+	m.wsCursor = m.wsRowIndexForScratch(row.wsIdx)
+	m.clampWsScroll()
+	m.scratchOpen = true
+	m.reloadScratchLines()
+	m.scratchScrollToBottom()
+	m.focus = paneCommand
+	m.cursorVisible = true
+	m.input.SetValue("/scratch ")
+	m.input.CursorEnd()
+	m.cmdComplete = nil
+	m.cmdCompleteIdx = -1
+	m.paramItems = nil
+	m.paramIdx = -1
+}
+
+// wsRowIndexForScratch finds the wsRow index for the scratch row of the given workspace.
+func (m *Model) wsRowIndexForScratch(wsIdx int) int {
+	for i, r := range m.wsRows {
+		if r.kind == wsRowScratch && r.wsIdx == wsIdx {
+			return i
+		}
+	}
+	return m.wsCursor // fallback: don't move
+}
+
+// cmdClearScratch clears the scratch file for the given workspace, with confirmation.
+func (m *Model) cmdClearScratch(wsIdx int) {
+	if wsIdx < 0 || wsIdx >= len(m.workspaceItems) {
+		return
+	}
+	ws := m.workspaceItems[wsIdx]
+	cfg := m.cfg
+	prompt := fmt.Sprintf("clear scratch for workspace %q? (yes/N)", ws.name)
+	m.askConfirm(prompt, func() tea.Cmd {
+		return func() tea.Msg {
+			if err := storefs.ClearScratch(cfg.DataRoot, ws.name); err != nil {
+				return cmdDoneMsg{err: "clear scratch: " + err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ scratch cleared for %q", ws.name)}
+		}
+	})
+}
+
 // closeScratch closes the scratch pane.
 func (m *Model) closeScratch() {
 	m.scratchOpen = false
@@ -4435,6 +4540,7 @@ func (m *Model) closeScratch() {
 	m.scratchBlocks = nil
 	m.scratchBlockCursor = 0
 	m.scratchCollapsed = nil
+	m.scratchLoadedWs = ""
 	m.clearScratchInput()
 }
 
