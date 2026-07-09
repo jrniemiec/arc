@@ -178,13 +178,15 @@ type workspaceItem struct {
 	articles        []string          // slugs
 	collectionSlugs []string          // slugs
 	resources       []string          // resource file basenames
+	resourceDirs    []string          // resource directory names
 	outcomes        []string          // outcome file basenames
 
 	// expand state
-	expanded          bool
-	expandedCols      map[string]bool // collection slug → expanded
-	resourcesExpanded bool
-	outcomesExpanded  bool
+	expanded             bool
+	expandedCols         map[string]bool // collection slug → expanded
+	resourcesExpanded    bool
+	expandedResourceDirs map[string]bool // resource dir relative path → expanded
+	outcomesExpanded     bool
 }
 
 // wsRowKind distinguishes row types in the workspace tree.
@@ -196,6 +198,7 @@ const (
 	wsRowCollection               // collection under workspace
 	wsRowArticle                  // article (leaf)
 	wsRowResourceGroup            // "Resources (N)" foldable header
+	wsRowResourceDir              // resource directory (expandable)
 	wsRowResource                 // resource file (leaf)
 	wsRowOutcomeGroup             // "Outcomes (N)" foldable header
 	wsRowOutcome                  // outcome file (leaf)
@@ -479,8 +482,9 @@ var chatCommands = []cmdCompletion{
 	{"/rename", "<new-name>", "rename current workspace"},
 	{"/describe", "<text>", "set workspace description"},
 	{"/resource-list", "", "list files in workspace/resources/"},
-	{"/resource-add", "<file>", "copy local file into workspace/resources/"},
-	{"/resource-remove", "<name>", "delete a resource file (with confirmation)"},
+	{"/resource-add", "<file-or-dir> [--into <dir>]", "copy file or directory into workspace/resources/"},
+	{"/resource-mkdir", "<name>", "create a directory in workspace/resources/"},
+	{"/resource-remove", "<name>", "delete a resource file or directory (with confirmation)"},
 	{"/resource-view", "<name>", "open resource file in viewer overlay"},
 	{"/resource-edit", "<name>", "open resource file in $EDITOR"},
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
@@ -725,9 +729,11 @@ func loadWorkspaces(svc *service.Service) tea.Cmd {
 				chatStrategy:    w.ChatConfig.Strategy,
 				articles:        w.Articles,
 				collectionSlugs: w.CollectionSlugs,
-				resources:       w.ResourceNames,
-				outcomes:        w.OutcomeNames,
-				expandedCols:    make(map[string]bool),
+				resources:            w.ResourceNames,
+				resourceDirs:         w.ResourceDirs,
+				outcomes:             w.OutcomeNames,
+				expandedCols:         make(map[string]bool),
+				expandedResourceDirs: make(map[string]bool),
 			}
 		}
 		return workspacesLoadedMsg{items: items}
@@ -1047,8 +1053,14 @@ func (m Model) buildWsRows() []wsRow {
 		}
 
 		// Resources folder (always visible, like collections).
-		rows = append(rows, wsRow{kind: wsRowResourceGroup, wsIdx: i, count: len(ws.resources)})
+		rows = append(rows, wsRow{kind: wsRowResourceGroup, wsIdx: i, count: len(ws.resources) + len(ws.resourceDirs)})
 		if ws.resourcesExpanded {
+			for _, dirName := range ws.resourceDirs {
+				rows = append(rows, wsRow{kind: wsRowResourceDir, wsIdx: i, resourceName: dirName})
+				if ws.expandedResourceDirs[dirName] {
+					rows = m.appendResourceDirRows(rows, i, ws, dirName)
+				}
+			}
 			for _, name := range ws.resources {
 				rows = append(rows, wsRow{kind: wsRowResource, wsIdx: i, resourceName: name})
 			}
@@ -1064,6 +1076,25 @@ func (m Model) buildWsRows() []wsRow {
 
 		// Scratch file — always last in expanded workspace.
 		rows = append(rows, wsRow{kind: wsRowScratch, wsIdx: i})
+	}
+	return rows
+}
+
+// appendResourceDirRows recursively appends rows for the contents of a resource directory.
+func (m Model) appendResourceDirRows(rows []wsRow, wsIdx int, ws workspaceItem, relDir string) []wsRow {
+	entries, err := storefs.ListWorkspaceDirResources(m.cfg.DataRoot, ws.name, relDir)
+	if err != nil {
+		return rows
+	}
+	for _, e := range entries {
+		if e.IsDir {
+			rows = append(rows, wsRow{kind: wsRowResourceDir, wsIdx: wsIdx, resourceName: e.Name})
+			if ws.expandedResourceDirs[e.Name] {
+				rows = m.appendResourceDirRows(rows, wsIdx, ws, e.Name)
+			}
+		} else {
+			rows = append(rows, wsRow{kind: wsRowResource, wsIdx: wsIdx, resourceName: e.Name})
+		}
 	}
 	return rows
 }

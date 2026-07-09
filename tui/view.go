@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -763,10 +764,28 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				label = fg(t.NavText, label)
 			}
 
+		case wsRowResourceDir:
+			// Compute indent based on nesting depth.
+			depth := strings.Count(row.resourceName, string(filepath.Separator))
+			indent := strings.Repeat("  ", depth+2) // 2 base + depth
+			arrow := "▶ "
+			if ws.expandedResourceDirs[row.resourceName] {
+				arrow = "▼ "
+			}
+			dirName := filepath.Base(row.resourceName)
+			label = truncate(indent+arrow+dirName, w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, indent) + fg(t.NavText, arrow+dirName)
+			}
+
 		case wsRowResource:
-			prefix := "    "
+			depth := strings.Count(row.resourceName, string(filepath.Separator))
+			prefix := strings.Repeat("  ", depth+2) // 2 base + depth
 			dot := "◦ "
-			name := truncate(row.resourceName, w-len(prefix)-len(dot))
+			name := filepath.Base(row.resourceName)
+			name = truncate(name, w-len(prefix)-len(dot))
 			label = prefix + dot + name
 			if selected {
 				label = reverse(label)

@@ -1110,6 +1110,9 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 	case "/resource-add":
 		return m.cmdResourceAdd(fullArg)
 
+	case "/resource-mkdir":
+		return m.cmdResourceMkdir(fullArg)
+
 	case "/resource-remove", "/resource-delete":
 		arg := ""
 		if len(parts) > 1 {
@@ -1398,6 +1401,10 @@ func (m *Model) cmdResourceList() {
 	}
 	lines := []string{fmt.Sprintf("resources for workspace %q:", m.chatWorkspace)}
 	for _, r := range resources {
+		if r.IsDir {
+			lines = append(lines, fmt.Sprintf("  %-32s  %8s", r.Name+"/", "dir"))
+			continue
+		}
 		var sizeStr string
 		switch {
 		case r.Size >= 1024*1024:
@@ -1412,16 +1419,39 @@ func (m *Model) cmdResourceList() {
 	m.setStatusLines(lines)
 }
 
-// cmdResourceAdd copies a local file into workspace/resources/.
-func (m *Model) cmdResourceAdd(path string) tea.Cmd {
+// cmdResourceAdd copies a local file or directory into workspace/resources/.
+// Supports --into <dir> to place the resource inside a subdirectory.
+func (m *Model) cmdResourceAdd(rawArgs string) tea.Cmd {
+	if rawArgs == "" {
+		m.setStatusError("usage: /resource-add <file-or-dir> [--into <dir>]")
+		return nil
+	}
+	// Parse --into flag from args.
+	path, into := parseIntoFlag(rawArgs)
 	if path == "" {
-		m.setStatusError("usage: /resource-add <file>")
+		m.setStatusError("usage: /resource-add <file-or-dir> [--into <dir>]")
 		return nil
 	}
 	ws := m.chatWorkspace
 	cfg := m.cfg
 	return func() tea.Msg {
-		name, err := storefs.AddFileResource(cfg.DataRoot, ws, path)
+		// Expand ~ before stat.
+		expanded := path
+		if strings.HasPrefix(expanded, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = filepath.Join(home, expanded[2:])
+			}
+		}
+		info, err := os.Stat(expanded)
+		if err != nil {
+			return cmdDoneMsg{err: "resource-add: " + err.Error()}
+		}
+		var name string
+		if info.IsDir() {
+			name, err = storefs.AddDirResource(cfg.DataRoot, ws, path, into)
+		} else {
+			name, err = storefs.AddFileResource(cfg.DataRoot, ws, path, into)
+		}
 		if err != nil {
 			return cmdDoneMsg{err: "resource-add: " + err.Error()}
 		}
@@ -1429,7 +1459,39 @@ func (m *Model) cmdResourceAdd(path string) tea.Cmd {
 	}
 }
 
-// cmdResourceRemove removes a resource from workspace/resources/ with confirmation.
+// parseIntoFlag extracts --into <dir> from a raw argument string.
+// Returns the remaining path and the into value (empty if not specified).
+func parseIntoFlag(raw string) (path, into string) {
+	parts := strings.Fields(raw)
+	var pathParts []string
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == "--into" && i+1 < len(parts) {
+			into = parts[i+1]
+			i++ // skip value
+		} else {
+			pathParts = append(pathParts, parts[i])
+		}
+	}
+	return strings.Join(pathParts, " "), into
+}
+
+// cmdResourceMkdir creates a directory inside workspace/resources/.
+func (m *Model) cmdResourceMkdir(name string) tea.Cmd {
+	if name == "" {
+		m.setStatusError("usage: /resource-mkdir <name>")
+		return nil
+	}
+	ws := m.chatWorkspace
+	cfg := m.cfg
+	return func() tea.Msg {
+		if err := storefs.MkdirWorkspaceResource(cfg.DataRoot, ws, name); err != nil {
+			return cmdDoneMsg{err: "resource-mkdir: " + err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ created resource folder %q in workspace %q", name, ws), reloadWorkspaces: true}
+	}
+}
+
+// cmdResourceRemove removes a resource file or directory from workspace/resources/ with confirmation.
 func (m *Model) cmdResourceRemove(name string) {
 	if name == "" {
 		m.setStatusError("usage: /resource-remove <name>")
@@ -1437,7 +1499,13 @@ func (m *Model) cmdResourceRemove(name string) {
 	}
 	ws := m.chatWorkspace
 	cfg := m.cfg
-	m.askConfirm(fmt.Sprintf("delete resource %q? (y/n)", name), func() tea.Cmd {
+	// Check if it's a directory for a clearer confirmation prompt.
+	resPath := filepath.Join(storefs.WorkspaceDir(cfg.DataRoot, ws), "resources", name)
+	prompt := fmt.Sprintf("delete resource %q? (y/n)", name)
+	if info, err := os.Stat(resPath); err == nil && info.IsDir() {
+		prompt = fmt.Sprintf("delete resource folder %q and all its contents? (y/n)", name)
+	}
+	m.askConfirm(prompt, func() tea.Cmd {
 		return func() tea.Msg {
 			if err := storefs.RemoveWorkspaceResource(cfg.DataRoot, ws, name); err != nil {
 				return cmdDoneMsg{err: "resource-remove: " + err.Error()}

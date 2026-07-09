@@ -36,6 +36,7 @@ func init() {
 	workspaceAddCmd.Flags().StringSlice("article", nil, "article slug(s) to add (comma-separated or repeated)")
 	workspaceAddCmd.Flags().StringSlice("collection", nil, "collection slug(s) to add")
 	workspaceAddCmd.Flags().StringSlice("resource", nil, "file path(s) or URL(s) to add as resources")
+	workspaceAddCmd.Flags().String("into", "", "target subdirectory within resources/ for --resource")
 
 	workspaceRemoveCmd.Flags().StringSlice("article", nil, "article slug(s) to remove")
 	workspaceRemoveCmd.Flags().StringSlice("collection", nil, "collection slug(s) to remove")
@@ -203,7 +204,9 @@ var workspaceShowCmd = &cobra.Command{
 			fmt.Fprintln(cmd.OutOrStdout(), "  (none)")
 		} else {
 			for _, r := range resources {
-				if r.IsURL {
+				if r.IsDir {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %-30s  %s\n", r.Name+"/", dim("dir", tty))
+				} else if r.IsURL {
 					fmt.Fprintf(cmd.OutOrStdout(), "  %-30s  %s\n", r.Name, dim("url: "+truncate(r.SrcURL, 60), tty))
 				} else {
 					fmt.Fprintf(cmd.OutOrStdout(), "  %-30s  %s\n", r.Name, dim(formatSize(r.Size), tty))
@@ -422,6 +425,7 @@ into the workspace (files) or stored as .url stubs (URLs).
 Examples:
   arc workspace add myws --article slug1,slug2 --collection ml
   arc workspace add myws --resource ~/papers/paper.pdf
+  arc workspace add myws --resource ~/papers/paper.pdf --into data/raw
   arc workspace add myws --resource https://youtube.com/watch?v=abc`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -470,11 +474,16 @@ Examples:
 		}
 
 		if len(resources) > 0 {
-			if err := svc.AddResourcesToWorkspace(cmd.Context(), name, resources); err != nil {
+			into, _ := cmd.Flags().GetString("into")
+			if err := svc.AddResourcesToWorkspace(cmd.Context(), name, resources, into); err != nil {
 				errs = append(errs, err.Error())
 			} else {
 				for _, r := range resources {
-					fmt.Fprintf(cmd.OutOrStdout(), "added resource %s → %s\n", r, name)
+					dest := name
+					if into != "" {
+						dest = name + "/resources/" + into
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "added resource %s → %s\n", r, dest)
 				}
 			}
 		}

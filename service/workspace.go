@@ -69,6 +69,8 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 		colSlugs[i] = c
 	}
 
+	fileNames, dirNames := splitResources(resources)
+
 	return WorkspaceInfo{
 		Name:            m.Name,
 		Description:     m.Description,
@@ -83,17 +85,21 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 		ChatConfig:      chatCfg,
 		Articles:        articles,
 		CollectionSlugs: colSlugs,
-		ResourceNames:   resourceNames(resources),
+		ResourceNames:   fileNames,
+		ResourceDirs:    dirNames,
 		OutcomeNames:    outcomes,
 	}, nil
 }
 
-func resourceNames(entries []fs.ResourceEntry) []string {
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.Name
+func splitResources(entries []fs.ResourceEntry) (files []string, dirs []string) {
+	for _, e := range entries {
+		if e.IsDir {
+			dirs = append(dirs, e.Name)
+		} else {
+			files = append(files, e.Name)
+		}
 	}
-	return names
+	return files, dirs
 }
 
 // ResolveWorkspaceName resolves a user-supplied query to a workspace name.
@@ -300,9 +306,11 @@ func (s *Service) RemoveCollectionsFromWorkspace(ctx context.Context, workspaceN
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-// AddResourcesToWorkspace adds one or more files or URLs to workspace/resources/.
-// URLs (http:// or https://) are stored as .url stubs; everything else is hard-copied.
-func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName string, paths []string) error {
+// AddResourcesToWorkspace adds one or more files, directories, or URLs to workspace/resources/[into/].
+// URLs (http:// or https://) are stored as .url stubs; directories are recursively copied;
+// everything else is hard-copied as a file. If into is non-empty, resources are placed
+// inside that subdirectory of resources/.
+func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName string, paths []string, into string) error {
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -312,7 +320,23 @@ func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName str
 		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
 			_, err = fs.AddURLResource(s.cfg.DataRoot, workspaceName, p)
 		} else {
-			_, err = fs.AddFileResource(s.cfg.DataRoot, workspaceName, p)
+			// Expand ~ before stat.
+			expanded := p
+			if strings.HasPrefix(expanded, "~/") {
+				if home, herr := os.UserHomeDir(); herr == nil {
+					expanded = filepath.Join(home, expanded[2:])
+				}
+			}
+			info, serr := os.Stat(expanded)
+			if serr != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", p, serr))
+				continue
+			}
+			if info.IsDir() {
+				_, err = fs.AddDirResource(s.cfg.DataRoot, workspaceName, p, into)
+			} else {
+				_, err = fs.AddFileResource(s.cfg.DataRoot, workspaceName, p, into)
+			}
 		}
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", p, err))

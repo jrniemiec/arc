@@ -205,6 +205,7 @@ type WorkspaceInfo struct {
 	Articles        []string // article slugs
 	CollectionSlugs []string // collection slugs
 	ResourceNames   []string // resource file basenames
+	ResourceDirs    []string // resource directory names
 	OutcomeNames    []string // outcome file basenames
 }
 

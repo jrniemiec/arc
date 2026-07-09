@@ -187,6 +187,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					msg.items[i].expanded = prev.expanded
 					msg.items[i].expandedCols = prev.expandedCols
 					msg.items[i].resourcesExpanded = prev.resourcesExpanded
+					msg.items[i].expandedResourceDirs = prev.expandedResourceDirs
 					msg.items[i].outcomesExpanded = prev.outcomesExpanded
 				}
 			}
@@ -704,7 +705,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			row := m.selectedWsRow()
 			if row != nil {
 				switch row.kind {
-				case wsRowResource:
+				case wsRowResource, wsRowResourceDir:
 					m.cmdResourceRemove(row.resourceName)
 					return nil
 				case wsRowOutcome:
@@ -712,6 +713,10 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 					return nil
 				case wsRowArticle:
 					return m.cmdDeleteArticle()
+				case wsRowWorkspace:
+					return m.cmdDeleteWorkspace()
+				default:
+					return nil
 				}
 			}
 			return m.cmdDeleteWorkspace()
@@ -1007,7 +1012,7 @@ func (m *Model) navSelect() tea.Cmd {
 			return m.openArticleOverlay(m.selectedNavItem())
 		case wsRowCollection:
 			m.wsToggleExpand()
-		case wsRowResourceGroup, wsRowOutcomeGroup:
+		case wsRowResourceGroup, wsRowOutcomeGroup, wsRowResourceDir:
 			m.wsToggleExpand()
 		case wsRowResource:
 			return m.openWorkspaceFile(row.wsIdx, "resources", row.resourceName)
@@ -1150,6 +1155,11 @@ func (m *Model) wsToggleExpand() {
 		ws.expandedCols[row.colSlug] = !ws.expandedCols[row.colSlug]
 	case wsRowResourceGroup:
 		ws.resourcesExpanded = !ws.resourcesExpanded
+	case wsRowResourceDir:
+		if ws.expandedResourceDirs == nil {
+			ws.expandedResourceDirs = make(map[string]bool)
+		}
+		ws.expandedResourceDirs[row.resourceName] = !ws.expandedResourceDirs[row.resourceName]
 	case wsRowOutcomeGroup:
 		ws.outcomesExpanded = !ws.outcomesExpanded
 	}
@@ -1275,6 +1285,8 @@ func (m *Model) wsFilePathForRow(row *wsRow) string {
 	case wsRowScratch:
 		return storefs.ScratchPath(m.cfg.DataRoot, ws.name)
 	case wsRowResource:
+		return filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, ws.name), "resources", row.resourceName)
+	case wsRowResourceDir:
 		return filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, ws.name), "resources", row.resourceName)
 	case wsRowOutcome:
 		return filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, ws.name), "outcomes", row.outcomeName)
@@ -4143,7 +4155,7 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 				}
 			case wsRowCollection:
 				m.wsToggleExpand()
-			case wsRowResourceGroup:
+			case wsRowResourceGroup, wsRowResourceDir:
 				m.wsToggleExpand()
 			case wsRowOutcomeGroup:
 				m.wsToggleExpand()

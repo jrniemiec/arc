@@ -22,10 +22,11 @@ type WorkspaceMeta struct {
 	Status      string    `json:"status"` // "active" | "archived"
 }
 
-// ResourceEntry describes one file in a workspace's resources/ directory.
+// ResourceEntry describes one file or directory in a workspace's resources/ directory.
 type ResourceEntry struct {
-	Name   string // basename in resources/
+	Name   string // relative path within resources/ (e.g. "file.txt" or "dir/sub/file.txt")
 	IsURL  bool   // true if .url stub
+	IsDir  bool   // true if directory
 	SrcURL string // set if IsURL
 	Size   int64
 }
@@ -432,9 +433,10 @@ func ListWorkspaceCollections(dataRoot, name string) ([]string, error) {
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-// AddFileResource copies a local file into workspace/resources/.
-// Returns the basename of the stored file.
-func AddFileResource(dataRoot, workspaceName, srcPath string) (string, error) {
+// AddFileResource copies a local file into workspace/resources/[into/].
+// If into is non-empty, the file is placed inside that subdirectory.
+// Returns the relative path of the stored file within resources/.
+func AddFileResource(dataRoot, workspaceName, srcPath, into string) (string, error) {
 	// Expand ~ in path.
 	if strings.HasPrefix(srcPath, "~/") {
 		home, err := os.UserHomeDir()
@@ -453,10 +455,16 @@ func AddFileResource(dataRoot, workspaceName, srcPath string) (string, error) {
 	}
 
 	basename := filepath.Base(srcPath)
-	destPath := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", basename)
+	resDir := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", into)
+	if into != "" {
+		if err := os.MkdirAll(resDir, 0755); err != nil {
+			return "", fmt.Errorf("create resource subdir: %w", err)
+		}
+	}
+	destPath := filepath.Join(resDir, basename)
 
 	if _, err := os.Stat(destPath); err == nil {
-		return "", fmt.Errorf("resource %q already exists in workspace", basename)
+		return "", fmt.Errorf("resource %q already exists in workspace", filepath.Join(into, basename))
 	}
 
 	src, err := os.Open(srcPath)
@@ -474,7 +482,94 @@ func AddFileResource(dataRoot, workspaceName, srcPath string) (string, error) {
 	if _, err := io.Copy(dst, src); err != nil {
 		return "", fmt.Errorf("copy resource file: %w", err)
 	}
-	return basename, nil
+	return filepath.Join(into, basename), nil
+}
+
+// AddDirResource recursively copies a directory into workspace/resources/[into/]<dirname>/.
+// If into is non-empty, the directory is placed inside that subdirectory.
+// Symlinks inside the source are skipped; hidden files are included.
+// Returns the relative path of the stored directory within resources/.
+func AddDirResource(dataRoot, workspaceName, srcPath, into string) (string, error) {
+	if strings.HasPrefix(srcPath, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("get home dir: %w", err)
+		}
+		srcPath = filepath.Join(home, srcPath[2:])
+	}
+
+	info, err := os.Lstat(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("resource dir not found: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%q is not a directory", srcPath)
+	}
+
+	dirname := filepath.Base(srcPath)
+	relPath := filepath.Join(into, dirname)
+	destDir := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", relPath)
+
+	if _, err := os.Stat(destDir); err == nil {
+		return "", fmt.Errorf("resource %q already exists in workspace", relPath)
+	}
+
+	err = filepath.WalkDir(srcPath, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		// Skip symlinks.
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		// Also check via Lstat for symlink dirs that WalkDir may follow.
+		linfo, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if linfo.Mode()&os.ModeSymlink != 0 {
+			if linfo.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		rel, err := filepath.Rel(srcPath, path)
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(destDir, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0755)
+		}
+
+		src, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", rel, err)
+		}
+		defer src.Close()
+
+		dst, err := os.Create(dest)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", rel, err)
+		}
+		defer dst.Close()
+
+		if _, err := io.Copy(dst, src); err != nil {
+			return fmt.Errorf("copy %s: %w", rel, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("copy directory: %w", err)
+	}
+	return relPath, nil
 }
 
 // AddURLResource writes a .url stub file containing the URL into workspace/resources/.
@@ -493,16 +588,24 @@ func AddURLResource(dataRoot, workspaceName, rawURL string) (string, error) {
 	return basename, nil
 }
 
-// RemoveWorkspaceResource removes a file from workspace/resources/.
+// RemoveWorkspaceResource removes a file or directory from workspace/resources/.
 func RemoveWorkspaceResource(dataRoot, workspaceName, basename string) error {
 	path := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", basename)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return fmt.Errorf("resource %q not found in workspace %q", basename, workspaceName)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("resource %q not found in workspace %q", basename, workspaceName)
+		}
+		return err
+	}
+	if info.IsDir() {
+		return os.RemoveAll(path)
 	}
 	return os.Remove(path)
 }
 
-// ListWorkspaceResources returns all files in workspace/resources/.
+// ListWorkspaceResources returns top-level entries in workspace/resources/.
+// Directories are returned as single entries with IsDir=true.
 func ListWorkspaceResources(dataRoot, name string) ([]ResourceEntry, error) {
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "resources")
 	entries, err := os.ReadDir(dir)
@@ -515,6 +618,7 @@ func ListWorkspaceResources(dataRoot, name string) ([]ResourceEntry, error) {
 	var resources []ResourceEntry
 	for _, e := range entries {
 		if e.IsDir() {
+			resources = append(resources, ResourceEntry{Name: e.Name(), IsDir: true})
 			continue
 		}
 		info, err := e.Info()
@@ -522,6 +626,41 @@ func ListWorkspaceResources(dataRoot, name string) ([]ResourceEntry, error) {
 			continue
 		}
 		re := ResourceEntry{Name: e.Name(), Size: info.Size()}
+		if strings.HasSuffix(e.Name(), ".url") {
+			re.IsURL = true
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err == nil {
+				re.SrcURL = strings.TrimSpace(string(data))
+			}
+		}
+		resources = append(resources, re)
+	}
+	return resources, nil
+}
+
+// ListWorkspaceDirResources returns entries inside a subdirectory of workspace/resources/.
+// The relDir is relative to resources/ (e.g. "mydir" or "mydir/sub").
+func ListWorkspaceDirResources(dataRoot, name, relDir string) ([]ResourceEntry, error) {
+	dir := filepath.Join(WorkspaceDir(dataRoot, name), "resources", relDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read resource dir %s: %w", relDir, err)
+	}
+	var resources []ResourceEntry
+	for _, e := range entries {
+		entryName := filepath.Join(relDir, e.Name())
+		if e.IsDir() {
+			resources = append(resources, ResourceEntry{Name: entryName, IsDir: true})
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		re := ResourceEntry{Name: entryName, Size: info.Size()}
 		if strings.HasSuffix(e.Name(), ".url") {
 			re.IsURL = true
 			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -578,6 +717,13 @@ func RemoveWorkspaceOutcome(dataRoot, workspaceName, basename string) error {
 func WriteWorkspaceOutcome(dataRoot, name, filename string, data []byte) error {
 	path := filepath.Join(WorkspaceDir(dataRoot, name), "outcomes", filename)
 	return os.WriteFile(path, data, 0644)
+}
+
+// MkdirWorkspaceResource creates a directory inside workspace/resources/.
+// The relPath can be nested (e.g. "a/b/c") — intermediate dirs are created.
+func MkdirWorkspaceResource(dataRoot, workspaceName, relPath string) error {
+	dir := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", relPath)
+	return os.MkdirAll(dir, 0755)
 }
 
 // WriteWorkspaceResource writes a file to workspace/resources/.
