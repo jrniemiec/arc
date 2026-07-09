@@ -4256,8 +4256,11 @@ func (m *Model) contentViewHeight() int {
 // ── Scratch ─────────────────────────────────────────────────────────────────
 
 // scratchWorkspace returns the workspace name to use for scratch operations.
-// Returns "" (global scratch) if no workspace is active.
+// Returns "" (global scratch) if no workspace is active or scratchGlobal is set.
 func (m *Model) scratchWorkspace() string {
+	if m.scratchGlobal {
+		return ""
+	}
 	// Nav cursor workspace takes priority — it reflects what the user is looking at.
 	if m.navSubTab == navSubTabWorkspaces {
 		if ws := m.selectedWorkspace(); ws != nil {
@@ -4286,14 +4289,15 @@ func (m *Model) toggleScratch() {
 	m.scratchOpen = true
 	m.reloadScratchLines()
 	m.scratchScrollToBottom()
-	m.focus = paneCommand
-	m.cursorVisible = true
-	m.input.SetValue("/scratch ")
-	m.input.CursorEnd()
-	m.cmdComplete = nil
-	m.cmdCompleteIdx = -1
-	m.paramItems = nil
-	m.paramIdx = -1
+	// Don't move focus or pre-fill input — let the user stay where they are.
+	// m.focus = paneCommand
+	// m.cursorVisible = true
+	// m.input.SetValue("/scratch ")
+	// m.input.CursorEnd()
+	// m.cmdComplete = nil
+	// m.cmdCompleteIdx = -1
+	// m.paramItems = nil
+	// m.paramIdx = -1
 }
 
 // cmdScratch handles /scratch [msg]. Empty msg toggles pane; non-empty appends.
@@ -4499,14 +4503,15 @@ func (m *Model) openScratchPaneForRow(row *wsRow) {
 	m.scratchOpen = true
 	m.reloadScratchLines()
 	m.scratchScrollToBottom()
-	m.focus = paneCommand
-	m.cursorVisible = true
-	m.input.SetValue("/scratch ")
-	m.input.CursorEnd()
-	m.cmdComplete = nil
-	m.cmdCompleteIdx = -1
-	m.paramItems = nil
-	m.paramIdx = -1
+	// Don't move focus or pre-fill input — let the user stay where they are.
+	// m.focus = paneCommand
+	// m.cursorVisible = true
+	// m.input.SetValue("/scratch ")
+	// m.input.CursorEnd()
+	// m.cmdComplete = nil
+	// m.cmdCompleteIdx = -1
+	// m.paramItems = nil
+	// m.paramIdx = -1
 }
 
 // wsRowIndexForScratch finds the wsRow index for the scratch row of the given workspace.
