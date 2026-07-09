@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
@@ -593,15 +592,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return tea.Batch(batch...)
 
 	case key.Matches(msg, keys.FocusNav):
-		slog.Debug("FocusNav matched", "key", msg.String())
 		m.setFocusPane(paneNav)
 		return nil
 	case key.Matches(msg, keys.FocusContent):
-		slog.Debug("FocusContent matched", "key", msg.String())
 		m.setFocusPane(paneContent)
 		return nil
 	case key.Matches(msg, keys.FocusTabBar):
-		slog.Debug("FocusTabBar matched", "key", msg.String())
 		m.setFocusPane(paneTabBar)
 		return nil
 
@@ -1711,12 +1707,6 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			if m.cmdCompleteIdx > 0 {
 				m.cmdCompleteIdx--
 			}
-		} else if m.chatMode {
-			// Scroll chat up from command pane.
-			if m.chatScroll > 0 {
-				m.chatScroll--
-				m.chatAutoScroll = false
-			}
 		} else {
 			m.inputHistoryPrev()
 		}
@@ -1728,19 +1718,6 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		} else if len(m.cmdComplete) > 0 {
 			if m.cmdCompleteIdx < len(m.cmdComplete)-1 {
 				m.cmdCompleteIdx++
-			}
-		} else if m.chatMode {
-			// Scroll chat down from command pane.
-			chatViewH := m.height - 6 - m.completionCount() - 2
-			maxScroll := m.chatTotalLines() - chatViewH
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.chatScroll < maxScroll {
-				m.chatScroll++
-			}
-			if m.chatScroll >= maxScroll {
-				m.chatAutoScroll = true
 			}
 		} else {
 			m.inputHistoryNext()
