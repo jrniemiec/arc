@@ -640,12 +640,16 @@ func (m Model) renderNavCollections(maxLines int) []string {
 		case rowArticle:
 			prefix := "    " // indented under collection
 			dot := "• "
-			if row.item.read {
+			if row.item.favorite {
+				dot = "★ "
+			} else if row.item.read {
 				dot = "  "
 			}
 			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot))
 			if selected {
 				line = reverse(prefix + dot + title)
+			} else if row.item.favorite {
+				line = fg(t.NavDimmed, prefix) + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
 			} else {
 				line = fg(t.NavDimmed, prefix) + fg(t.NavMark, dot[:1]) + " " + fg(t.NavText, title)
 			}

@@ -555,6 +555,13 @@ type collectionsLoadedMsg struct {
 	err         string
 }
 
+// collectionSearchMsg is returned by cmdCollectionSearch when FTS5 search completes.
+type collectionSearchMsg struct {
+	results []service.CollectionInfo
+	query   string
+	err     string
+}
+
 type workspacesLoadedMsg struct {
 	items []workspaceItem
 	err   string

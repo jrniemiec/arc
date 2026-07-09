@@ -140,6 +140,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.collectionsLoaded = true
 
+	case collectionSearchMsg:
+		if msg.err != "" {
+			m.setStatusError("✗ " + msg.err)
+		} else {
+			rows := make([]navRow, 0, len(msg.results))
+			for _, c := range msg.results {
+				rows = append(rows, navRow{
+					kind:         rowCollection,
+					colSlug:      c.Slug,
+					colName:      c.Name,
+					colDesc:      c.Description,
+					colCount:     c.ArticleCount,
+					colCreatedAt: c.CreatedAt,
+					colHasSummary: c.HasSummary,
+					colHasSystem:  c.HasSystem,
+				})
+			}
+			m.navRows = rows
+			m.navRowCursor = 0
+			m.navRowScroll = 0
+			m.focus = paneNav
+			n := len(rows)
+			if n == 0 {
+				m.statusMsg = fmt.Sprintf("no collections matching %q", msg.query)
+				m.navFilter = ""
+			} else {
+				m.navFilter = fmt.Sprintf("collections: %q · %d results  ·  /clear to reset", msg.query, n)
+				m.statusMsg = ""
+			}
+		}
+
 	case collectionArticlesLoadedMsg:
 		if msg.err != "" {
 			m.statusMsg = "✗ " + msg.err
@@ -2393,8 +2424,12 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			m.filterWorkspaces(arg)
 			return nil
 		case navSubTabCollections:
-			m.filterCollections(arg)
-			return nil
+			if m.svc == nil {
+				m.filterCollections(arg)
+				return nil
+			}
+			m.statusMsg = "searching…"
+			return cmdCollectionSearch(m.svc, arg)
 		default: // articles
 			query, limit := parseSearchArg(arg)
 			if m.svc == nil {
@@ -2616,6 +2651,9 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 		case "search":
 			if arg == "" {
 				m.statusMsg = "usage: /collection search <query>"
+			} else if m.svc != nil {
+				m.statusMsg = "searching…"
+				return tea.Batch(switchCmd, cmdCollectionSearch(m.svc, arg))
 			} else {
 				m.filterCollections(arg)
 			}
@@ -3035,6 +3073,17 @@ func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
 			navItems:  items,
 			navFilter: fmt.Sprintf("search: %q · %d results  ·  /clear to reset", query, len(items)),
 		}
+	}
+}
+
+// cmdCollectionSearch runs an FTS5 search on collections via the service layer.
+func cmdCollectionSearch(svc *service.Service, query string) tea.Cmd {
+	return func() tea.Msg {
+		results, err := svc.SearchCollections(context.Background(), query)
+		if err != nil {
+			return collectionSearchMsg{err: fmt.Sprintf("search collections: %v", err)}
+		}
+		return collectionSearchMsg{results: results, query: query}
 	}
 }
 
