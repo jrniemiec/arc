@@ -476,6 +476,7 @@ var workspaceCommands = []cmdCompletion{
 	{"/delete", "[name]", "delete workspace (selected or by name)"},
 	{"/rename", "<new-name>", "rename current workspace"},
 	{"/describe", "<text>", "set workspace description"},
+	{"/reload", "", "reset chat engine to pick up corpus changes"},
 }
 
 // chatCommands are available when workspace chat mode is active.

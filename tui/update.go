@@ -2633,6 +2633,13 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 		return m.cmdDescribeWorkspace(arg)
 
+	case "/reload":
+		if sub != navSubTabWorkspaces {
+			m.statusMsg = "✗ /reload is only available in Workspaces context"
+			return nil
+		}
+		return m.cmdWorkspaceReload()
+
 	default:
 		m.statusMsg = "✗ unknown command: " + parts[0]
 		return nil
