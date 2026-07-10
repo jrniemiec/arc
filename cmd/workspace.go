@@ -36,6 +36,8 @@ func init() {
 	workspacePopulateCmd.Flags().Bool("dry-run", false, "show suggestions without linking")
 	workspacePopulateCmd.Flags().Bool("edit", false, "review each suggestion interactively")
 	workspacePopulateCmd.Flags().StringP("profile", "p", "", "LLM profile for selection (default: config or haiku)")
+	workspacePopulateCmd.Flags().String("hint", "", "free-form guidance for the LLM (e.g. \"focus on introductory tutorials, max 10\")")
+	workspacePopulateCmd.Flags().Bool("include-collections", false, "include collections in selection (default: articles only)")
 
 	workspaceListCmd.Flags().Bool("all", false, "include archived workspaces")
 	workspaceDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
@@ -1137,12 +1139,29 @@ func validateWorkspaceName(name string) error {
 var workspacePopulateCmd = &cobra.Command{
 	Use:   "populate <name>",
 	Short: "LLM-assisted workspace population from library",
-	Long: `Selects collections and articles for a workspace using a two-pass LLM flow.
+	Long: `Selects articles for a workspace using a two-pass LLM flow.
 
-Pass 1 shortlists relevant collections and article candidates from titles.
-Pass 2 refines candidates using flash summaries for a final selection.
+Pass 1 shortlists article candidates from titles.
+Pass 2 refines candidates using flash summaries for precise final selection.
 
-The workspace must have a description set (arc workspace describe <name> <text>).`,
+By default only articles are considered. Use --include-collections to also
+select collections (useful for broad research workspaces).
+
+The LLM infers the appropriate number of results from the workspace name and
+description. Use --hint to provide additional guidance — for example, to focus
+on specific topics or limit the number of results.
+
+Re-runs automatically exclude items already linked to the workspace.
+The workspace must have a description set (arc workspace describe <name> <text>).
+
+Workflow: run with --dry-run first, refine with --hint, then run for real.
+
+Examples:
+  arc workspace populate myws --dry-run
+  arc workspace populate myws --dry-run --hint "introductory only, max 10"
+  arc workspace populate myws --hint "focus on practical tutorials"
+  arc workspace populate myws --edit
+  arc workspace populate myws --include-collections`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
@@ -1151,6 +1170,8 @@ The workspace must have a description set (arc workspace describe <name> <text>)
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		edit, _ := cmd.Flags().GetBool("edit")
 		profile, _ := cmd.Flags().GetString("profile")
+		hint, _ := cmd.Flags().GetString("hint")
+		includeCols, _ := cmd.Flags().GetBool("include-collections")
 
 		tty := isTTY(os.Stdout)
 		var progressLog []string
@@ -1160,9 +1181,11 @@ The workspace must have a description set (arc workspace describe <name> <text>)
 		}
 
 		result, err := svc.PopulateWorkspace(cmd.Context(), service.PopulateRequest{
-			Workspace: name,
-			Profile:   profile,
-			Progress:  progress,
+			Workspace:          name,
+			Profile:            profile,
+			Hint:               hint,
+			IncludeCollections: includeCols,
+			Progress:           progress,
 		})
 		if err != nil {
 			return err
@@ -1220,7 +1243,7 @@ The workspace must have a description set (arc workspace describe <name> <text>)
 		}
 
 		// Build formatted output for display, scratch, and log.
-		output := formatPopulateOutput(result, dryRun, edit, progressLog)
+		output := formatPopulateOutput(result, dryRun, edit, hint, progressLog)
 		fmt.Fprint(cmd.OutOrStdout(), output)
 
 		// Save to workspace scratch.
@@ -1259,14 +1282,18 @@ The workspace must have a description set (arc workspace describe <name> <text>)
 	},
 }
 
-func formatPopulateOutput(result service.PopulateResult, dryRun, edit bool, progressLog []string) string {
+func formatPopulateOutput(result service.PopulateResult, dryRun, edit bool, hint string, progressLog []string) string {
 	var sb strings.Builder
 
 	header := "### populate"
 	if dryRun {
 		header = "### populate dry-run"
 	}
-	sb.WriteString(header + "\n\n")
+	sb.WriteString(header + "\n")
+	if hint != "" {
+		sb.WriteString(fmt.Sprintf("hint: %s\n", hint))
+	}
+	sb.WriteString("\n")
 
 	for _, msg := range progressLog {
 		sb.WriteString(fmt.Sprintf("  %s\n", msg))

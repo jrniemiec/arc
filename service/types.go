@@ -241,9 +241,11 @@ type Stats struct {
 
 // PopulateRequest describes a workspace populate operation.
 type PopulateRequest struct {
-	Workspace string // workspace name (must exist)
-	Profile   string // LLM profile override (empty = config default)
-	Progress  func(msg string)
+	Workspace          string // workspace name (must exist)
+	Profile            string // LLM profile override (empty = config default)
+	Hint               string // free-form guidance injected into the LLM prompt
+	IncludeCollections bool   // include collections in selection (default: articles only)
+	Progress           func(msg string)
 }
 
 // PopulateSuggestion is a single populate suggestion with display text.

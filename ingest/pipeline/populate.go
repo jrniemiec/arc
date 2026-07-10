@@ -16,6 +16,8 @@ type PopulateRequest struct {
 	WorkspaceName        string
 	WorkspaceDescription string
 	Profile              string
+	Hint                 string // free-form user guidance appended to prompts
+	IncludeCollections   bool   // when true, collections are included in pass 1
 	Progress             func(string)
 }
 
@@ -92,15 +94,28 @@ func WorkspacePopulate(
 		"articles", len(articles),
 	)
 
-	// --- Pass 1: Shortlist ---
+	// --- Pass 1: Shortlist from titles ---
+	var pass1Collections []string
 	if req.Progress != nil {
-		req.Progress(fmt.Sprintf("pass 1: shortlisting from %d collections, %d articles (model: %s)...", len(collections), len(articles), prof.Model))
+		if req.IncludeCollections {
+			req.Progress(fmt.Sprintf("pass 1: shortlisting from %d collections, %d articles (model: %s)...", len(collections), len(articles), prof.Model))
+		} else {
+			req.Progress(fmt.Sprintf("pass 1: shortlisting from %d articles (model: %s)...", len(articles), prof.Model))
+		}
 	}
 
-	pass1Prompt := buildPass1Prompt(req.WorkspaceName, req.WorkspaceDescription, collections, articles)
-	clog.Raw("populate pass1 prompt", pass1Prompt)
+	var pass1Sys string
+	if req.IncludeCollections {
+		pass1Sys = cfg.WorkspacePopulatePass1WithCollectionsPrompt()
+	} else {
+		pass1Sys = cfg.WorkspacePopulatePass1Prompt()
+	}
 
-	pass1Resp, pass1Usage, err := p.Chat(ctx, pass1SystemPrompt, []llm.Message{
+	pass1Prompt := buildPass1Prompt(req.WorkspaceName, req.WorkspaceDescription, req.Hint, req.IncludeCollections, collections, articles)
+	clog.Raw("populate pass1 system prompt", pass1Sys)
+	clog.Raw("populate pass1 user prompt", pass1Prompt)
+
+	pass1Resp, pass1Usage, err := p.Chat(ctx, pass1Sys, []llm.Message{
 		{Role: llm.RoleUser, Content: pass1Prompt},
 	})
 	if err != nil {
@@ -115,12 +130,20 @@ func WorkspacePopulate(
 		return PopulateResult{}, fmt.Errorf("pass 1 parse: %w", err)
 	}
 
+	if req.IncludeCollections {
+		pass1Collections = p1.Collections
+	}
+
 	clog.Info("pass 1 complete",
-		"collections_selected", len(p1.Collections),
+		"collections_selected", len(pass1Collections),
 		"article_candidates", len(p1.Articles),
 	)
 	if req.Progress != nil {
-		req.Progress(fmt.Sprintf("pass 1: selected %d collections, %d article candidates", len(p1.Collections), len(p1.Articles)))
+		if req.IncludeCollections {
+			req.Progress(fmt.Sprintf("pass 1: selected %d collections, %d article candidates", len(pass1Collections), len(p1.Articles)))
+		} else {
+			req.Progress(fmt.Sprintf("pass 1: shortlisted %d article candidates", len(p1.Articles)))
+		}
 	}
 
 	// --- Pass 2: Refine with flash summaries ---
@@ -136,7 +159,7 @@ func WorkspacePopulate(
 	if len(candidates) == 0 {
 		clog.Info("pass 2 skipped: no article candidates")
 		return PopulateResult{
-			Collections:  p1.Collections,
+			Collections:  pass1Collections,
 			Articles:     nil,
 			InputTokens:  totalIn,
 			OutputTokens: totalOut,
@@ -147,10 +170,12 @@ func WorkspacePopulate(
 		req.Progress(fmt.Sprintf("pass 2: refining %d candidates with flash summaries...", len(candidates)))
 	}
 
-	pass2Prompt := buildPass2Prompt(req.WorkspaceName, req.WorkspaceDescription, p1.Collections, candidates)
-	clog.Raw("populate pass2 prompt", pass2Prompt)
+	pass2Sys := cfg.WorkspacePopulatePass2Prompt()
+	pass2Prompt := buildPass2Prompt(req.WorkspaceName, req.WorkspaceDescription, req.Hint, pass1Collections, candidates)
+	clog.Raw("populate pass2 system prompt", pass2Sys)
+	clog.Raw("populate pass2 user prompt", pass2Prompt)
 
-	pass2Resp, pass2Usage, err := p.Chat(ctx, pass2SystemPrompt, []llm.Message{
+	pass2Resp, pass2Usage, err := p.Chat(ctx, pass2Sys, []llm.Message{
 		{Role: llm.RoleUser, Content: pass2Prompt},
 	})
 	if err != nil {
@@ -171,51 +196,37 @@ func WorkspacePopulate(
 	}
 
 	return PopulateResult{
-		Collections:  p1.Collections,
+		Collections:  pass1Collections,
 		Articles:     p2.Articles,
 		InputTokens:  totalIn,
 		OutputTokens: totalOut,
 	}, nil
 }
 
-const pass1SystemPrompt = `You are a research librarian. Given a workspace purpose and an inventory of collections and articles, select the ones most relevant.
 
-Instructions:
-- Select collections whose topic clearly aligns with the workspace purpose.
-- Select individual article CANDIDATES that may be relevant but are NOT covered by a selected collection. When in doubt, include — this is a shortlist, not final selection.
-- Return ONLY valid JSON, no commentary.
-
-Output format:
-{"collections": ["slug1", "slug2"], "articles": ["slug1", "slug2"]}`
-
-const pass2SystemPrompt = `You are a research librarian making a final selection for a workspace.
-
-Instructions:
-- Review the candidate articles. Each includes a flash summary.
-- Select only articles that are clearly relevant to the workspace purpose AND are not already covered by the selected collections.
-- Be selective — a workspace with 15-30 articles is more useful than 100.
-- Return ONLY valid JSON, no commentary.
-
-Output format:
-{"articles": ["slug1", "slug2"]}`
-
-func buildPass1Prompt(name, description string, collections []PopulateCollection, articles []PopulateArticle) string {
+func buildPass1Prompt(name, description, hint string, includeCollections bool, collections []PopulateCollection, articles []PopulateArticle) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Workspace\n")
 	sb.WriteString(fmt.Sprintf("Name: %s\n", name))
-	sb.WriteString(fmt.Sprintf("Purpose: %s\n\n", description))
+	sb.WriteString(fmt.Sprintf("Purpose: %s\n", description))
+	if hint != "" {
+		sb.WriteString(fmt.Sprintf("Guidance: %s\n", hint))
+	}
+	sb.WriteString("\n")
 
-	sb.WriteString("## Available Collections\n\n")
-	for _, c := range collections {
-		sb.WriteString(fmt.Sprintf("### %s (%d articles)\n", c.Slug, len(c.Titles)))
-		if c.Description != "" {
-			sb.WriteString(fmt.Sprintf("Description: %s\n", c.Description))
+	if includeCollections && len(collections) > 0 {
+		sb.WriteString("## Available Collections\n\n")
+		for _, c := range collections {
+			sb.WriteString(fmt.Sprintf("### %s (%d articles)\n", c.Slug, len(c.Titles)))
+			if c.Description != "" {
+				sb.WriteString(fmt.Sprintf("Description: %s\n", c.Description))
+			}
+			for _, t := range c.Titles {
+				sb.WriteString(fmt.Sprintf("- %s\n", t))
+			}
+			sb.WriteString("\n")
 		}
-		for _, t := range c.Titles {
-			sb.WriteString(fmt.Sprintf("- %s\n", t))
-		}
-		sb.WriteString("\n")
 	}
 
 	sb.WriteString("## Available Articles\n\n")
@@ -226,18 +237,24 @@ func buildPass1Prompt(name, description string, collections []PopulateCollection
 	return sb.String()
 }
 
-func buildPass2Prompt(name, description string, selectedCollections []string, candidates []PopulateCandidate) string {
+func buildPass2Prompt(name, description, hint string, selectedCollections []string, candidates []PopulateCandidate) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Workspace\n")
 	sb.WriteString(fmt.Sprintf("Name: %s\n", name))
-	sb.WriteString(fmt.Sprintf("Purpose: %s\n\n", description))
-
-	sb.WriteString("## Already Selected Collections\n")
-	for _, c := range selectedCollections {
-		sb.WriteString(fmt.Sprintf("- %s\n", c))
+	sb.WriteString(fmt.Sprintf("Purpose: %s\n", description))
+	if hint != "" {
+		sb.WriteString(fmt.Sprintf("Guidance: %s\n", hint))
 	}
 	sb.WriteString("\n")
+
+	if len(selectedCollections) > 0 {
+		sb.WriteString("## Already Selected Collections\n")
+		for _, c := range selectedCollections {
+			sb.WriteString(fmt.Sprintf("- %s\n", c))
+		}
+		sb.WriteString("\n")
+	}
 
 	sb.WriteString("## Candidate Articles\n\n")
 	for _, c := range candidates {

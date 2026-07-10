@@ -203,6 +203,15 @@ type WorkspacePopulateConfig struct {
 	// Default: "haiku" (classification task, cheap model suffices).
 	Profile string `json:"profile"`
 
+	// Pass1Prompt is the system prompt for pass 1 (articles-only shortlisting).
+	Pass1Prompt string `json:"pass1_prompt"`
+
+	// Pass1WithCollectionsPrompt is the system prompt for pass 1 when --include-collections is set.
+	Pass1WithCollectionsPrompt string `json:"pass1_with_collections_prompt"`
+
+	// Pass2Prompt is the system prompt for pass 2 (final selection with flash summaries).
+	Pass2Prompt string `json:"pass2_prompt"`
+
 	// CostNote holds human-readable cost/budget information for this operation.
 	CostNote string `json:"cost_note"`
 }
@@ -357,6 +366,67 @@ func (c *Config) WorkspacePopulateProfileName() string {
 	}
 	return "haiku"
 }
+
+// WorkspacePopulatePass1Prompt returns the system prompt for pass 1 (articles-only).
+func (c *Config) WorkspacePopulatePass1Prompt() string {
+	if c.WorkspacePopulate.Pass1Prompt != "" {
+		return c.WorkspacePopulate.Pass1Prompt
+	}
+	return DefaultPopulatePass1Prompt
+}
+
+// WorkspacePopulatePass1WithCollectionsPrompt returns the system prompt for pass 1 with collections.
+func (c *Config) WorkspacePopulatePass1WithCollectionsPrompt() string {
+	if c.WorkspacePopulate.Pass1WithCollectionsPrompt != "" {
+		return c.WorkspacePopulate.Pass1WithCollectionsPrompt
+	}
+	return DefaultPopulatePass1WithCollectionsPrompt
+}
+
+// WorkspacePopulatePass2Prompt returns the system prompt for pass 2.
+func (c *Config) WorkspacePopulatePass2Prompt() string {
+	if c.WorkspacePopulate.Pass2Prompt != "" {
+		return c.WorkspacePopulate.Pass2Prompt
+	}
+	return DefaultPopulatePass2Prompt
+}
+
+// DefaultPopulatePass1Prompt is the built-in system prompt for pass 1 (articles-only).
+const DefaultPopulatePass1Prompt = `You are a research librarian. Given a workspace purpose and a list of article titles, shortlist candidates that may be relevant.
+
+Instructions:
+- Infer the scope and depth from the workspace name and purpose. A narrow/introductory workspace needs fewer candidates than a broad research workspace.
+- Prefer a tight, focused shortlist over exhaustive coverage. This is a shortlist for a second pass, but do not over-include — only articles with a reasonable chance of relevance.
+- Return ONLY valid JSON, no commentary.
+
+Output format:
+{"articles": ["slug1", "slug2"]}`
+
+// DefaultPopulatePass1WithCollectionsPrompt is the built-in system prompt for pass 1 with collections.
+const DefaultPopulatePass1WithCollectionsPrompt = `You are a research librarian. Given a workspace purpose, collections, and articles, select relevant items.
+
+Instructions:
+- Infer the scope and depth from the workspace name and purpose. A narrow/introductory workspace needs fewer items than a broad research workspace.
+- Select collections whose topic clearly aligns with the workspace purpose.
+- Select individual article CANDIDATES that may be relevant but are NOT covered by a selected collection.
+- Prefer a focused selection over exhaustive coverage.
+- Return ONLY valid JSON, no commentary.
+
+Output format:
+{"collections": ["slug1", "slug2"], "articles": ["slug1", "slug2"]}`
+
+// DefaultPopulatePass2Prompt is the built-in system prompt for pass 2.
+const DefaultPopulatePass2Prompt = `You are a research librarian making a final selection for a workspace.
+
+Instructions:
+- Review the candidate articles. Each includes a flash summary.
+- Select only articles that are clearly relevant to the workspace purpose.
+- Infer the appropriate number from the workspace scope. A beginner/introductory workspace may need only 5-10 articles. A broad research workspace may need more.
+- Prefer precision over recall — fewer high-relevance articles beat many loosely related ones.
+- Return ONLY valid JSON, no commentary.
+
+Output format:
+{"articles": ["slug1", "slug2"]}`
 
 // builtinSummaryStyles are the default system prompts for each summary style.
 // Merged with user-defined styles from config (user overrides win).
@@ -533,8 +603,11 @@ func Default() Config {
 			MaxOutputTokens: 4096,
 		},
 		WorkspacePopulate: WorkspacePopulateConfig{
-			Profile:  "haiku",
-			CostNote: DefaultWorkspacePopulateCostNote,
+			Profile:                    "haiku",
+			Pass1Prompt:                DefaultPopulatePass1Prompt,
+			Pass1WithCollectionsPrompt: DefaultPopulatePass1WithCollectionsPrompt,
+			Pass2Prompt:                DefaultPopulatePass2Prompt,
+			CostNote:                   DefaultWorkspacePopulateCostNote,
 		},
 		AgentPath: filepath.Join(dataRoot, "agent"),
 		LogPath:   filepath.Join(dataRoot, "arc.log"),
@@ -569,10 +642,11 @@ func Load(path string) (Config, error) {
 		PreferredModels []string           `json:"preferred_models"`
 		PreferredStyles []string           `json:"preferred_styles"`
 		CookieJars      map[string]string  `json:"cookie_jars"`
-		Chat            ChatConfig         `json:"chat"`
-		AskX            AskXConfig         `json:"askx"`
-		LogPath         string             `json:"log_path"`
-		LogLevel        string             `json:"log_level"`
+		Chat               ChatConfig               `json:"chat"`
+		AskX               AskXConfig               `json:"askx"`
+		WorkspacePopulate  WorkspacePopulateConfig   `json:"workspace_populate"`
+		LogPath            string                    `json:"log_path"`
+		LogLevel           string                    `json:"log_level"`
 	}
 	if err := json.NewDecoder(f).Decode(&overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -696,6 +770,21 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.AskX.MaxOutputTokens != 0 {
 		cfg.AskX.MaxOutputTokens = overlay.AskX.MaxOutputTokens
+	}
+	if overlay.WorkspacePopulate.Profile != "" {
+		cfg.WorkspacePopulate.Profile = overlay.WorkspacePopulate.Profile
+	}
+	if overlay.WorkspacePopulate.Pass1Prompt != "" {
+		cfg.WorkspacePopulate.Pass1Prompt = overlay.WorkspacePopulate.Pass1Prompt
+	}
+	if overlay.WorkspacePopulate.Pass1WithCollectionsPrompt != "" {
+		cfg.WorkspacePopulate.Pass1WithCollectionsPrompt = overlay.WorkspacePopulate.Pass1WithCollectionsPrompt
+	}
+	if overlay.WorkspacePopulate.Pass2Prompt != "" {
+		cfg.WorkspacePopulate.Pass2Prompt = overlay.WorkspacePopulate.Pass2Prompt
+	}
+	if overlay.WorkspacePopulate.CostNote != "" {
+		cfg.WorkspacePopulate.CostNote = overlay.WorkspacePopulate.CostNote
 	}
 	if overlay.LogPath != "" {
 		cfg.LogPath = overlay.LogPath

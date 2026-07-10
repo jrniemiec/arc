@@ -412,6 +412,8 @@ func (s *Service) PopulateWorkspace(ctx context.Context, req PopulateRequest) (P
 		"workspace", req.Workspace,
 		"description", ws.Description,
 		"profile", req.Profile,
+		"hint", req.Hint,
+		"include_collections", req.IncludeCollections,
 	)
 
 	// Build sets of already-linked items to exclude.
@@ -424,30 +426,33 @@ func (s *Service) PopulateWorkspace(ctx context.Context, req PopulateRequest) (P
 		linkedArticles[a] = true
 	}
 
-	// Build collections inventory (excluding already linked).
-	colMetas, err := fs.ListCollections(s.cfg.DataRoot)
-	if err != nil {
-		return PopulateResult{}, fmt.Errorf("list collections: %w", err)
-	}
-	pipeCols := make([]pipeline.PopulateCollection, 0, len(colMetas))
-	for _, cm := range colMetas {
-		if linkedCols[cm.Slug] {
-			continue
+	// Build collections inventory (only when requested).
+	var pipeCols []pipeline.PopulateCollection
+	if req.IncludeCollections {
+		colMetas, err := fs.ListCollections(s.cfg.DataRoot)
+		if err != nil {
+			return PopulateResult{}, fmt.Errorf("list collections: %w", err)
 		}
-		articleSlugs, _, _ := fs.ListCollectionArticles(s.cfg.DataRoot, cm.Slug)
-		titles := make([]string, 0, len(articleSlugs))
-		for _, as := range articleSlugs {
-			a, err := s.lib.Get(ctx, as)
-			if err != nil {
+		pipeCols = make([]pipeline.PopulateCollection, 0, len(colMetas))
+		for _, cm := range colMetas {
+			if linkedCols[cm.Slug] {
 				continue
 			}
-			titles = append(titles, a.Title)
+			articleSlugs, _, _ := fs.ListCollectionArticles(s.cfg.DataRoot, cm.Slug)
+			titles := make([]string, 0, len(articleSlugs))
+			for _, as := range articleSlugs {
+				a, err := s.lib.Get(ctx, as)
+				if err != nil {
+					continue
+				}
+				titles = append(titles, a.Title)
+			}
+			pipeCols = append(pipeCols, pipeline.PopulateCollection{
+				Slug:        cm.Slug,
+				Description: cm.Description,
+				Titles:      titles,
+			})
 		}
-		pipeCols = append(pipeCols, pipeline.PopulateCollection{
-			Slug:        cm.Slug,
-			Description: cm.Description,
-			Titles:      titles,
-		})
 	}
 
 	// Build articles inventory (excluding already linked).
@@ -467,8 +472,12 @@ func (s *Service) PopulateWorkspace(ctx context.Context, req PopulateRequest) (P
 	}
 
 	if req.Progress != nil {
-		req.Progress(fmt.Sprintf("excluded %d already-linked collections, %d already-linked articles",
-			len(linkedCols), len(linkedArticles)))
+		if req.IncludeCollections {
+			req.Progress(fmt.Sprintf("excluded %d already-linked collections, %d already-linked articles",
+				len(linkedCols), len(linkedArticles)))
+		} else {
+			req.Progress(fmt.Sprintf("excluded %d already-linked articles", len(linkedArticles)))
+		}
 	}
 
 	// Flash lookup for Pass 2.
@@ -489,6 +498,8 @@ func (s *Service) PopulateWorkspace(ctx context.Context, req PopulateRequest) (P
 		WorkspaceName:        req.Workspace,
 		WorkspaceDescription: ws.Description,
 		Profile:              req.Profile,
+		Hint:                 req.Hint,
+		IncludeCollections:   req.IncludeCollections,
 		Progress:             req.Progress,
 	}, pipeCols, pipeArticles, flashLookup)
 	if err != nil {
