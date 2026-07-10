@@ -30,6 +30,7 @@ var (
 	jsonOut      bool
 	noTUI        bool
 	logLevel     string
+	verboseFlag  bool
 )
 
 var rootCmd = &cobra.Command{
@@ -76,6 +77,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "output JSON")
 	rootCmd.PersistentFlags().BoolVar(&noTUI, "no-tui", false, "disable TUI, run in headless/CLI mode")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "", "log level: debug|info|warn|error (overrides config)")
+	rootCmd.PersistentFlags().BoolVar(&verboseFlag, "verbose", false, "print debug-level log output to stderr")
 	rootCmd.Flags().String("theme", "auto", "color theme: auto|light|dark")
 
 	rootCmd.PersistentPreRunE = openLibrary
@@ -105,7 +107,7 @@ func openLibrary(cmd *cobra.Command, args []string) error {
 		levelStr = cfg.LogLevel
 	}
 	level, _ := clog.ParseLevel(levelStr)
-	clog.Init(cfg.LogPath, level)
+	clog.Init(cfg.LogPath, level, verboseFlag)
 
 	lib, err := library.Open(cmd.Context(), cfg)
 	if err != nil {

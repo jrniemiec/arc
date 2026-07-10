@@ -1580,6 +1580,23 @@ func (m *Model) cmdUnlinkArticle(row *wsRow) {
 	}
 }
 
+// cmdUnlinkCollection removes a collection from a workspace.
+func (m *Model) cmdUnlinkCollection(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	colSlug := row.colSlug
+	wsName := ws.name
+
+	m.askConfirm(fmt.Sprintf("unlink collection %q from workspace %q? (yes/N)", colSlug, wsName), func() tea.Cmd {
+		return func() tea.Msg {
+			if err := storefs.RemoveCollectionFromWorkspace(cfg.DataRoot, wsName, colSlug); err != nil {
+				return cmdDoneMsg{err: "unlink: " + err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ unlinked collection %q from workspace %q", colSlug, wsName), reloadWorkspaces: true}
+		}
+	})
+}
+
 // cmdOutcomeRemove removes an outcome from workspace/outcomes/ with confirmation.
 func (m *Model) cmdOutcomeRemove(name string) {
 	if name == "" {

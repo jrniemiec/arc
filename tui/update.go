@@ -796,9 +796,15 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case msg.String() == "U":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
-			if row != nil && row.kind == wsRowArticle && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
-				m.cmdUnlinkArticle(row)
-				return nil
+			if row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+				switch row.kind {
+				case wsRowArticle:
+					m.cmdUnlinkArticle(row)
+					return nil
+				case wsRowCollection:
+					m.cmdUnlinkCollection(row)
+					return nil
+				}
 			}
 		}
 	case msg.String() == "e":
@@ -3846,7 +3852,7 @@ var helpGroups = []struct {
 		{"o", "", "open source URL in browser"},
 		{"v", "", "view article in external terminal"},
 		{"D", "", "delete current item"},
-		{"U", "", "unlink article from workspace/collection"},
+		{"U", "", "unlink article/collection from workspace"},
 		{"/", "", "open command input"},
 		{"?", "", "show key bindings"},
 		{"q / ctrl+c", "", "quit"},

@@ -56,6 +56,9 @@ type Config struct {
 	// AskX (single-shot LLM query pane in TUI)
 	AskX AskXConfig `json:"askx"`
 
+	// WorkspacePopulate controls LLM-assisted workspace population.
+	WorkspacePopulate WorkspacePopulateConfig `json:"workspace_populate"`
+
 	// Agent
 	AgentPath string `json:"agent_path,omitempty"` // default: <DataRoot>/agent
 
@@ -194,6 +197,27 @@ type AskXConfig struct {
 	MaxOutputTokens int `json:"max_output_tokens"`
 }
 
+// WorkspacePopulateConfig controls LLM-assisted workspace population.
+type WorkspacePopulateConfig struct {
+	// Profile is the arc profile name used for workspace population.
+	// Default: "haiku" (classification task, cheap model suffices).
+	Profile string `json:"profile"`
+
+	// CostNote holds human-readable cost/budget information for this operation.
+	CostNote string `json:"cost_note"`
+}
+
+// DefaultWorkspacePopulateCostNote is the built-in cost note for workspace populate.
+const DefaultWorkspacePopulateCostNote = `Two-pass LLM selection: ~32K input tokens, ~1K output tokens.
+Assumes ~500 articles, ~80 collections in library.
+Pass 1 (shortlist): ~20K tokens — all titles + collection members.
+Pass 2 (refine):    ~12-15K tokens — ~60 candidate flash summaries.
+Estimated cost per run:
+  Haiku 3.5:  ~$0.03
+  Sonnet 4:   ~$0.11
+  Opus 4:     ~$0.56
+Haiku is the recommended default — this is classification, not generation.`
+
 // DefaultAskXSystemPrompt is the built-in system prompt for askX queries.
 const DefaultAskXSystemPrompt = `You are a concise, knowledgeable assistant. Answer directly and precisely. No preamble, no filler. Use plain text — no markdown formatting.`
 
@@ -324,6 +348,14 @@ func (c *Config) CollectionSuggestProfileName() string {
 		return c.Ingest.CollectionSuggestProfile
 	}
 	return c.Ingest.FlashProfile
+}
+
+// WorkspacePopulateProfileName returns the effective profile name for workspace populate.
+func (c *Config) WorkspacePopulateProfileName() string {
+	if c.WorkspacePopulate.Profile != "" {
+		return c.WorkspacePopulate.Profile
+	}
+	return "haiku"
 }
 
 // builtinSummaryStyles are the default system prompts for each summary style.
@@ -499,6 +531,10 @@ func Default() Config {
 			Profile:         "haiku",
 			SystemPrompt:    DefaultAskXSystemPrompt,
 			MaxOutputTokens: 4096,
+		},
+		WorkspacePopulate: WorkspacePopulateConfig{
+			Profile:  "haiku",
+			CostNote: DefaultWorkspacePopulateCostNote,
 		},
 		AgentPath: filepath.Join(dataRoot, "agent"),
 		LogPath:   filepath.Join(dataRoot, "arc.log"),

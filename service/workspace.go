@@ -9,6 +9,9 @@ import (
 	"strings"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/ingest/pipeline"
+	"github.com/jrniemiec/arc/internal/clog"
+	"github.com/jrniemiec/arc/store"
 	"github.com/jrniemiec/arc/store/fs"
 )
 
@@ -389,4 +392,188 @@ func (s *Service) ReadWorkspaceOutcome(ctx context.Context, workspaceName, filen
 // SaveWorkspaceOutcome writes a file to workspace/outcomes/.
 func (s *Service) SaveWorkspaceOutcome(ctx context.Context, workspaceName, filename string, data []byte) error {
 	return fs.WriteWorkspaceOutcome(s.cfg.DataRoot, workspaceName, filename, data)
+}
+
+// ── Populate ─────────────────────────────────────────────────────────────────
+
+// PopulateWorkspace uses a two-pass LLM flow to suggest collections and articles
+// for a workspace based on its name and description.
+func (s *Service) PopulateWorkspace(ctx context.Context, req PopulateRequest) (PopulateResult, error) {
+	// Read workspace metadata.
+	ws, err := s.GetWorkspace(ctx, req.Workspace)
+	if err != nil {
+		return PopulateResult{}, fmt.Errorf("get workspace: %w", err)
+	}
+	if ws.Description == "" {
+		return PopulateResult{}, fmt.Errorf("workspace %q has no description — set one with: arc workspace describe %s <text>", req.Workspace, req.Workspace)
+	}
+
+	clog.Info("populate workspace",
+		"workspace", req.Workspace,
+		"description", ws.Description,
+		"profile", req.Profile,
+	)
+
+	// Build sets of already-linked items to exclude.
+	linkedCols := make(map[string]bool, len(ws.CollectionSlugs))
+	for _, c := range ws.CollectionSlugs {
+		linkedCols[c] = true
+	}
+	linkedArticles := make(map[string]bool, len(ws.Articles))
+	for _, a := range ws.Articles {
+		linkedArticles[a] = true
+	}
+
+	// Build collections inventory (excluding already linked).
+	colMetas, err := fs.ListCollections(s.cfg.DataRoot)
+	if err != nil {
+		return PopulateResult{}, fmt.Errorf("list collections: %w", err)
+	}
+	pipeCols := make([]pipeline.PopulateCollection, 0, len(colMetas))
+	for _, cm := range colMetas {
+		if linkedCols[cm.Slug] {
+			continue
+		}
+		articleSlugs, _, _ := fs.ListCollectionArticles(s.cfg.DataRoot, cm.Slug)
+		titles := make([]string, 0, len(articleSlugs))
+		for _, as := range articleSlugs {
+			a, err := s.lib.Get(ctx, as)
+			if err != nil {
+				continue
+			}
+			titles = append(titles, a.Title)
+		}
+		pipeCols = append(pipeCols, pipeline.PopulateCollection{
+			Slug:        cm.Slug,
+			Description: cm.Description,
+			Titles:      titles,
+		})
+	}
+
+	// Build articles inventory (excluding already linked).
+	allArticles, err := s.lib.List(ctx, store.Filter{})
+	if err != nil {
+		return PopulateResult{}, fmt.Errorf("list articles: %w", err)
+	}
+	pipeArticles := make([]pipeline.PopulateArticle, 0, len(allArticles))
+	for _, a := range allArticles {
+		if linkedArticles[a.ID] {
+			continue
+		}
+		pipeArticles = append(pipeArticles, pipeline.PopulateArticle{
+			Slug:  a.ID,
+			Title: a.Title,
+		})
+	}
+
+	if req.Progress != nil {
+		req.Progress(fmt.Sprintf("excluded %d already-linked collections, %d already-linked articles",
+			len(linkedCols), len(linkedArticles)))
+	}
+
+	// Flash lookup for Pass 2.
+	flashLookup := func(slug string) string {
+		dir := filepath.Join(s.cfg.ArticlesRoot, slug)
+		flashPath := fs.ResolveFlash(dir, s.cfg.PreferredModels)
+		if flashPath == "" {
+			return ""
+		}
+		data, err := os.ReadFile(flashPath)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(data))
+	}
+
+	result, err := pipeline.WorkspacePopulate(ctx, s.cfg, pipeline.PopulateRequest{
+		WorkspaceName:        req.Workspace,
+		WorkspaceDescription: ws.Description,
+		Profile:              req.Profile,
+		Progress:             req.Progress,
+	}, pipeCols, pipeArticles, flashLookup)
+	if err != nil {
+		return PopulateResult{}, err
+	}
+
+	// Validate slugs and build display text.
+	type colInfo struct {
+		description  string
+		articleCount int
+	}
+	colIndex := make(map[string]colInfo, len(pipeCols))
+	for _, pc := range pipeCols {
+		colIndex[pc.Slug] = colInfo{
+			description:  pc.Description,
+			articleCount: len(pc.Titles),
+		}
+	}
+	articleTitles := make(map[string]string, len(allArticles))
+	for _, a := range allArticles {
+		articleTitles[a.ID] = a.Title
+	}
+
+	var collections []PopulateSuggestion
+	for _, c := range result.Collections {
+		if ci, ok := colIndex[c]; ok {
+			collections = append(collections, PopulateSuggestion{
+				Slug:         c,
+				Display:      ci.description,
+				ArticleCount: ci.articleCount,
+			})
+		} else {
+			clog.Warn("populate: rejected hallucinated collection slug", "slug", c)
+		}
+	}
+
+	var articles []PopulateSuggestion
+	for _, a := range result.Articles {
+		if _, ok := articleTitles[a]; ok {
+			flash := flashLookup(a)
+			display := truncateOneLine(flash, 160)
+			if display == "" {
+				display = articleTitles[a]
+			}
+			articles = append(articles, PopulateSuggestion{
+				Slug:    a,
+				Display: display,
+			})
+		} else {
+			clog.Warn("populate: rejected hallucinated article slug", "slug", a)
+		}
+	}
+
+	// Compute cost from token usage.
+	profileName := req.Profile
+	if profileName == "" {
+		profileName = s.cfg.WorkspacePopulateProfileName()
+	}
+	prof, _ := s.cfg.Profile(profileName)
+	costUSD := s.cfg.CalcCost(prof.Model, result.InputTokens, result.OutputTokens)
+
+	clog.Info("populate complete",
+		"collections", len(collections),
+		"articles", len(articles),
+		"input_tokens", result.InputTokens,
+		"output_tokens", result.OutputTokens,
+		"cost_usd", fmt.Sprintf("%.4f", costUSD),
+	)
+
+	return PopulateResult{
+		Collections:  collections,
+		Articles:     articles,
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+		CostUSD:      costUSD,
+	}, nil
+}
+
+// truncateOneLine collapses text to a single line and truncates at maxLen.
+func truncateOneLine(s string, maxLen int) string {
+	s = strings.TrimSpace(s)
+	// Collapse newlines into spaces.
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > maxLen {
+		return s[:maxLen-3] + "..."
+	}
+	return s
 }

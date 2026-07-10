@@ -13,6 +13,8 @@ import (
 
 	"github.com/jrniemiec/arc/chat"
 	chatengine "github.com/jrniemiec/arc/chat/engine"
+	"github.com/jrniemiec/arc/internal/clog"
+	"github.com/jrniemiec/arc/service"
 	"github.com/jrniemiec/arc/store/fs"
 )
 
@@ -29,6 +31,11 @@ func init() {
 	workspaceCmd.AddCommand(workspaceAddCmd)
 	workspaceCmd.AddCommand(workspaceRemoveCmd)
 	workspaceCmd.AddCommand(workspaceOutcomesCmd)
+	workspaceCmd.AddCommand(workspacePopulateCmd)
+
+	workspacePopulateCmd.Flags().Bool("dry-run", false, "show suggestions without linking")
+	workspacePopulateCmd.Flags().Bool("edit", false, "review each suggestion interactively")
+	workspacePopulateCmd.Flags().StringP("profile", "p", "", "LLM profile for selection (default: config or haiku)")
 
 	workspaceListCmd.Flags().Bool("all", false, "include archived workspaces")
 	workspaceDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
@@ -41,6 +48,9 @@ func init() {
 	workspaceRemoveCmd.Flags().StringSlice("article", nil, "article slug(s) to remove")
 	workspaceRemoveCmd.Flags().StringSlice("collection", nil, "collection slug(s) to remove")
 	workspaceRemoveCmd.Flags().StringSlice("resource", nil, "resource basename(s) to remove")
+	workspaceRemoveCmd.Flags().Bool("all-articles", false, "remove all articles from workspace")
+	workspaceRemoveCmd.Flags().Bool("all-collections", false, "remove all collections from workspace")
+	workspaceRemoveCmd.Flags().Bool("dry-run", false, "list items that would be removed without removing")
 
 	workspaceOutcomesCmd.Flags().String("read", "", "print this outcome file to stdout")
 
@@ -503,34 +513,100 @@ var workspaceRemoveCmd = &cobra.Command{
 	Long: `Remove one or more items from a workspace. For resources, provide the
 basename as shown by 'arc workspace show'.
 
+Use --all-articles or --all-collections to remove all items of that type.
+These require confirmation (or --force to skip).
+
 Examples:
   arc workspace remove myws --article slug1
-  arc workspace remove myws --collection ml --resource paper.pdf`,
+  arc workspace remove myws --collection ml --resource paper.pdf
+  arc workspace remove myws --all-articles
+  arc workspace remove myws --all-collections`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := resolveWorkspaceName(cmd, args[0])
 		if err != nil {
 			return err
 		}
+		cfg := cfgFrom(cmd)
 
 		articles, _ := cmd.Flags().GetStringSlice("article")
 		cols, _ := cmd.Flags().GetStringSlice("collection")
 		resources, _ := cmd.Flags().GetStringSlice("resource")
+		allArticles, _ := cmd.Flags().GetBool("all-articles")
+		allCollections, _ := cmd.Flags().GetBool("all-collections")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+		// Resolve --all-articles: list all, show, confirm.
+		if allArticles {
+			linked, _, _ := fs.ListWorkspaceArticles(cfg.DataRoot, name)
+			if len(linked) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no articles linked to workspace")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Articles to remove from %s:\n", name)
+				for _, a := range linked {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", a)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "\nRemove all %d articles? (yes/N): ", len(linked))
+				scanner := bufio.NewScanner(os.Stdin)
+				if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "yes" {
+					fmt.Fprintln(cmd.OutOrStdout(), "aborted")
+					return nil
+				}
+				articles = append(articles, linked...)
+			}
+		}
+
+		// Resolve --all-collections: list all, show, confirm.
+		if allCollections {
+			linked, _ := fs.ListWorkspaceCollections(cfg.DataRoot, name)
+			if len(linked) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no collections linked to workspace")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Collections to remove from %s:\n", name)
+				for _, c := range linked {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", c)
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "\nRemove all %d collections? (yes/N): ", len(linked))
+				scanner := bufio.NewScanner(os.Stdin)
+				if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "yes" {
+					fmt.Fprintln(cmd.OutOrStdout(), "aborted")
+					return nil
+				}
+				cols = append(cols, linked...)
+			}
+		}
 
 		if len(articles) == 0 && len(cols) == 0 && len(resources) == 0 {
-			return fmt.Errorf("specify at least one of --article, --collection, or --resource")
+			return fmt.Errorf("specify at least one of --article, --collection, --resource, --all-articles, or --all-collections")
+		}
+
+		total := len(articles) + len(cols) + len(resources)
+		clog.Info("workspace remove",
+			"workspace", name,
+			"articles", len(articles),
+			"collections", len(cols),
+			"resources", len(resources),
+			"dry_run", dryRun,
+		)
+
+		if dryRun {
+			fmt.Fprintf(cmd.OutOrStdout(), "\nwould remove %d items from workspace %s\n", total, name)
+			clog.Info("workspace remove dry-run complete",
+				"workspace", name,
+				"would_remove", total,
+			)
+			return nil
 		}
 
 		svc := svcFrom(cmd)
 		var errs []string
+		removed := 0
 
 		if len(articles) > 0 {
 			if err := svc.RemoveArticlesFromWorkspace(cmd.Context(), name, articles); err != nil {
 				errs = append(errs, err.Error())
 			} else {
-				for _, a := range articles {
-					fmt.Fprintf(cmd.OutOrStdout(), "removed article %s from %s\n", a, name)
-				}
+				removed += len(articles)
 			}
 		}
 
@@ -538,9 +614,7 @@ Examples:
 			if err := svc.RemoveCollectionsFromWorkspace(cmd.Context(), name, cols); err != nil {
 				errs = append(errs, err.Error())
 			} else {
-				for _, c := range cols {
-					fmt.Fprintf(cmd.OutOrStdout(), "removed collection %s from %s\n", c, name)
-				}
+				removed += len(cols)
 			}
 		}
 
@@ -548,15 +622,19 @@ Examples:
 			if err := svc.RemoveResourcesFromWorkspace(cmd.Context(), name, resources); err != nil {
 				errs = append(errs, err.Error())
 			} else {
-				for _, r := range resources {
-					fmt.Fprintf(cmd.OutOrStdout(), "removed resource %s from %s\n", r, name)
-				}
+				removed += len(resources)
 			}
 		}
 
 		if len(errs) > 0 {
 			return fmt.Errorf("%s", strings.Join(errs, "\n"))
 		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "✓ removed %d items from workspace %s\n", removed, name)
+		clog.Info("workspace remove complete",
+			"workspace", name,
+			"removed", removed,
+		)
 		return nil
 	},
 }
@@ -1052,6 +1130,184 @@ func validateWorkspaceName(name string) error {
 		return fmt.Errorf("workspace name cannot start with a dot")
 	}
 	return nil
+}
+
+// ── Populate ─────────────────────────────────────────────────────────────────
+
+var workspacePopulateCmd = &cobra.Command{
+	Use:   "populate <name>",
+	Short: "LLM-assisted workspace population from library",
+	Long: `Selects collections and articles for a workspace using a two-pass LLM flow.
+
+Pass 1 shortlists relevant collections and article candidates from titles.
+Pass 2 refines candidates using flash summaries for a final selection.
+
+The workspace must have a description set (arc workspace describe <name> <text>).`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		svc := svcFrom(cmd)
+		name := args[0]
+
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		edit, _ := cmd.Flags().GetBool("edit")
+		profile, _ := cmd.Flags().GetString("profile")
+
+		tty := isTTY(os.Stdout)
+		var progressLog []string
+		progress := func(msg string) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
+			progressLog = append(progressLog, msg)
+		}
+
+		result, err := svc.PopulateWorkspace(cmd.Context(), service.PopulateRequest{
+			Workspace: name,
+			Profile:   profile,
+			Progress:  progress,
+		})
+		if err != nil {
+			return err
+		}
+
+		// Interactive edit: review each suggestion.
+		if edit {
+			scanner := bufio.NewScanner(os.Stdin)
+
+			if len(result.Collections) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n\n", bold("Collections:", tty))
+				var accepted []service.PopulateSuggestion
+				for _, c := range result.Collections {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s (%d articles)\n", c.Slug, c.ArticleCount)
+					if c.Display != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", c.Display)
+					}
+					fmt.Fprint(cmd.OutOrStdout(), "  [Enter=accept, n=skip]: ")
+					if !scanner.Scan() {
+						return fmt.Errorf("aborted")
+					}
+					if strings.ToLower(strings.TrimSpace(scanner.Text())) == "n" {
+						fmt.Fprintln(cmd.OutOrStdout(), "– skipped")
+					} else {
+						fmt.Fprintln(cmd.OutOrStdout(), "✓ accepted")
+						accepted = append(accepted, c)
+					}
+					fmt.Fprintln(cmd.OutOrStdout())
+				}
+				result.Collections = accepted
+			}
+
+			if len(result.Articles) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n\n", bold("Articles:", tty))
+				var accepted []service.PopulateSuggestion
+				for _, a := range result.Articles {
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", a.Slug)
+					if a.Display != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", a.Display)
+					}
+					fmt.Fprint(cmd.OutOrStdout(), "  [Enter=accept, n=skip]: ")
+					if !scanner.Scan() {
+						return fmt.Errorf("aborted")
+					}
+					if strings.ToLower(strings.TrimSpace(scanner.Text())) == "n" {
+						fmt.Fprintln(cmd.OutOrStdout(), "– skipped")
+					} else {
+						fmt.Fprintln(cmd.OutOrStdout(), "✓ accepted")
+						accepted = append(accepted, a)
+					}
+					fmt.Fprintln(cmd.OutOrStdout())
+				}
+				result.Articles = accepted
+			}
+		}
+
+		// Build formatted output for display, scratch, and log.
+		output := formatPopulateOutput(result, dryRun, edit, progressLog)
+		fmt.Fprint(cmd.OutOrStdout(), output)
+
+		// Save to workspace scratch.
+		cfg := cfgFrom(cmd)
+		if err := fs.AppendScratch(cfg.DataRoot, name, output); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  warning: write scratch: %v\n", err)
+		}
+
+		// Log the full output.
+		clog.Raw("populate output", output)
+
+		// Apply: link accepted items to workspace.
+		if !dryRun {
+			colSlugs := make([]string, len(result.Collections))
+			for i, c := range result.Collections {
+				colSlugs[i] = c.Slug
+			}
+			artSlugs := make([]string, len(result.Articles))
+			for i, a := range result.Articles {
+				artSlugs[i] = a.Slug
+			}
+			if len(colSlugs) > 0 {
+				if err := svc.AddCollectionsToWorkspace(cmd.Context(), name, colSlugs); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  warning: add collections: %v\n", err)
+				}
+			}
+			if len(artSlugs) > 0 {
+				if err := svc.AddArticlesToWorkspace(cmd.Context(), name, artSlugs); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "  warning: add articles: %v\n", err)
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Linked to workspace %s\n", bold(name, tty))
+		}
+
+		return nil
+	},
+}
+
+func formatPopulateOutput(result service.PopulateResult, dryRun, edit bool, progressLog []string) string {
+	var sb strings.Builder
+
+	header := "### populate"
+	if dryRun {
+		header = "### populate dry-run"
+	}
+	sb.WriteString(header + "\n\n")
+
+	for _, msg := range progressLog {
+		sb.WriteString(fmt.Sprintf("  %s\n", msg))
+	}
+	if len(progressLog) > 0 {
+		sb.WriteString("\n")
+	}
+
+	if len(result.Collections) > 0 {
+		sb.WriteString("**Collections:**\n\n")
+		for _, c := range result.Collections {
+			if c.ArticleCount > 0 {
+				sb.WriteString(fmt.Sprintf("  %s (%d articles)\n", c.Slug, c.ArticleCount))
+			} else {
+				sb.WriteString(fmt.Sprintf("  %s\n", c.Slug))
+			}
+			if c.Display != "" {
+				sb.WriteString(fmt.Sprintf("  %s\n", c.Display))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	if len(result.Articles) > 0 {
+		sb.WriteString("**Articles:**\n\n")
+		for _, a := range result.Articles {
+			sb.WriteString(fmt.Sprintf("  %s\n", a.Slug))
+			if a.Display != "" {
+				sb.WriteString(fmt.Sprintf("  %s\n", a.Display))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	label := "Suggested:"
+	if edit {
+		label = "Accepted:"
+	}
+	sb.WriteString(fmt.Sprintf("%s %d collections, %d articles (cost: $%.4f)\n", label, len(result.Collections), len(result.Articles), result.CostUSD))
+
+	return sb.String()
 }
 
 // formatSize returns a human-readable file size string.

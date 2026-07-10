@@ -239,6 +239,29 @@ type Stats struct {
 	EmbedByCollection     map[string]int     // embedded article count by collection
 }
 
+// PopulateRequest describes a workspace populate operation.
+type PopulateRequest struct {
+	Workspace string // workspace name (must exist)
+	Profile   string // LLM profile override (empty = config default)
+	Progress  func(msg string)
+}
+
+// PopulateSuggestion is a single populate suggestion with display text.
+type PopulateSuggestion struct {
+	Slug         string
+	Display      string // collection description or truncated flash summary
+	ArticleCount int    // number of articles in collection (0 for articles)
+}
+
+// PopulateResult holds the suggestions from a workspace populate run.
+type PopulateResult struct {
+	Collections  []PopulateSuggestion
+	Articles     []PopulateSuggestion
+	InputTokens  int
+	OutputTokens int
+	CostUSD      float64
+}
+
 // ReprocessRequest describes which articles to reprocess and how.
 type ReprocessRequest struct {
 	Slug         string // article ID or fuzzy slug; ignored when All=true or Collection is set
