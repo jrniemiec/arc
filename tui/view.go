@@ -1687,6 +1687,9 @@ func (m Model) renderCompletionLines() []string {
 // Priority: selectionMode > chatMode > pendingConfirmMsg > navFilter > statusMsg > empty.
 func (m Model) renderStatusLine() string {
 	t := ActiveTheme
+	if m.populateRunning && !m.selectionMode {
+		return renderWaveIndicator(m.spinnerFrame, m.populateLabel, t.StreamingText, t.Dimmed)
+	}
 	if m.askxStreaming && !m.selectionMode {
 		label := "askX streaming · " + m.askxResolvedProfile
 		return renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)

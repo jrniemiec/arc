@@ -247,6 +247,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.navSubTab == navSubTabWorkspaces {
 			cmds = append(cmds, m.triggerWorkspaceChatLoad())
 		}
+		// If inside a workspace (chat mode), refresh article count.
+		if m.chatMode && m.chatWorkspace != "" {
+			cmds = append(cmds, m.loadChatHistoryCmd(m.chatWorkspace, false))
+		}
 
 	case statsLoadedMsg:
 		if msg.err == "" {
@@ -260,6 +264,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case cmdDoneMsg:
+		m.populateRunning = false
+		m.populateLabel = ""
 		if msg.err != "" {
 			m.setStatusError("✗ " + msg.err)
 		} else {
@@ -2277,6 +2283,19 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			return items
 		}
 
+	case "/populate":
+		// Suggest the workspace name only as the first token (before any flags).
+		if strings.TrimSpace(arg) != "" {
+			return nil
+		}
+		if m.chatMode && m.chatWorkspace != "" {
+			return []cmdCompletion{{cmd: m.chatWorkspace}}
+		}
+		if ws := m.selectedWorkspace(); ws != nil {
+			return []cmdCompletion{{cmd: ws.name}}
+		}
+		return nil
+
 	case "/article":
 		return []cmdCompletion{
 			{cmd: "list", desc: "go to Articles sub-tab"},
@@ -2639,6 +2658,13 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		return m.cmdWorkspaceReload()
+
+	case "/populate":
+		if sub != navSubTabWorkspaces {
+			m.statusMsg = "✗ /populate is only available in Workspaces context"
+			return nil
+		}
+		return m.cmdPopulateWorkspace(arg)
 
 	default:
 		m.statusMsg = "✗ unknown command: " + parts[0]
@@ -3793,6 +3819,165 @@ func (m *Model) cmdWorkspaceReload() tea.Cmd {
 	return nil
 }
 
+// cmdPopulateWorkspace runs LLM-assisted workspace population.
+// Parses --hint and --include-collections from arg string.
+func (m *Model) cmdPopulateWorkspace(arg string) tea.Cmd {
+	// Resolve workspace name.
+	var wsName string
+	if m.chatMode && m.chatWorkspace != "" {
+		wsName = m.chatWorkspace
+	} else if ws := m.selectedWorkspace(); ws != nil {
+		wsName = ws.name
+	} else {
+		m.statusMsg = "✗ no workspace selected"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+
+	// Parse arg: [workspace-name] [--hint "..."] [--include-collections] [--dry-run]
+	// First non-flag token is treated as workspace name override.
+	var hint string
+	var profile string
+	var includeCols bool
+	var dryRun bool
+	tokens := strings.Fields(arg)
+	for i := 0; i < len(tokens); i++ {
+		switch tokens[i] {
+		case "--include-collections":
+			includeCols = true
+		case "--dry-run":
+			dryRun = true
+		case "--profile":
+			if i+1 < len(tokens) {
+				i++
+				profile = tokens[i]
+			}
+		case "--hint":
+			// Consume tokens until the next flag or end of input.
+			var hintParts []string
+			for i+1 < len(tokens) {
+				i++
+				if strings.HasPrefix(tokens[i], "--") {
+					i-- // let the outer loop handle this flag
+					break
+				}
+				hintParts = append(hintParts, tokens[i])
+			}
+			hint = strings.Trim(strings.Join(hintParts, " "), "\"'")
+		default:
+			// First non-flag token = workspace name (from completion).
+			if !strings.HasPrefix(tokens[i], "--") {
+				wsName = tokens[i]
+			}
+		}
+	}
+
+	svc := m.svc
+	cfg := m.cfg
+	m.populateRunning = true
+	m.populateLabel = "populating " + wsName + "…"
+	m.statusMsg = ""
+
+	return func() tea.Msg {
+		var progressLog []string
+		progress := func(msg string) {
+			progressLog = append(progressLog, msg)
+		}
+
+		result, err := svc.PopulateWorkspace(context.Background(), service.PopulateRequest{
+			Workspace:          wsName,
+			Profile:            profile,
+			Hint:               hint,
+			IncludeCollections: includeCols,
+			Progress:           progress,
+		})
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+
+		// Build output lines for status pane (CLI-style).
+		var lines []string
+		if dryRun {
+			lines = append(lines, fmt.Sprintf("populate dry-run for %s", wsName))
+		} else {
+			lines = append(lines, fmt.Sprintf("populate %s", wsName))
+		}
+		if hint != "" {
+			lines = append(lines, fmt.Sprintf("hint: %s", hint))
+		}
+		lines = append(lines, "")
+		for _, msg := range progressLog {
+			lines = append(lines, "  "+msg)
+		}
+		if len(progressLog) > 0 {
+			lines = append(lines, "")
+		}
+
+		if len(result.Collections) > 0 {
+			lines = append(lines, "Collections:")
+			for _, c := range result.Collections {
+				if c.ArticleCount > 0 {
+					lines = append(lines, fmt.Sprintf("  %s (%d articles)", c.Slug, c.ArticleCount))
+				} else {
+					lines = append(lines, fmt.Sprintf("  %s", c.Slug))
+				}
+				if c.Display != "" {
+					lines = append(lines, fmt.Sprintf("  %s", c.Display))
+				}
+			}
+			lines = append(lines, "")
+		}
+
+		if len(result.Articles) > 0 {
+			lines = append(lines, "Articles:")
+			for _, a := range result.Articles {
+				line := fmt.Sprintf("  %s", a.Slug)
+				if a.Display != "" {
+					line += fmt.Sprintf("  — %s", a.Display)
+				}
+				lines = append(lines, line)
+			}
+			lines = append(lines, "")
+		}
+
+		// Apply unless dry-run.
+		if !dryRun {
+			colSlugs := make([]string, len(result.Collections))
+			for i, c := range result.Collections {
+				colSlugs[i] = c.Slug
+			}
+			artSlugs := make([]string, len(result.Articles))
+			for i, a := range result.Articles {
+				artSlugs[i] = a.Slug
+			}
+			if len(colSlugs) > 0 {
+				_ = svc.AddCollectionsToWorkspace(context.Background(), wsName, colSlugs)
+			}
+			if len(artSlugs) > 0 {
+				_ = svc.AddArticlesToWorkspace(context.Background(), wsName, artSlugs)
+			}
+			lines = append(lines, fmt.Sprintf("✓ Linked: %d collections, %d articles (cost: $%.4f)",
+				len(result.Collections), len(result.Articles), result.CostUSD))
+		} else {
+			lines = append(lines, fmt.Sprintf("Suggested: %d collections, %d articles (cost: $%.4f)",
+				len(result.Collections), len(result.Articles), result.CostUSD))
+			lines = append(lines, "(dry-run — nothing linked)")
+		}
+
+		// Save full output to scratch as a single entry.
+		output := strings.Join(lines, "\n") + "\n"
+		_ = storefs.AppendScratch(cfg.DataRoot, wsName, output)
+
+		return cmdDoneMsg{
+			statusLines:      lines,
+			reloadWorkspaces: !dryRun,
+		}
+	}
+}
+
 // helpGroups defines the command groups shown by /help.
 // Names match the context qualifier: article, collection, workspace, keys, system.
 var helpGroups = []struct {
@@ -3831,6 +4016,7 @@ var helpGroups = []struct {
 		{"/delete", "", "delete current workspace"},
 		{"/rename", "<new-name>", "rename current workspace"},
 		{"/describe", "<text>", "set workspace description"},
+		{"/populate", "[--hint \"...\"]", "LLM-assisted article selection from library"},
 		{"arc workspace add", "<slug>", "add articles/collections/resources  (CLI only)"},
 		{"arc workspace remove", "<slug>", "remove articles/collections/resources  (CLI only)"},
 		{"arc workspace chat", "<slug>", "start interactive chat session  (CLI only)"},

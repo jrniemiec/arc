@@ -210,10 +210,10 @@ func buildPass1Prompt(name, description, hint string, includeCollections bool, c
 	sb.WriteString("## Workspace\n")
 	sb.WriteString(fmt.Sprintf("Name: %s\n", name))
 	sb.WriteString(fmt.Sprintf("Purpose: %s\n", description))
-	if hint != "" {
-		sb.WriteString(fmt.Sprintf("Guidance: %s\n", hint))
-	}
 	sb.WriteString("\n")
+	if hint != "" {
+		sb.WriteString(fmt.Sprintf("## User Guidance (MUST follow)\n%s\n\n", hint))
+	}
 
 	if includeCollections && len(collections) > 0 {
 		sb.WriteString("## Available Collections\n\n")
@@ -243,10 +243,10 @@ func buildPass2Prompt(name, description, hint string, selectedCollections []stri
 	sb.WriteString("## Workspace\n")
 	sb.WriteString(fmt.Sprintf("Name: %s\n", name))
 	sb.WriteString(fmt.Sprintf("Purpose: %s\n", description))
-	if hint != "" {
-		sb.WriteString(fmt.Sprintf("Guidance: %s\n", hint))
-	}
 	sb.WriteString("\n")
+	if hint != "" {
+		sb.WriteString(fmt.Sprintf("## User Guidance (MUST follow)\n%s\n\n", hint))
+	}
 
 	if len(selectedCollections) > 0 {
 		sb.WriteString("## Already Selected Collections\n")

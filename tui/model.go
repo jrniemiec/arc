@@ -396,6 +396,9 @@ type Model struct {
 	askxDisplayLines  []chatLine         // rendered lines for display (reuses chat line types)
 	askxBoxCursor     int                // selected box index (each box = user+assistant exchange)
 	askxCollapsed     map[int]bool       // set of collapsed box indices
+	populateRunning bool   // true while workspace populate LLM is in flight
+	populateLabel   string // label shown in wave indicator during populate
+
 	askxStreaming        bool              // true while LLM response is in flight
 	askxStreamBuf       string             // accumulated streaming response text
 	askxSharedBuf       *streamBuf         // goroutine-safe buffer written by streaming goroutine
@@ -477,6 +480,7 @@ var workspaceCommands = []cmdCompletion{
 	{"/rename", "<new-name>", "rename current workspace"},
 	{"/describe", "<text>", "set workspace description"},
 	{"/reload", "", "reset chat engine to pick up corpus changes"},
+	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--include-collections]", "LLM-assisted article selection"},
 }
 
 // chatCommands are available when workspace chat mode is active.
@@ -499,6 +503,7 @@ var chatCommands = []cmdCompletion{
 	{"/resource-edit", "<name>", "open resource file in $EDITOR"},
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
+	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--include-collections]", "LLM-assisted article selection"},
 	{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
 	{"/Scratch", "[msg]", "global scratch (append / toggle)"},
 	{"/askX", "<prompt>", "workspace-local LLM query"},

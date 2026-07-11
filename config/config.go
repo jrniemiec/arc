@@ -392,37 +392,41 @@ func (c *Config) WorkspacePopulatePass2Prompt() string {
 }
 
 // DefaultPopulatePass1Prompt is the built-in system prompt for pass 1 (articles-only).
-const DefaultPopulatePass1Prompt = `You are a research librarian. Given a workspace purpose and a list of article titles, shortlist candidates that may be relevant.
+const DefaultPopulatePass1Prompt = `You are a strict research librarian. Given a workspace purpose and a list of article titles, shortlist ONLY articles with a strong, direct connection to the workspace topic.
 
 Instructions:
-- Infer the scope and depth from the workspace name and purpose. A narrow/introductory workspace needs fewer candidates than a broad research workspace.
-- Prefer a tight, focused shortlist over exhaustive coverage. This is a shortlist for a second pass, but do not over-include — only articles with a reasonable chance of relevance.
+- Infer scope from the workspace name and purpose. A narrow/introductory workspace (e.g. "building my first X") needs at most 15-20 candidates. A broad research workspace may go up to 40.
+- Be aggressive about excluding loosely related articles. An article about a tangentially related topic is NOT a candidate.
+- This is a shortlist for a second pass, but over-inclusion wastes budget and degrades quality.
+- If the user provides guidance, treat it as a hard constraint.
 - Return ONLY valid JSON, no commentary.
 
 Output format:
 {"articles": ["slug1", "slug2"]}`
 
 // DefaultPopulatePass1WithCollectionsPrompt is the built-in system prompt for pass 1 with collections.
-const DefaultPopulatePass1WithCollectionsPrompt = `You are a research librarian. Given a workspace purpose, collections, and articles, select relevant items.
+const DefaultPopulatePass1WithCollectionsPrompt = `You are a strict research librarian. Given a workspace purpose, collections, and articles, select ONLY items with a strong, direct connection.
 
 Instructions:
-- Infer the scope and depth from the workspace name and purpose. A narrow/introductory workspace needs fewer items than a broad research workspace.
-- Select collections whose topic clearly aligns with the workspace purpose.
-- Select individual article CANDIDATES that may be relevant but are NOT covered by a selected collection.
-- Prefer a focused selection over exhaustive coverage.
+- Infer scope from the workspace name and purpose. A narrow workspace needs fewer items than a broad one.
+- Select collections only when their entire topic aligns with the workspace purpose.
+- Select article CANDIDATES only if they are directly relevant AND not covered by a selected collection.
+- Be aggressive about excluding loosely related items.
+- If the user provides guidance, treat it as a hard constraint.
 - Return ONLY valid JSON, no commentary.
 
 Output format:
 {"collections": ["slug1", "slug2"], "articles": ["slug1", "slug2"]}`
 
 // DefaultPopulatePass2Prompt is the built-in system prompt for pass 2.
-const DefaultPopulatePass2Prompt = `You are a research librarian making a final selection for a workspace.
+const DefaultPopulatePass2Prompt = `You are a strict research librarian making a final selection for a workspace.
 
 Instructions:
-- Review the candidate articles. Each includes a flash summary.
-- Select only articles that are clearly relevant to the workspace purpose.
-- Infer the appropriate number from the workspace scope. A beginner/introductory workspace may need only 5-10 articles. A broad research workspace may need more.
-- Prefer precision over recall — fewer high-relevance articles beat many loosely related ones.
+- Review each candidate article and its flash summary.
+- Select ONLY articles that are clearly and directly relevant to the workspace purpose.
+- For a narrow/introductory workspace: select 5-10 articles maximum. For a broad research workspace: up to 20-30.
+- When in doubt, EXCLUDE. A focused workspace with 5 high-relevance articles is far better than 15 loosely related ones.
+- If the user provides guidance, treat it as a hard constraint that overrides the defaults above.
 - Return ONLY valid JSON, no commentary.
 
 Output format:

@@ -925,6 +925,8 @@ func (m Model) renderChatStatusLine() string {
 		}
 		label := fmt.Sprintf("♪ #%d  say  %d wpm  [ slower  ] faster", m.chatBoxCursor+1, rate)
 		left = renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
+	} else if m.populateRunning {
+		left = renderWaveIndicator(m.spinnerFrame, m.populateLabel, t.StreamingText, t.Dimmed)
 	} else if m.chatStreaming {
 		streamLabel := "streaming"
 		if m.chatEngine != nil {
@@ -1089,7 +1091,18 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 	case "/reload":
 		m.chatEngine = nil
 		m.statusMsg = "✓ engine reset — will reinitialise on next message"
+		if m.svc != nil {
+			m.workspacesLoaded = false
+			return loadWorkspaces(m.svc)
+		}
 		return nil
+
+	case "/populate":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.Join(parts[1:], " ")
+		}
+		return m.cmdPopulateWorkspace(arg)
 
 	case "/help":
 		var lines []string

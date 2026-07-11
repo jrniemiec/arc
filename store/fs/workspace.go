@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -329,8 +330,35 @@ func DeleteWorkspace(dataRoot, name string) error {
 // ErrAlreadyInWorkspace is returned when an article or collection is already linked.
 var ErrAlreadyInWorkspace = fmt.Errorf("already in workspace")
 
+// articleManifest maps slug → RFC3339 linked-at timestamp.
+type articleManifest map[string]string
+
+func articleManifestPath(dataRoot, wsName string) string {
+	return filepath.Join(WorkspaceDir(dataRoot, wsName), "articles.json")
+}
+
+func readArticleManifest(dataRoot, wsName string) articleManifest {
+	data, err := os.ReadFile(articleManifestPath(dataRoot, wsName))
+	if err != nil {
+		return articleManifest{}
+	}
+	var m articleManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return articleManifest{}
+	}
+	return m
+}
+
+func writeArticleManifest(dataRoot, wsName string, m articleManifest) {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(articleManifestPath(dataRoot, wsName), data, 0644)
+}
+
 // AddArticleToWorkspace creates a relative symlink from workspace/articles/<slug>
-// to the article directory.
+// to the article directory and records the linking timestamp in articles.json.
 func AddArticleToWorkspace(dataRoot, articlesRoot, articleSlug, workspaceName string) error {
 	wsDir := WorkspaceDir(dataRoot, workspaceName)
 	linkPath := filepath.Join(wsDir, "articles", articleSlug)
@@ -344,10 +372,19 @@ func AddArticleToWorkspace(dataRoot, articlesRoot, articleSlug, workspaceName st
 	if err != nil {
 		return fmt.Errorf("compute rel path: %w", err)
 	}
-	return os.Symlink(rel, linkPath)
+	if err := os.Symlink(rel, linkPath); err != nil {
+		return err
+	}
+
+	// Record linking timestamp.
+	manifest := readArticleManifest(dataRoot, workspaceName)
+	manifest[articleSlug] = time.Now().Format(time.RFC3339)
+	writeArticleManifest(dataRoot, workspaceName, manifest)
+	return nil
 }
 
-// RemoveArticleFromWorkspace removes the symlink for an article from the workspace.
+// RemoveArticleFromWorkspace removes the symlink for an article from the workspace
+// and removes its entry from articles.json.
 func RemoveArticleFromWorkspace(dataRoot, workspaceName, articleSlug string) error {
 	linkPath := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "articles", articleSlug)
 	info, err := os.Lstat(linkPath)
@@ -360,10 +397,20 @@ func RemoveArticleFromWorkspace(dataRoot, workspaceName, articleSlug string) err
 	if info.Mode()&os.ModeSymlink == 0 {
 		return fmt.Errorf("%s is not a symlink — refusing to delete", linkPath)
 	}
-	return os.Remove(linkPath)
+	if err := os.Remove(linkPath); err != nil {
+		return err
+	}
+
+	// Remove from manifest.
+	manifest := readArticleManifest(dataRoot, workspaceName)
+	delete(manifest, articleSlug)
+	writeArticleManifest(dataRoot, workspaceName, manifest)
+	return nil
 }
 
 // ListWorkspaceArticles returns article slugs linked in a workspace.
+// Articles are sorted by linking timestamp (from articles.json manifest).
+// Articles without a manifest entry are sorted by slug and listed first.
 // Broken symlinks are reported separately.
 func ListWorkspaceArticles(dataRoot, name string) (articles []string, broken []string, err error) {
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "articles")
@@ -386,13 +433,60 @@ func ListWorkspaceArticles(dataRoot, name string) (articles []string, broken []s
 		}
 		articles = append(articles, e.Name())
 	}
+
+	// Sort by manifest linked-at timestamp.
+	manifest := readArticleManifest(dataRoot, name)
+	sort.SliceStable(articles, func(i, j int) bool {
+		ti, oki := manifest[articles[i]]
+		tj, okj := manifest[articles[j]]
+		// Both missing manifest → slug order (already sorted by ReadDir).
+		if !oki && !okj {
+			return articles[i] < articles[j]
+		}
+		// Missing manifest entries come first.
+		if !oki {
+			return true
+		}
+		if !okj {
+			return false
+		}
+		return ti < tj
+	})
+
 	return articles, broken, nil
 }
 
 // ── Collections ───────────────────────────────────────────────────────────────
 
+// collectionManifest maps slug → RFC3339 linked-at timestamp.
+type collectionManifest map[string]string
+
+func collectionManifestPath(dataRoot, wsName string) string {
+	return filepath.Join(WorkspaceDir(dataRoot, wsName), "collections.json")
+}
+
+func readCollectionManifest(dataRoot, wsName string) collectionManifest {
+	data, err := os.ReadFile(collectionManifestPath(dataRoot, wsName))
+	if err != nil {
+		return collectionManifest{}
+	}
+	var m collectionManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return collectionManifest{}
+	}
+	return m
+}
+
+func writeCollectionManifest(dataRoot, wsName string, m collectionManifest) {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(collectionManifestPath(dataRoot, wsName), data, 0644)
+}
+
 // AddCollectionToWorkspace creates a relative symlink from workspace/collections/<slug>
-// to the collection directory.
+// to the collection directory and records the linking timestamp in collections.json.
 func AddCollectionToWorkspace(dataRoot, workspaceName, collectionSlug string) error {
 	wsDir := WorkspaceDir(dataRoot, workspaceName)
 	linkPath := filepath.Join(wsDir, "collections", collectionSlug)
@@ -406,10 +500,19 @@ func AddCollectionToWorkspace(dataRoot, workspaceName, collectionSlug string) er
 	if err != nil {
 		return fmt.Errorf("compute rel path: %w", err)
 	}
-	return os.Symlink(rel, linkPath)
+	if err := os.Symlink(rel, linkPath); err != nil {
+		return err
+	}
+
+	// Record linking timestamp.
+	manifest := readCollectionManifest(dataRoot, workspaceName)
+	manifest[collectionSlug] = time.Now().Format(time.RFC3339)
+	writeCollectionManifest(dataRoot, workspaceName, manifest)
+	return nil
 }
 
-// RemoveCollectionFromWorkspace removes the symlink for a collection from the workspace.
+// RemoveCollectionFromWorkspace removes the symlink for a collection from the workspace
+// and removes its entry from collections.json.
 func RemoveCollectionFromWorkspace(dataRoot, workspaceName, collectionSlug string) error {
 	linkPath := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "collections", collectionSlug)
 	info, err := os.Lstat(linkPath)
@@ -422,10 +525,20 @@ func RemoveCollectionFromWorkspace(dataRoot, workspaceName, collectionSlug strin
 	if info.Mode()&os.ModeSymlink == 0 {
 		return fmt.Errorf("%s is not a symlink — refusing to delete", linkPath)
 	}
-	return os.Remove(linkPath)
+	if err := os.Remove(linkPath); err != nil {
+		return err
+	}
+
+	// Remove from manifest.
+	manifest := readCollectionManifest(dataRoot, workspaceName)
+	delete(manifest, collectionSlug)
+	writeCollectionManifest(dataRoot, workspaceName, manifest)
+	return nil
 }
 
 // ListWorkspaceCollections returns collection slugs linked in a workspace.
+// Collections are sorted by linking timestamp (from collections.json manifest).
+// Collections without a manifest entry are sorted by slug and listed first.
 func ListWorkspaceCollections(dataRoot, name string) ([]string, error) {
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "collections")
 	entries, err := os.ReadDir(dir)
@@ -447,6 +560,24 @@ func ListWorkspaceCollections(dataRoot, name string) ([]string, error) {
 		}
 		cols = append(cols, e.Name())
 	}
+
+	// Sort by manifest linked-at timestamp.
+	manifest := readCollectionManifest(dataRoot, name)
+	sort.SliceStable(cols, func(i, j int) bool {
+		ti, oki := manifest[cols[i]]
+		tj, okj := manifest[cols[j]]
+		if !oki && !okj {
+			return cols[i] < cols[j]
+		}
+		if !oki {
+			return true
+		}
+		if !okj {
+			return false
+		}
+		return ti < tj
+	})
+
 	return cols, nil
 }
 
