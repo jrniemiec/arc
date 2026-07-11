@@ -1104,6 +1104,13 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		}
 		return m.cmdPopulateWorkspace(arg)
 
+	case "/remove":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.Join(parts[1:], " ")
+		}
+		return m.cmdRemoveWorkspace(arg)
+
 	case "/help":
 		var lines []string
 		lines = append(lines, "Chat commands:")

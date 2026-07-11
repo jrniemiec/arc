@@ -226,7 +226,7 @@ func (m Model) View() string {
 
 	// Fixed rows: top bar (2) + split sep (1) + detail lines (N) + cmd (N) + status sep (1) + completions (N) + status bar (1) = 5+inputH+N
 	compLines := m.renderCompletionLines()
-	editDetailLines := m.populateEditDetailLines()
+	editDetailLines := m.reviewDetailLines()
 	inputH := m.inputVisualHeight()
 	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines)
 	mainHeight := m.height - fixedRows

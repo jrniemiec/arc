@@ -610,6 +610,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.populateEditing = false
 			m.statusMsg = "populate edit cancelled"
 		}
+		if m.removeReviewing {
+			m.removeReviewing = false
+			m.statusMsg = "remove review cancelled"
+		}
 		m.input.SetValue("")
 		m.input.CursorEnd()
 		m.pastedBlob = ""
@@ -2002,6 +2006,10 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		if m.populateEditing {
 			return m.handlePopulateEditInput(val)
 		}
+		// Remove review flow: remove/keep/done
+		if m.removeReviewing {
+			return m.handleRemoveReviewInput(val)
+		}
 		if val != "" {
 			if m.chatMode {
 				// "//" prefix → note: stored in history, never sent to LLM.
@@ -2394,7 +2402,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			return items
 		}
 
-	case "/populate":
+	case "/populate", "/remove":
 		// Suggest the workspace name only as the first token (before any flags).
 		if strings.TrimSpace(arg) != "" {
 			return nil
@@ -2776,6 +2784,13 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		return m.cmdPopulateWorkspace(arg)
+
+	case "/remove":
+		if sub != navSubTabWorkspaces {
+			m.statusMsg = "✗ /remove is only available in Workspaces context"
+			return nil
+		}
+		return m.cmdRemoveWorkspace(arg)
 
 	default:
 		m.statusMsg = "✗ unknown command: " + parts[0]
@@ -4252,6 +4267,259 @@ func (m *Model) finishPopulateEdit() tea.Cmd {
 	return nil
 }
 
+// cmdRemoveWorkspace handles /remove — removes articles/collections from a workspace.
+// Supports --article slug, --collection slug, --all-articles, --all-collections, --dry-run.
+func (m *Model) cmdRemoveWorkspace(arg string) tea.Cmd {
+	// Resolve workspace name.
+	var wsName string
+	if m.chatMode && m.chatWorkspace != "" {
+		wsName = m.chatWorkspace
+	} else if ws := m.selectedWorkspace(); ws != nil {
+		wsName = ws.name
+	} else {
+		m.statusMsg = "✗ no workspace selected"
+		return nil
+	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+
+	// Parse flags.
+	var articles, collections []string
+	var allArticles, allCollections, dryRun bool
+	tokens := strings.Fields(arg)
+	for i := 0; i < len(tokens); i++ {
+		switch tokens[i] {
+		case "--all-articles":
+			allArticles = true
+		case "--all-collections":
+			allCollections = true
+		case "--dry-run":
+			dryRun = true
+		case "--article":
+			if i+1 < len(tokens) {
+				i++
+				articles = append(articles, tokens[i])
+			}
+		case "--collection":
+			if i+1 < len(tokens) {
+				i++
+				collections = append(collections, tokens[i])
+			}
+		default:
+			if !strings.HasPrefix(tokens[i], "--") {
+				wsName = tokens[i]
+			}
+		}
+	}
+
+	cfg := m.cfg
+	svc := m.svc
+
+	// --all-articles / --all-collections → interactive review in input pane.
+	if allArticles || allCollections {
+		var items []populateEditItem
+		if allArticles {
+			linked, _, _ := storefs.ListWorkspaceArticles(cfg.DataRoot, wsName)
+			for _, slug := range linked {
+				items = append(items, populateEditItem{slug: slug})
+			}
+		}
+		if allCollections {
+			linked, _ := storefs.ListWorkspaceCollections(cfg.DataRoot, wsName)
+			for _, slug := range linked {
+				items = append(items, populateEditItem{slug: slug, isCollection: true})
+			}
+		}
+		if len(items) == 0 {
+			m.statusMsg = "✗ no items to remove"
+			return nil
+		}
+		m.removeReviewing = true
+		m.removeReviewItems = items
+		m.removeReviewIdx = 0
+		m.removeReviewWs = wsName
+		m.removeReviewDry = dryRun
+		m.focus = paneCommand
+		m.cursorVisible = true
+		m.input.SetValue("")
+		m.input.CursorEnd()
+		return nil
+	}
+
+	// Individual --article / --collection → direct removal.
+	if len(articles) == 0 && len(collections) == 0 {
+		m.statusMsg = "✗ specify --article, --collection, --all-articles, or --all-collections"
+		return nil
+	}
+
+	if dryRun {
+		total := len(articles) + len(collections)
+		m.statusMsg = fmt.Sprintf("would remove %d items from %s (dry-run)", total, wsName)
+		return nil
+	}
+
+	return func() tea.Msg {
+		var errs []string
+		removed := 0
+		if len(articles) > 0 {
+			if err := svc.RemoveArticlesFromWorkspace(context.Background(), wsName, articles); err != nil {
+				errs = append(errs, err.Error())
+			} else {
+				removed += len(articles)
+			}
+		}
+		if len(collections) > 0 {
+			if err := svc.RemoveCollectionsFromWorkspace(context.Background(), wsName, collections); err != nil {
+				errs = append(errs, err.Error())
+			} else {
+				removed += len(collections)
+			}
+		}
+		if len(errs) > 0 {
+			return cmdDoneMsg{err: strings.Join(errs, "; ")}
+		}
+
+		statusMsg := fmt.Sprintf("✓ removed %d items from %s", removed, wsName)
+
+		// Save to scratch.
+		_ = storefs.AppendScratch(cfg.DataRoot, wsName, statusMsg+"\n")
+
+		return cmdDoneMsg{
+			statusMsg:          statusMsg,
+			reloadWorkspaces:   true,
+			resetChatEngine:    true,
+			resetChatWorkspace: wsName,
+		}
+	}
+}
+
+// handleRemoveReviewInput processes user input during /remove --all-* review.
+// Empty string or anything other than "n"/"q" = mark for removal.
+func (m *Model) handleRemoveReviewInput(val string) tea.Cmd {
+	val = strings.ToLower(strings.TrimSpace(val))
+	switch val {
+	case "n":
+		// Keep — leave accepted=false, advance.
+	case "q":
+		// Done early — finish with what's marked so far.
+		return m.finishRemoveReview()
+	default:
+		// Remove (Enter or any other input).
+		m.removeReviewItems[m.removeReviewIdx].accepted = true
+	}
+	m.removeReviewIdx++
+	if m.removeReviewIdx >= len(m.removeReviewItems) {
+		return m.finishRemoveReview()
+	}
+	// Show next item.
+	m.input.SetValue("")
+	m.input.CursorEnd()
+	return nil
+}
+
+// finishRemoveReview ends the remove review, unlinks marked items, and shows results.
+func (m *Model) finishRemoveReview() tea.Cmd {
+	m.removeReviewing = false
+	wsName := m.removeReviewWs
+	dryRun := m.removeReviewDry
+	svc := m.svc
+	cfg := m.cfg
+
+	// Collect items marked for removal.
+	var colSlugs, artSlugs []string
+	for _, item := range m.removeReviewItems {
+		if !item.accepted {
+			continue
+		}
+		if item.isCollection {
+			colSlugs = append(colSlugs, item.slug)
+		} else {
+			artSlugs = append(artSlugs, item.slug)
+		}
+	}
+
+	// Build status lines with ✓ (removed) / – (kept) markers.
+	var lines []string
+	verb := "remove"
+	if dryRun {
+		verb = "remove --dry-run"
+	}
+	lines = append(lines, fmt.Sprintf("%s %s", verb, wsName))
+	lines = append(lines, "")
+
+	hasCollections := false
+	hasArticles := false
+	for _, item := range m.removeReviewItems {
+		if item.isCollection {
+			hasCollections = true
+		} else {
+			hasArticles = true
+		}
+	}
+
+	if hasCollections {
+		lines = append(lines, "Collections:")
+		for _, item := range m.removeReviewItems {
+			if !item.isCollection {
+				continue
+			}
+			marker := "✓ remove"
+			if !item.accepted {
+				marker = "– keep"
+			}
+			lines = append(lines, fmt.Sprintf("  %s  %s", marker, item.slug))
+		}
+		lines = append(lines, "")
+	}
+
+	if hasArticles {
+		lines = append(lines, "Articles:")
+		for _, item := range m.removeReviewItems {
+			if item.isCollection {
+				continue
+			}
+			marker := "✓ remove"
+			if !item.accepted {
+				marker = "– keep"
+			}
+			lines = append(lines, fmt.Sprintf("  %s  %s", marker, item.slug))
+		}
+		lines = append(lines, "")
+	}
+
+	total := len(colSlugs) + len(artSlugs)
+
+	if dryRun {
+		lines = append(lines, fmt.Sprintf("would remove %d items (dry-run — nothing changed)", total))
+	} else if svc != nil && total > 0 {
+		if len(colSlugs) > 0 {
+			_ = svc.RemoveCollectionsFromWorkspace(context.Background(), wsName, colSlugs)
+		}
+		if len(artSlugs) > 0 {
+			_ = svc.RemoveArticlesFromWorkspace(context.Background(), wsName, artSlugs)
+		}
+		lines = append(lines, fmt.Sprintf("✓ removed %d items from %s", total, wsName))
+	} else {
+		lines = append(lines, "no items removed")
+	}
+
+	// Save to scratch.
+	output := strings.Join(lines, "\n") + "\n"
+	_ = storefs.AppendScratch(cfg.DataRoot, wsName, output)
+
+	m.setStatusLines(lines)
+	m.input.SetValue("")
+
+	// Reload workspaces since we removed items.
+	if !dryRun && svc != nil && total > 0 {
+		m.workspacesLoaded = false
+		return loadWorkspaces(svc)
+	}
+	return nil
+}
+
 // helpGroups defines the command groups shown by /help.
 // Names match the context qualifier: article, collection, workspace, keys, system.
 var helpGroups = []struct {
@@ -4290,9 +4558,9 @@ var helpGroups = []struct {
 		{"/delete", "", "delete current workspace"},
 		{"/rename", "<new-name>", "rename current workspace"},
 		{"/describe", "<text>", "set workspace description"},
-		{"/populate", "[--hint \"...\"]", "LLM-assisted article selection from library"},
+		{"/populate", "[--hint --edit --dry-run --profile --include-collections]", "LLM-assisted article selection from library"},
+		{"/remove", "[--article --collection --all-articles --all-collections --dry-run]", "remove articles/collections from workspace"},
 		{"arc workspace add", "<slug>", "add articles/collections/resources  (CLI only)"},
-		{"arc workspace remove", "<slug>", "remove articles/collections/resources  (CLI only)"},
 		{"arc workspace chat", "<slug>", "start interactive chat session  (CLI only)"},
 		{"arc workspace archive", "<slug>", "archive a workspace  (CLI only)"},
 		{"arc workspace outcomes", "<slug>", "list or read outcomes  (CLI only)"},

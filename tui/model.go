@@ -418,6 +418,13 @@ type Model struct {
 	populateEditHint  string                     // hint used (for status output)
 	populateEditLog   []string                   // progress log from LLM run
 
+	// Remove review mode — sequential review for --all-articles / --all-collections
+	removeReviewing   bool                       // true while reviewing items one-by-one
+	removeReviewItems []populateEditItem         // reuse same struct (slug, isCollection, accepted)
+	removeReviewIdx   int                        // current item index
+	removeReviewWs    string                     // workspace name
+	removeReviewDry   bool                       // dry-run mode
+
 	askxStreaming        bool              // true while LLM response is in flight
 	askxStreamBuf       string             // accumulated streaming response text
 	askxSharedBuf       *streamBuf         // goroutine-safe buffer written by streaming goroutine
@@ -500,6 +507,7 @@ var workspaceCommands = []cmdCompletion{
 	{"/describe", "<text>", "set workspace description"},
 	{"/reload", "", "reset chat engine to pick up corpus changes"},
 	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--edit] [--include-collections]", "LLM-assisted article selection"},
+	{"/remove", "[--article slug] [--collection slug] [--all-articles] [--all-collections] [--dry-run]", "remove articles/collections from workspace"},
 }
 
 // chatCommands are available when workspace chat mode is active.
@@ -523,6 +531,7 @@ var chatCommands = []cmdCompletion{
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
 	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--edit] [--include-collections]", "LLM-assisted article selection"},
+	{"/remove", "[--article slug] [--collection slug] [--all-articles] [--all-collections] [--dry-run]", "remove articles/collections from workspace"},
 	{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
 	{"/Scratch", "[msg]", "global scratch (append / toggle)"},
 	{"/askX", "<prompt>", "workspace-local LLM query"},
@@ -860,19 +869,28 @@ func (m Model) inputPrompt() string {
 		n := len(m.populateEditItems)
 		return fmt.Sprintf(" [%d/%d] Enter=accept  n=skip  q=done > ", m.populateEditIdx+1, n)
 	}
+	if m.removeReviewing && m.removeReviewIdx < len(m.removeReviewItems) {
+		n := len(m.removeReviewItems)
+		return fmt.Sprintf(" [%d/%d] Enter=remove  n=keep  q=done > ", m.removeReviewIdx+1, n)
+	}
 	if m.chatMode {
 		return m.chatWorkspace + "> "
 	}
 	return "> "
 }
 
-// populateEditDetailLines returns lines describing the current populate edit item,
-// rendered above the input pane.
-func (m Model) populateEditDetailLines() []string {
-	if !m.populateEditing || m.populateEditIdx >= len(m.populateEditItems) {
+// reviewDetailLines returns lines describing the current review item
+// (populate edit or remove review), rendered above the input pane.
+func (m Model) reviewDetailLines() []string {
+	var item populateEditItem
+	switch {
+	case m.populateEditing && m.populateEditIdx < len(m.populateEditItems):
+		item = m.populateEditItems[m.populateEditIdx]
+	case m.removeReviewing && m.removeReviewIdx < len(m.removeReviewItems):
+		item = m.removeReviewItems[m.removeReviewIdx]
+	default:
 		return nil
 	}
-	item := m.populateEditItems[m.populateEditIdx]
 	var lines []string
 	kind := "article"
 	if item.isCollection {
