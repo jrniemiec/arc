@@ -996,3 +996,214 @@ func urlToBasename(rawURL string) string {
 	}
 	return s + ".url"
 }
+
+// ── Attic ────────────────────────────────────────────────────────────────────
+
+func atticArticleManifestPath(dataRoot, wsName string) string {
+	return filepath.Join(WorkspaceDir(dataRoot, wsName), "attic-articles.json")
+}
+
+func readAtticArticleManifest(dataRoot, wsName string) articleManifest {
+	data, err := os.ReadFile(atticArticleManifestPath(dataRoot, wsName))
+	if err != nil {
+		return nil
+	}
+	var list articleManifest
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil
+	}
+	return list
+}
+
+func writeAtticArticleManifest(dataRoot, wsName string, m articleManifest) {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(atticArticleManifestPath(dataRoot, wsName), data, 0644)
+}
+
+func atticCollectionManifestPath(dataRoot, wsName string) string {
+	return filepath.Join(WorkspaceDir(dataRoot, wsName), "attic-collections.json")
+}
+
+func readAtticCollectionManifest(dataRoot, wsName string) collectionManifest {
+	data, err := os.ReadFile(atticCollectionManifestPath(dataRoot, wsName))
+	if err != nil {
+		return collectionManifest{}
+	}
+	var m collectionManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return collectionManifest{}
+	}
+	return m
+}
+
+func writeAtticCollectionManifest(dataRoot, wsName string, m collectionManifest) {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(atticCollectionManifestPath(dataRoot, wsName), data, 0644)
+}
+
+// MoveArticleToAttic removes an article symlink and moves its manifest entry to the attic.
+func MoveArticleToAttic(dataRoot, wsName, slug string) error {
+	// Remove symlink.
+	linkPath := filepath.Join(WorkspaceDir(dataRoot, wsName), "articles", slug)
+	if info, err := os.Lstat(linkPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		_ = os.Remove(linkPath)
+	}
+
+	// Remove from active manifest, capture timestamp.
+	active := readArticleManifest(dataRoot, wsName)
+	linkedAt := time.Now().Format(time.RFC3339)
+	if idx := manifestIndex(active, slug); idx >= 0 {
+		linkedAt = active[idx].LinkedAt
+		active = append(active[:idx], active[idx+1:]...)
+	}
+	writeArticleManifest(dataRoot, wsName, active)
+
+	// Add to attic manifest (if not already there).
+	attic := readAtticArticleManifest(dataRoot, wsName)
+	if manifestIndex(attic, slug) == -1 {
+		attic = append(attic, articleManifestEntry{Slug: slug, LinkedAt: linkedAt})
+	}
+	writeAtticArticleManifest(dataRoot, wsName, attic)
+	return nil
+}
+
+// MoveArticleFromAttic restores an article from the attic back to the active workspace.
+func MoveArticleFromAttic(dataRoot, articlesRoot, wsName, slug string) error {
+	// Remove from attic manifest.
+	attic := readAtticArticleManifest(dataRoot, wsName)
+	idx := manifestIndex(attic, slug)
+	if idx == -1 {
+		return fmt.Errorf("article %q not in attic of workspace %q", slug, wsName)
+	}
+	linkedAt := attic[idx].LinkedAt
+	attic = append(attic[:idx], attic[idx+1:]...)
+	writeAtticArticleManifest(dataRoot, wsName, attic)
+
+	// Restore symlink.
+	wsDir := WorkspaceDir(dataRoot, wsName)
+	linkPath := filepath.Join(wsDir, "articles", slug)
+	if _, err := os.Lstat(linkPath); err != nil {
+		articleDir := filepath.Join(articlesRoot, slug)
+		rel, err := filepath.Rel(filepath.Join(wsDir, "articles"), articleDir)
+		if err != nil {
+			return fmt.Errorf("compute rel path: %w", err)
+		}
+		_ = os.Symlink(rel, linkPath)
+	}
+
+	// Add back to active manifest.
+	active := readArticleManifest(dataRoot, wsName)
+	if manifestIndex(active, slug) == -1 {
+		active = append(active, articleManifestEntry{Slug: slug, LinkedAt: linkedAt})
+	}
+	writeArticleManifest(dataRoot, wsName, active)
+	return nil
+}
+
+// RemoveArticleFromAttic removes an article from the attic entirely (no restore).
+func RemoveArticleFromAttic(dataRoot, wsName, slug string) error {
+	attic := readAtticArticleManifest(dataRoot, wsName)
+	idx := manifestIndex(attic, slug)
+	if idx == -1 {
+		return fmt.Errorf("article %q not in attic of workspace %q", slug, wsName)
+	}
+	attic = append(attic[:idx], attic[idx+1:]...)
+	writeAtticArticleManifest(dataRoot, wsName, attic)
+	return nil
+}
+
+// MoveCollectionToAttic removes a collection symlink and moves its manifest entry to the attic.
+func MoveCollectionToAttic(dataRoot, wsName, colSlug string) error {
+	// Remove symlink.
+	linkPath := filepath.Join(WorkspaceDir(dataRoot, wsName), "collections", colSlug)
+	if info, err := os.Lstat(linkPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		_ = os.Remove(linkPath)
+	}
+
+	// Remove from active manifest, capture timestamp.
+	active := readCollectionManifest(dataRoot, wsName)
+	linkedAt, ok := active[colSlug]
+	if !ok {
+		linkedAt = time.Now().Format(time.RFC3339)
+	}
+	delete(active, colSlug)
+	writeCollectionManifest(dataRoot, wsName, active)
+
+	// Add to attic manifest.
+	attic := readAtticCollectionManifest(dataRoot, wsName)
+	if _, exists := attic[colSlug]; !exists {
+		attic[colSlug] = linkedAt
+	}
+	writeAtticCollectionManifest(dataRoot, wsName, attic)
+	return nil
+}
+
+// MoveCollectionFromAttic restores a collection from the attic back to the active workspace.
+func MoveCollectionFromAttic(dataRoot, wsName, colSlug string) error {
+	// Remove from attic manifest.
+	attic := readAtticCollectionManifest(dataRoot, wsName)
+	linkedAt, ok := attic[colSlug]
+	if !ok {
+		return fmt.Errorf("collection %q not in attic of workspace %q", colSlug, wsName)
+	}
+	delete(attic, colSlug)
+	writeAtticCollectionManifest(dataRoot, wsName, attic)
+
+	// Restore symlink.
+	wsDir := WorkspaceDir(dataRoot, wsName)
+	linkPath := filepath.Join(wsDir, "collections", colSlug)
+	if _, err := os.Lstat(linkPath); err != nil {
+		colDir := CollectionDir(dataRoot, colSlug)
+		rel, err := filepath.Rel(filepath.Join(wsDir, "collections"), colDir)
+		if err != nil {
+			return fmt.Errorf("compute rel path: %w", err)
+		}
+		_ = os.Symlink(rel, linkPath)
+	}
+
+	// Add back to active manifest.
+	active := readCollectionManifest(dataRoot, wsName)
+	if _, exists := active[colSlug]; !exists {
+		active[colSlug] = linkedAt
+	}
+	writeCollectionManifest(dataRoot, wsName, active)
+	return nil
+}
+
+// RemoveCollectionFromAttic removes a collection from the attic entirely (no restore).
+func RemoveCollectionFromAttic(dataRoot, wsName, colSlug string) error {
+	attic := readAtticCollectionManifest(dataRoot, wsName)
+	if _, ok := attic[colSlug]; !ok {
+		return fmt.Errorf("collection %q not in attic of workspace %q", colSlug, wsName)
+	}
+	delete(attic, colSlug)
+	writeAtticCollectionManifest(dataRoot, wsName, attic)
+	return nil
+}
+
+// ListAtticArticles returns article slugs in the workspace attic (manifest order).
+func ListAtticArticles(dataRoot, wsName string) []string {
+	m := readAtticArticleManifest(dataRoot, wsName)
+	slugs := make([]string, len(m))
+	for i, e := range m {
+		slugs[i] = e.Slug
+	}
+	return slugs
+}
+
+// ListAtticCollections returns collection slugs in the workspace attic (sorted by timestamp).
+func ListAtticCollections(dataRoot, wsName string) []string {
+	m := readAtticCollectionManifest(dataRoot, wsName)
+	cols := make([]string, 0, len(m))
+	for slug := range m {
+		cols = append(cols, slug)
+	}
+	sort.Strings(cols)
+	return cols
+}

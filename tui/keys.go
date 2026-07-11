@@ -33,6 +33,8 @@ type keyMap struct {
 	Scratch      key.Binding // Ctrl+L — toggle scratch pane
 	AskX         key.Binding // Ctrl+X — toggle askX pane
 	Preview      key.Binding // Ctrl+O — toggle preview pane
+	Attic        key.Binding // a — move to attic
+	UnAttic      key.Binding // b — move from attic back to workspace
 	FocusNav     key.Binding // Alt+1 — jump to nav pane
 	FocusContent key.Binding // Alt+2 — jump to content pane
 	FocusTabBar  key.Binding // Alt+3 — jump to tab bar
@@ -143,6 +145,14 @@ var keys = keyMap{
 	Preview: key.NewBinding(
 		key.WithKeys("ctrl+o"),
 		key.WithHelp("ctrl+o", "toggle preview"),
+	),
+	Attic: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "move to attic"),
+	),
+	UnAttic: key.NewBinding(
+		key.WithKeys("b"),
+		key.WithHelp("b", "restore from attic"),
 	),
 	FocusNav: key.NewBinding(
 		key.WithKeys("alt+1", "¡"), // ¡ = macOS Option+1

@@ -220,6 +220,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					msg.items[i].resourcesExpanded = prev.resourcesExpanded
 					msg.items[i].expandedResourceDirs = prev.expandedResourceDirs
 					msg.items[i].outcomesExpanded = prev.outcomesExpanded
+					msg.items[i].atticExpanded = prev.atticExpanded
 				}
 			}
 			m.workspaceItemsAll = msg.items
@@ -810,6 +811,12 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 					return m.cmdDeleteArticle()
 				case wsRowWorkspace:
 					return m.cmdDeleteWorkspace()
+				case wsRowAtticArticle:
+					m.cmdRemoveFromAtticArticle(row)
+					return nil
+				case wsRowAtticCollection:
+					m.cmdRemoveFromAtticCollection(row)
+					return nil
 				default:
 					return nil
 				}
@@ -882,6 +889,36 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				}
 				m.openEditorInTerminal(editor, path, name)
 				return nil
+			}
+		}
+	case key.Matches(msg, keys.Attic):
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+				switch row.kind {
+				case wsRowArticle:
+					if row.colSlug == "" { // only direct workspace articles
+						m.cmdAtticArticle(row)
+					}
+					return nil
+				case wsRowCollection:
+					m.cmdAtticCollection(row)
+					return nil
+				}
+			}
+		}
+	case key.Matches(msg, keys.UnAttic):
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+				switch row.kind {
+				case wsRowAtticArticle:
+					m.cmdUnAtticArticle(row)
+					return nil
+				case wsRowAtticCollection:
+					m.cmdUnAtticCollection(row)
+					return nil
+				}
 			}
 		}
 	case msg.String() == "!":
@@ -1147,7 +1184,7 @@ func (m *Model) navSelect() tea.Cmd {
 			return m.openArticleOverlay(m.selectedNavItem())
 		case wsRowCollection:
 			m.wsToggleExpand()
-		case wsRowResourceGroup, wsRowOutcomeGroup, wsRowResourceDir:
+		case wsRowResourceGroup, wsRowOutcomeGroup, wsRowResourceDir, wsRowAtticGroup:
 			m.wsToggleExpand()
 		case wsRowResource:
 			return m.openWorkspaceFile(row.wsIdx, "resources", row.resourceName)
@@ -1298,6 +1335,8 @@ func (m *Model) wsToggleExpand() {
 		ws.expandedResourceDirs[row.resourceName] = !ws.expandedResourceDirs[row.resourceName]
 	case wsRowOutcomeGroup:
 		ws.outcomesExpanded = !ws.outcomesExpanded
+	case wsRowAtticGroup:
+		ws.atticExpanded = !ws.atticExpanded
 	}
 	m.wsRows = m.buildWsRows()
 	m.clampWsScroll()
@@ -4307,7 +4346,6 @@ func (m *Model) cmdRemoveWorkspace(arg string) tea.Cmd {
 	}
 
 	cfg := m.cfg
-	svc := m.svc
 
 	// --all-articles / --all-collections → interactive review in input pane.
 	if allArticles || allCollections {
@@ -4317,10 +4355,16 @@ func (m *Model) cmdRemoveWorkspace(arg string) tea.Cmd {
 			for _, slug := range linked {
 				items = append(items, populateEditItem{slug: slug})
 			}
+			for _, slug := range storefs.ListAtticArticles(cfg.DataRoot, wsName) {
+				items = append(items, populateEditItem{slug: slug})
+			}
 		}
 		if allCollections {
 			linked, _ := storefs.ListWorkspaceCollections(cfg.DataRoot, wsName)
 			for _, slug := range linked {
+				items = append(items, populateEditItem{slug: slug, isCollection: true})
+			}
+			for _, slug := range storefs.ListAtticCollections(cfg.DataRoot, wsName) {
 				items = append(items, populateEditItem{slug: slug, isCollection: true})
 			}
 		}
@@ -4355,18 +4399,23 @@ func (m *Model) cmdRemoveWorkspace(arg string) tea.Cmd {
 	return func() tea.Msg {
 		var errs []string
 		removed := 0
-		if len(articles) > 0 {
-			if err := svc.RemoveArticlesFromWorkspace(context.Background(), wsName, articles); err != nil {
-				errs = append(errs, err.Error())
+		for _, slug := range articles {
+			// Try active list first, then attic.
+			if err := storefs.RemoveArticleFromWorkspace(cfg.DataRoot, wsName, slug); err == nil {
+				removed++
+			} else if err2 := storefs.RemoveArticleFromAttic(cfg.DataRoot, wsName, slug); err2 == nil {
+				removed++
 			} else {
-				removed += len(articles)
+				errs = append(errs, fmt.Sprintf("%s: not in workspace or attic", slug))
 			}
 		}
-		if len(collections) > 0 {
-			if err := svc.RemoveCollectionsFromWorkspace(context.Background(), wsName, collections); err != nil {
-				errs = append(errs, err.Error())
+		for _, col := range collections {
+			if err := storefs.RemoveCollectionFromWorkspace(cfg.DataRoot, wsName, col); err == nil {
+				removed++
+			} else if err2 := storefs.RemoveCollectionFromAttic(cfg.DataRoot, wsName, col); err2 == nil {
+				removed++
 			} else {
-				removed += len(collections)
+				errs = append(errs, fmt.Sprintf("%s: not in workspace or attic", col))
 			}
 		}
 		if len(errs) > 0 {
@@ -4486,11 +4535,15 @@ func (m *Model) finishRemoveReview() tea.Cmd {
 	if dryRun {
 		lines = append(lines, fmt.Sprintf("would remove %d items (dry-run — nothing changed)", total))
 	} else if svc != nil && total > 0 {
-		if len(colSlugs) > 0 {
-			_ = svc.RemoveCollectionsFromWorkspace(context.Background(), wsName, colSlugs)
+		for _, col := range colSlugs {
+			if err := storefs.RemoveCollectionFromWorkspace(cfg.DataRoot, wsName, col); err != nil {
+				_ = storefs.RemoveCollectionFromAttic(cfg.DataRoot, wsName, col)
+			}
 		}
-		if len(artSlugs) > 0 {
-			_ = svc.RemoveArticlesFromWorkspace(context.Background(), wsName, artSlugs)
+		for _, slug := range artSlugs {
+			if err := storefs.RemoveArticleFromWorkspace(cfg.DataRoot, wsName, slug); err != nil {
+				_ = storefs.RemoveArticleFromAttic(cfg.DataRoot, wsName, slug)
+			}
 		}
 		lines = append(lines, fmt.Sprintf("✓ removed %d items from %s", total, wsName))
 	} else {
@@ -4580,6 +4633,8 @@ var helpGroups = []struct {
 		{"v", "", "view article in external terminal"},
 		{"D", "", "delete current item"},
 		{"U", "", "unlink article/collection from workspace"},
+		{"a", "", "move article/collection to attic"},
+		{"b", "", "restore article/collection from attic"},
 		{"/", "", "open command input"},
 		{"↑ / ↓", "", "recall command history (in command pane)"},
 		{"?", "", "show key bindings"},
@@ -5192,6 +5247,74 @@ func (m *Model) cmdScratch(msg string, global bool) tea.Cmd {
 
 // reloadScratchLines reads the scratch file and caches lines + blocks for rendering.
 // Uses scratchWorkspace() unless scratchGlobal is set (always "").
+// triggerWorkspaceReload synchronously reloads workspace data, preserving expand state.
+func (m *Model) triggerWorkspaceReload() {
+	if m.svc == nil {
+		return
+	}
+	infos, err := m.svc.ListWorkspaces(context.Background(), false)
+	if err != nil {
+		return
+	}
+	old := make(map[string]*workspaceItem, len(m.workspaceItems))
+	for i := range m.workspaceItems {
+		old[m.workspaceItems[i].name] = &m.workspaceItems[i]
+	}
+	items := make([]workspaceItem, len(infos))
+	for i, w := range infos {
+		items[i] = workspaceItem{
+			name:            w.Name,
+			description:     w.Description,
+			status:          w.Status,
+			createdAt:       w.CreatedAt,
+			articleCount:    w.ArticleCount,
+			collectionCount: w.CollectionCount,
+			resourceCount:   w.ResourceCount,
+			outcomeCount:    w.OutcomeCount,
+			hasSystem:       w.HasSystem,
+			hasHistory:      w.HasHistory,
+			chatProfile:     w.ChatConfig.Profile,
+			chatStrategy:    w.ChatConfig.Strategy,
+			articles:        w.Articles,
+			collectionSlugs: w.CollectionSlugs,
+			resources:       w.ResourceNames,
+			resourceDirs:    w.ResourceDirs,
+			outcomes:        w.OutcomeNames,
+			atticArticles:   w.AtticArticles,
+			atticCollections: w.AtticCollectionSlugs,
+			expandedCols:         make(map[string]bool),
+			expandedResourceDirs: make(map[string]bool),
+		}
+		if prev, ok := old[items[i].name]; ok {
+			items[i].expanded = prev.expanded
+			items[i].expandedCols = prev.expandedCols
+			items[i].resourcesExpanded = prev.resourcesExpanded
+			items[i].expandedResourceDirs = prev.expandedResourceDirs
+			items[i].outcomesExpanded = prev.outcomesExpanded
+			items[i].atticExpanded = prev.atticExpanded
+		}
+	}
+	m.workspaceItemsAll = items
+	if m.wsFocusName != "" {
+		var focused []workspaceItem
+		for _, ws := range items {
+			if ws.name == m.wsFocusName {
+				focused = append(focused, ws)
+				break
+			}
+		}
+		if len(focused) > 0 {
+			m.workspaceItems = focused
+		} else {
+			m.workspaceItems = items
+		}
+	} else {
+		m.workspaceItems = items
+	}
+	m.wsRows = m.buildWsRows()
+	m.clampWsScroll()
+}
+
 func (m *Model) reloadScratchLines() {
 	ws := ""
 	if !m.scratchGlobal {

@@ -186,12 +186,17 @@ type workspaceItem struct {
 	resourceDirs    []string          // resource directory names
 	outcomes        []string          // outcome file basenames
 
+	// attic
+	atticArticles   []string // slugs
+	atticCollections []string // slugs
+
 	// expand state
 	expanded             bool
 	expandedCols         map[string]bool // collection slug → expanded
 	resourcesExpanded    bool
 	expandedResourceDirs map[string]bool // resource dir relative path → expanded
 	outcomesExpanded     bool
+	atticExpanded        bool
 }
 
 // wsRowKind distinguishes row types in the workspace tree.
@@ -207,6 +212,9 @@ const (
 	wsRowResource                 // resource file (leaf)
 	wsRowOutcomeGroup             // "Outcomes (N)" foldable header
 	wsRowOutcome                  // outcome file (leaf)
+	wsRowAtticGroup               // "Attic (N)" foldable header
+	wsRowAtticArticle             // attic article (leaf)
+	wsRowAtticCollection          // attic collection (leaf)
 )
 
 // wsRow is one display row in the workspace foldable tree.
@@ -802,6 +810,8 @@ func loadWorkspaces(svc *service.Service) tea.Cmd {
 				resources:            w.ResourceNames,
 				resourceDirs:         w.ResourceDirs,
 				outcomes:             w.OutcomeNames,
+				atticArticles:        w.AtticArticles,
+				atticCollections:     w.AtticCollectionSlugs,
 				expandedCols:         make(map[string]bool),
 				expandedResourceDirs: make(map[string]bool),
 			}
@@ -1181,6 +1191,24 @@ func (m Model) buildWsRows() []wsRow {
 		if ws.outcomesExpanded {
 			for _, name := range ws.outcomes {
 				rows = append(rows, wsRow{kind: wsRowOutcome, wsIdx: i, outcomeName: name})
+			}
+		}
+
+		// Attic folder.
+		atticTotal := len(ws.atticArticles) + len(ws.atticCollections)
+		if atticTotal > 0 {
+			rows = append(rows, wsRow{kind: wsRowAtticGroup, wsIdx: i, count: atticTotal})
+			if ws.atticExpanded {
+				for _, colSlug := range ws.atticCollections {
+					rows = append(rows, wsRow{kind: wsRowAtticCollection, wsIdx: i, colSlug: colSlug})
+				}
+				for _, slug := range ws.atticArticles {
+					title := titleOf[slug]
+					if title == "" {
+						title = slug
+					}
+					rows = append(rows, wsRow{kind: wsRowAtticArticle, wsIdx: i, slug: slug, title: title})
+				}
 			}
 		}
 

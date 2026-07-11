@@ -713,7 +713,11 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			if ws.hasHistory {
 				flags += " 💬"
 			}
+			atticCount := len(ws.atticArticles) + len(ws.atticCollections)
 			counts := fmt.Sprintf(" (%da %dc %dr)", ws.articleCount, ws.collectionCount, ws.resourceCount)
+			if atticCount > 0 {
+				counts = fmt.Sprintf(" (%da %dc %dr %d⌂)", ws.articleCount, ws.collectionCount, ws.resourceCount, atticCount)
+			}
 			label = truncate(arrow+ws.name+counts+flags, w-1)
 			if selected {
 				label = reverse(label)
@@ -820,6 +824,40 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				label = reverse(label)
 			} else {
 				label = fg(t.NavDimmed, prefix) + fg(t.NavDimmed, "◦") + " " + fg(t.NavText, name)
+			}
+
+		case wsRowAtticGroup:
+			arrow := "  ▶ "
+			if ws.atticExpanded {
+				arrow = "  ▼ "
+			}
+			label = truncate(arrow+"attic"+fmt.Sprintf(" (%d)", row.count), w-1)
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, label)
+			}
+
+		case wsRowAtticArticle:
+			prefix := "    "
+			dot := "◦ "
+			title := truncate(oneLine(row.title), w-len(prefix)-len(dot))
+			label = prefix + dot + title
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, prefix+dot+title)
+			}
+
+		case wsRowAtticCollection:
+			prefix := "    "
+			dot := "◦ "
+			name := truncate(row.colSlug, w-len(prefix)-len(dot))
+			label = prefix + dot + name
+			if selected {
+				label = reverse(label)
+			} else {
+				label = fg(t.NavDimmed, prefix+dot+name)
 			}
 		}
 		lines = append(lines, label)

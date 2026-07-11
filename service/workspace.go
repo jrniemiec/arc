@@ -74,23 +74,28 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 
 	fileNames, dirNames := splitResources(resources)
 
+	atticArticles := fs.ListAtticArticles(s.cfg.DataRoot, m.Name)
+	atticCols := fs.ListAtticCollections(s.cfg.DataRoot, m.Name)
+
 	return WorkspaceInfo{
-		Name:            m.Name,
-		Description:     m.Description,
-		Status:          m.Status,
-		CreatedAt:       m.CreatedAt,
-		ArticleCount:    len(articles),
-		CollectionCount: len(cols),
-		ResourceCount:   len(resources),
-		OutcomeCount:    len(outcomes),
-		HasSystem:       hasSystemErr == nil,
-		HasHistory:      hasHistoryErr == nil,
-		ChatConfig:      chatCfg,
-		Articles:        articles,
-		CollectionSlugs: colSlugs,
-		ResourceNames:   fileNames,
-		ResourceDirs:    dirNames,
-		OutcomeNames:    outcomes,
+		Name:                 m.Name,
+		Description:          m.Description,
+		Status:               m.Status,
+		CreatedAt:            m.CreatedAt,
+		ArticleCount:         len(articles),
+		CollectionCount:      len(cols),
+		ResourceCount:        len(resources),
+		OutcomeCount:         len(outcomes),
+		HasSystem:            hasSystemErr == nil,
+		HasHistory:           hasHistoryErr == nil,
+		ChatConfig:           chatCfg,
+		Articles:             articles,
+		CollectionSlugs:      colSlugs,
+		ResourceNames:        fileNames,
+		ResourceDirs:         dirNames,
+		OutcomeNames:         outcomes,
+		AtticArticles:        atticArticles,
+		AtticCollectionSlugs: atticCols,
 	}, nil
 }
 
@@ -416,13 +421,19 @@ func (s *Service) PopulateWorkspace(ctx context.Context, req PopulateRequest) (P
 		"include_collections", req.IncludeCollections,
 	)
 
-	// Build sets of already-linked items to exclude.
-	linkedCols := make(map[string]bool, len(ws.CollectionSlugs))
+	// Build sets of already-linked items to exclude (active + attic).
+	linkedCols := make(map[string]bool, len(ws.CollectionSlugs)+len(ws.AtticCollectionSlugs))
 	for _, c := range ws.CollectionSlugs {
 		linkedCols[c] = true
 	}
-	linkedArticles := make(map[string]bool, len(ws.Articles))
+	for _, c := range ws.AtticCollectionSlugs {
+		linkedCols[c] = true
+	}
+	linkedArticles := make(map[string]bool, len(ws.Articles)+len(ws.AtticArticles))
 	for _, a := range ws.Articles {
+		linkedArticles[a] = true
+	}
+	for _, a := range ws.AtticArticles {
 		linkedArticles[a] = true
 	}
 

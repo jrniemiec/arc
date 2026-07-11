@@ -1617,6 +1617,108 @@ func (m *Model) cmdUnlinkCollection(row *wsRow) {
 	})
 }
 
+// ── Attic operations ─────────────────────────────────────────────────────────
+
+// cmdAtticArticle moves a workspace article to the attic (no confirmation — reversible).
+func (m *Model) cmdAtticArticle(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	slug := row.slug
+	title := row.title
+	if title == "" {
+		title = slug
+	}
+	wsName := ws.name
+	if err := storefs.MoveArticleToAttic(cfg.DataRoot, wsName, slug); err != nil {
+		m.setStatusError("attic: " + err.Error())
+		return
+	}
+	m.statusMsg = fmt.Sprintf("✓ %q → attic", title)
+	m.triggerWorkspaceReload()
+}
+
+// cmdAtticCollection moves a workspace collection to the attic.
+func (m *Model) cmdAtticCollection(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	colSlug := row.colSlug
+	wsName := ws.name
+	if err := storefs.MoveCollectionToAttic(cfg.DataRoot, wsName, colSlug); err != nil {
+		m.setStatusError("attic: " + err.Error())
+		return
+	}
+	m.statusMsg = fmt.Sprintf("✓ %q → attic", colSlug)
+	m.triggerWorkspaceReload()
+}
+
+// cmdUnAtticArticle restores an article from the attic back to the workspace.
+func (m *Model) cmdUnAtticArticle(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	slug := row.slug
+	title := row.title
+	if title == "" {
+		title = slug
+	}
+	wsName := ws.name
+	if err := storefs.MoveArticleFromAttic(cfg.DataRoot, cfg.ArticlesRoot, wsName, slug); err != nil {
+		m.setStatusError("un-attic: " + err.Error())
+		return
+	}
+	m.statusMsg = fmt.Sprintf("✓ %q ← attic", title)
+	m.triggerWorkspaceReload()
+}
+
+// cmdUnAtticCollection restores a collection from the attic back to the workspace.
+func (m *Model) cmdUnAtticCollection(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	colSlug := row.colSlug
+	wsName := ws.name
+	if err := storefs.MoveCollectionFromAttic(cfg.DataRoot, wsName, colSlug); err != nil {
+		m.setStatusError("un-attic: " + err.Error())
+		return
+	}
+	m.statusMsg = fmt.Sprintf("✓ %q ← attic", colSlug)
+	m.triggerWorkspaceReload()
+}
+
+// cmdRemoveFromAtticArticle removes an article from the attic entirely (with confirmation).
+func (m *Model) cmdRemoveFromAtticArticle(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	slug := row.slug
+	title := row.title
+	if title == "" {
+		title = slug
+	}
+	wsName := ws.name
+	m.askConfirm(fmt.Sprintf("remove %q from attic? (yes/N)", title), func() tea.Cmd {
+		return func() tea.Msg {
+			if err := storefs.RemoveArticleFromAttic(cfg.DataRoot, wsName, slug); err != nil {
+				return cmdDoneMsg{err: "attic-remove: " + err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ removed %q from attic", title), reloadWorkspaces: true}
+		}
+	})
+}
+
+// cmdRemoveFromAtticCollection removes a collection from the attic entirely (with confirmation).
+func (m *Model) cmdRemoveFromAtticCollection(row *wsRow) {
+	ws := m.workspaceItems[row.wsIdx]
+	cfg := m.cfg
+	colSlug := row.colSlug
+	wsName := ws.name
+	m.askConfirm(fmt.Sprintf("remove %q from attic? (yes/N)", colSlug), func() tea.Cmd {
+		return func() tea.Msg {
+			if err := storefs.RemoveCollectionFromAttic(cfg.DataRoot, wsName, colSlug); err != nil {
+				return cmdDoneMsg{err: "attic-remove: " + err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ removed %q from attic", colSlug), reloadWorkspaces: true}
+		}
+	})
+}
+
 // cmdOutcomeRemove removes an outcome from workspace/outcomes/ with confirmation.
 func (m *Model) cmdOutcomeRemove(name string) {
 	if name == "" {

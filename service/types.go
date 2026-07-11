@@ -204,9 +204,11 @@ type WorkspaceInfo struct {
 	ChatConfig      config.ChatConfig
 	Articles        []string // article slugs
 	CollectionSlugs []string // collection slugs
-	ResourceNames   []string // resource file basenames
-	ResourceDirs    []string // resource directory names
-	OutcomeNames    []string // outcome file basenames
+	ResourceNames        []string // resource file basenames
+	ResourceDirs         []string // resource directory names
+	OutcomeNames         []string // outcome file basenames
+	AtticArticles        []string // attic article slugs
+	AtticCollectionSlugs []string // attic collection slugs
 }
 
 // CollectionInfo describes a collection with article count.
