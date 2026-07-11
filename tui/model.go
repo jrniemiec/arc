@@ -298,6 +298,7 @@ type Model struct {
 	wsRows            []wsRow            // flat tree rows rebuilt on expand/collapse
 	wsCursor          int
 	wsScroll          int
+	wsFocusName       string             // non-empty = solo mode, only this workspace visible
 	workspacesLoaded  bool
 	workspacesErr     string
 
@@ -973,6 +974,7 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		svc:             svc,
 		cfg:             cfg,
 		restoredState:   restored,
+		wsFocusName:     restored.WsFocus,
 		input:           ta,
 		inputHistory:    loadCommandHistory(historyPath(cfg.DataRoot)),
 		inputHistoryIdx: -1,
@@ -1003,6 +1005,7 @@ func (m Model) SaveState() {
 	s := tuiState{
 		ActiveTab: tabToString(m.activeTab),
 		SubTab:    subTabToString(m.navSubTab),
+		WsFocus:   m.wsFocusName,
 	}
 // Store currently selected workspace name.
 	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {

@@ -223,7 +223,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.workspaceItemsAll = msg.items
-			m.workspaceItems = msg.items
+			// Re-apply focus filter if active.
+			if m.wsFocusName != "" {
+				var focused []workspaceItem
+				for _, ws := range msg.items {
+					if ws.name == m.wsFocusName {
+						focused = append(focused, ws)
+						break
+					}
+				}
+				if len(focused) > 0 {
+					m.workspaceItems = focused
+				} else {
+					// Focused workspace was deleted — clear focus.
+					m.wsFocusName = ""
+					m.workspaceItems = msg.items
+				}
+			} else {
+				m.workspaceItems = msg.items
+			}
 			m.wsRows = m.buildWsRows()
 			// Restore workspace cursor from saved state, or clamp to bounds.
 			if name := m.restoredState.Workspace; name != "" {
@@ -836,6 +854,11 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 		}
+	case msg.String() == "!":
+		if m.navSubTab == navSubTabWorkspaces {
+			m.wsToggleFocus()
+			return nil
+		}
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
@@ -1242,6 +1265,44 @@ func (m *Model) wsToggleExpand() {
 	}
 	m.wsRows = m.buildWsRows()
 	m.clampWsScroll()
+}
+
+// wsToggleFocus toggles solo mode for the workspace under the cursor.
+// In solo mode, only the focused workspace is shown in the nav pane.
+func (m *Model) wsToggleFocus() {
+	if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
+		return
+	}
+	row := m.wsRows[m.wsCursor]
+	if row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		return
+	}
+	ws := m.workspaceItems[row.wsIdx]
+
+	if m.wsFocusName != "" {
+		// Unfocus: restore all workspaces.
+		m.wsFocusName = ""
+		m.workspaceItems = m.workspaceItemsAll
+		m.wsRows = m.buildWsRows()
+		// Place cursor on the previously focused workspace.
+		for i, r := range m.wsRows {
+			if r.kind == wsRowWorkspace && r.wsIdx >= 0 && r.wsIdx < len(m.workspaceItems) && m.workspaceItems[r.wsIdx].name == ws.name {
+				m.wsCursor = i
+				break
+			}
+		}
+		m.clampWsScroll()
+		m.statusMsg = ""
+		return
+	}
+
+	// Focus: show only this workspace.
+	m.wsFocusName = ws.name
+	m.workspaceItems = []workspaceItem{ws}
+	m.wsRows = m.buildWsRows()
+	m.wsCursor = 0
+	m.wsScroll = 0
+	m.statusMsg = "! focused: " + ws.name
 }
 
 // openWorkspaceFile reads a file from the workspace subdir and opens the resource overlay.

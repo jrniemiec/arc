@@ -16,6 +16,7 @@ type tuiState struct {
 	Workspace  string `json:"workspace,omitempty"`
 	Article    string `json:"article,omitempty"`
 	Collection string `json:"collection,omitempty"`
+	WsFocus    string `json:"ws_focus,omitempty"` // solo-mode workspace name
 }
 
 func statePath(dataRoot string) string {
