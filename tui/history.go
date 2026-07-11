@@ -7,10 +7,7 @@ import (
 	"strings"
 )
 
-const (
-	historyFile     = "command_history"
-	historyMaxLines = 512
-)
+const historyFile = "command_history"
 
 // historyPath returns the path to the command history file.
 func historyPath(dataRoot string) string {
@@ -37,8 +34,8 @@ func loadCommandHistory(path string) []string {
 	return result
 }
 
-// saveCommandHistory filters to /commands, deduplicates, caps at historyMaxLines,
-// and writes to path. Errors are silently ignored — history is best-effort.
+// saveCommandHistory filters to /commands, deduplicates, and writes to path.
+// Errors are silently ignored — history is best-effort.
 func saveCommandHistory(path string, history []string) {
 	slog.Debug("saveCommandHistory", "path", path, "totalEntries", len(history))
 	var cmds []string
@@ -48,9 +45,6 @@ func saveCommandHistory(path string, history []string) {
 		}
 	}
 	cmds = dedupeHistory(cmds)
-	if len(cmds) > historyMaxLines {
-		cmds = cmds[len(cmds)-historyMaxLines:]
-	}
 	slog.Debug("saveCommandHistory: writing", "slashCmds", len(cmds))
 	_ = os.WriteFile(path, []byte(strings.Join(cmds, "\n")+"\n"), 0o644)
 }

@@ -328,7 +328,7 @@ type Model struct {
 
 	// Command input (textarea for multi-line editing; rendering is manual)
 	input             textarea.Model
-	inputHistory      []string // oldest first, max 128
+	inputHistory      []string // oldest first, no cap
 	inputHistoryIdx   int      // -1 = live editing; ≥0 = browsing history
 	inputHistorySaved string   // draft saved when history browsing starts
 	pastedBlob        string   // buffered paste content; submitted on Enter instead of inputValue

@@ -2201,19 +2201,11 @@ func (m *Model) inputSubmit() {
 }
 
 // pushHistory appends val to history, deduplicating consecutive identical entries.
-// Caps entries at 64 runes. Max 128 entries total.
 func (m *Model) pushHistory(val string) {
-	runes := []rune(val)
-	if len(runes) > 64 {
-		val = string(runes[:60]) + " ..."
-	}
 	if len(m.inputHistory) > 0 && m.inputHistory[len(m.inputHistory)-1] == val {
 		return
 	}
 	m.inputHistory = append(m.inputHistory, val)
-	if len(m.inputHistory) > 128 {
-		m.inputHistory = m.inputHistory[1:]
-	}
 }
 
 // cycleContentTab jumps contentScroll to the next/prev present section.
@@ -4589,6 +4581,7 @@ var helpGroups = []struct {
 		{"D", "", "delete current item"},
 		{"U", "", "unlink article/collection from workspace"},
 		{"/", "", "open command input"},
+		{"↑ / ↓", "", "recall command history (in command pane)"},
 		{"?", "", "show key bindings"},
 		{"q / ctrl+c", "", "quit"},
 	}},
