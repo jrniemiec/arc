@@ -28,9 +28,12 @@ func (m *Model) toggleAskX() {
 		m.clearAskXInput()
 		return
 	}
-	// Mutual exclusion: close scratch if open.
+	// Mutual exclusion: close scratch and preview if open.
 	if m.scratchOpen {
 		m.closeScratch()
+	}
+	if m.previewOpen {
+		m.closePreview()
 	}
 	m.askxGlobal = true
 	m.askxOpen = true
@@ -264,9 +267,12 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 		if m.askxOpen {
 			m.closeAskX()
 		} else {
-			// Mutual exclusion: close scratch.
+			// Mutual exclusion: close scratch and preview.
 			if m.scratchOpen {
 				m.closeScratch()
+			}
+			if m.previewOpen {
+				m.closePreview()
 			}
 			m.askxGlobal = global
 			m.askxOpen = true
@@ -319,9 +325,12 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 	})
 	m.saveAskXHistory()
 
-	// Mutual exclusion: close scratch.
+	// Mutual exclusion: close scratch and preview.
 	if m.scratchOpen {
 		m.closeScratch()
+	}
+	if m.previewOpen {
+		m.closePreview()
 	}
 	m.askxOpen = true
 	m.rebuildAskXLines()

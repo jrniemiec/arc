@@ -602,6 +602,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.AskX):
 		m.toggleAskX()
 		return nil
+	case key.Matches(msg, keys.Preview):
+		m.togglePreview()
+		return nil
 
 	case key.Matches(msg, keys.CorrectInput):
 		if !m.correcting && strings.TrimSpace(m.input.Value()) != "" {
@@ -910,6 +913,7 @@ func (m *Model) navCursorUp() tea.Cmd {
 			m.clampWsScroll()
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeUpdatePreview()
 			return m.triggerWorkspaceChatLoad()
 		}
 	}
@@ -937,6 +941,7 @@ func (m *Model) navCursorDown() tea.Cmd {
 			m.clampWsScroll()
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeUpdatePreview()
 			return m.triggerWorkspaceChatLoad()
 		}
 	}
@@ -969,6 +974,7 @@ func (m *Model) navPageUp() tea.Cmd {
 		m.clampWsScroll()
 		m.maybeReloadScratch()
 		m.maybeCloseAskX()
+		m.maybeUpdatePreview()
 	}
 	return nil
 }
@@ -1008,6 +1014,7 @@ func (m *Model) navPageDown() tea.Cmd {
 		m.clampWsScroll()
 		m.maybeReloadScratch()
 		m.maybeCloseAskX()
+		m.maybeUpdatePreview()
 	}
 	return nil
 }
@@ -1028,6 +1035,7 @@ func (m *Model) navHome() tea.Cmd {
 		m.clampWsScroll()
 		m.maybeReloadScratch()
 		m.maybeCloseAskX()
+		m.maybeUpdatePreview()
 	}
 	return nil
 }
@@ -1053,6 +1061,7 @@ func (m *Model) navEnd() tea.Cmd {
 			m.clampWsScroll()
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeUpdatePreview()
 		}
 	}
 	return nil
@@ -1565,6 +1574,16 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 
+	// Preview pane-level shortcut (V view) — works whenever preview is visible.
+	if m.previewOpen && msg.Type == tea.KeyRunes && msg.String() == "V" {
+		if len(m.previewLines) == 0 {
+			m.setStatusError("preview is empty")
+			return nil
+		}
+		m.openResourceOverlay(m.previewTitle, strings.Join(m.previewLines, "\n"))
+		return nil
+	}
+
 	// AskX pane-level shortcuts (V view) — work whenever askX is visible.
 	if m.askxOpen && msg.Type == tea.KeyRunes && msg.String() == "V" {
 		content := m.askxAsText()
@@ -1587,6 +1606,10 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	// When askX pane is focused, route keys to askX.
 	if m.askxOpen && m.askxFocused {
 		return m.handleAskXKey(msg)
+	}
+	// When preview pane is focused, route keys to preview.
+	if m.previewOpen && m.previewFocused {
+		return m.handlePreviewKey(msg)
 	}
 	if m.chatMode {
 		return m.handleChatContentKey(msg)
@@ -4271,8 +4294,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 
-		// Scratch/AskX pane wheel (bottom of content pane).
-		if msg.X > m.dividerCol() && (m.scratchOpen || m.askxOpen) {
+		// Scratch/AskX/Preview pane wheel (bottom of content pane).
+		if msg.X > m.dividerCol() && (m.scratchOpen || m.askxOpen || m.previewOpen) {
 			mainH := m.height - 6 - m.completionCount()
 			splitH := mainH / 3
 			if splitH < 3 {
@@ -4304,6 +4327,18 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					}
 					if m.askxScroll > maxScroll {
 						m.askxScroll = maxScroll
+					}
+				} else if m.previewOpen {
+					m.previewScroll += delta
+					if m.previewScroll < 0 {
+						m.previewScroll = 0
+					}
+					maxScroll := len(m.previewLines) - viewH
+					if maxScroll < 0 {
+						maxScroll = 0
+					}
+					if m.previewScroll > maxScroll {
+						m.previewScroll = maxScroll
 					}
 				}
 				return nil
@@ -4432,7 +4467,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click in content pane.
 			m.focus = paneContent
 			// Check if click is in the scratch or askX region.
-			splitOpen := m.scratchOpen || m.askxOpen
+			splitOpen := m.scratchOpen || m.askxOpen || m.previewOpen
 			if splitOpen {
 				mainH := m.height - 6 - m.completionCount()
 				splitH := mainH / 3
@@ -4447,11 +4482,15 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					if m.askxOpen {
 						m.askxFocused = true
 					}
+					if m.previewOpen {
+						m.previewFocused = true
+					}
 					return nil
 				}
 			}
 			m.scratchFocused = false
 			m.askxFocused = false
+			m.previewFocused = false
 			if m.chatMode {
 				m.rebuildChatLines(m.chatBuildWidth())
 				m.chatBoxCursor = 0
@@ -4505,6 +4544,7 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 			m.wsCursor = idx
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeUpdatePreview()
 			row := m.wsRows[idx]
 			switch row.kind {
 			case wsRowWorkspace:
@@ -4631,9 +4671,12 @@ func (m *Model) toggleScratch() {
 		m.closeScratch()
 		return
 	}
-	// Mutual exclusion: close askX if open.
+	// Mutual exclusion: close askX and preview if open.
 	if m.askxOpen {
 		m.closeAskX()
+	}
+	if m.previewOpen {
+		m.closePreview()
 	}
 	m.scratchGlobal = true
 	m.scratchOpen = true
@@ -4661,6 +4704,9 @@ func (m *Model) cmdScratch(msg string, global bool) tea.Cmd {
 			if m.askxOpen {
 				m.closeAskX()
 			}
+			if m.previewOpen {
+				m.closePreview()
+			}
 			m.scratchGlobal = global
 			m.scratchOpen = true
 			m.reloadScratchLines()
@@ -4681,6 +4727,9 @@ func (m *Model) cmdScratch(msg string, global bool) tea.Cmd {
 	if !m.scratchOpen {
 		if m.askxOpen {
 			m.closeAskX()
+		}
+		if m.previewOpen {
+			m.closePreview()
 		}
 		m.scratchOpen = true
 	}
@@ -4855,9 +4904,12 @@ func (m *Model) openScratchPaneForRow(row *wsRow) {
 	if m.scratchOpen {
 		m.closeScratch()
 	}
-	// Close askX if open (mutual exclusion).
+	// Close askX and preview if open (mutual exclusion).
 	if m.askxOpen {
 		m.closeAskX()
+	}
+	if m.previewOpen {
+		m.closePreview()
 	}
 	// Move cursor to this row's workspace so scratchWorkspace() resolves correctly.
 	m.wsCursor = m.wsRowIndexForScratch(row.wsIdx)

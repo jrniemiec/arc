@@ -388,6 +388,14 @@ type Model struct {
 	scratchLoadedWs    string         // workspace name scratch was last loaded for ("" = global)
 	scratchGlobal      bool           // true when opened via Ctrl+L (always global, cursor won't switch)
 	scratchCollapsed   map[int]bool   // set of collapsed block indices
+	// Preview pane (split at bottom of content pane, mutually exclusive with scratch/askX)
+	previewOpen         bool     // true when preview split is visible
+	previewFocused      bool     // true when preview region has focus (within paneContent)
+	previewScroll       int      // scroll offset into previewLines
+	previewLines        []string // cached content lines for rendering
+	previewTitle        string   // title/filename shown in header
+	previewLastSlug     string   // article slug currently loaded (avoids redundant reloads)
+	previewLastResource string   // resource name currently loaded
 	// AskX pane (split at bottom of content pane, mutually exclusive with scratch)
 	askxGlobal        bool               // true when opened via Ctrl+X (always global, ignores workspace)
 	askxOpen          bool               // true when askX split is visible

@@ -912,7 +912,7 @@ func (m Model) renderContentPane(height, width int) []string {
 	// Calculate scratch/askX split if open (mutually exclusive).
 	splitH := 0
 	contentH := height
-	if m.scratchOpen || m.askxOpen {
+	if m.scratchOpen || m.askxOpen || m.previewOpen {
 		splitH = height / 3
 		if splitH < 3 {
 			splitH = 3
@@ -948,6 +948,8 @@ func (m Model) renderContentPane(height, width int) []string {
 		lines = append(lines, m.renderScratchPane(splitH, width)...)
 	} else if m.askxOpen && splitH > 0 {
 		lines = append(lines, m.renderAskXPane(splitH, width)...)
+	} else if m.previewOpen && splitH > 0 {
+		lines = append(lines, m.renderPreviewPane(splitH, width)...)
 	}
 
 	for len(lines) < height {

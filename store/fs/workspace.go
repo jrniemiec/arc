@@ -330,8 +330,14 @@ func DeleteWorkspace(dataRoot, name string) error {
 // ErrAlreadyInWorkspace is returned when an article or collection is already linked.
 var ErrAlreadyInWorkspace = fmt.Errorf("already in workspace")
 
-// articleManifest maps slug → RFC3339 linked-at timestamp.
-type articleManifest map[string]string
+// articleManifestEntry is one entry in the ordered article manifest.
+type articleManifestEntry struct {
+	Slug     string `json:"slug"`
+	LinkedAt string `json:"linked_at"`
+}
+
+// articleManifest is an ordered list of linked articles.
+type articleManifest []articleManifestEntry
 
 func articleManifestPath(dataRoot, wsName string) string {
 	return filepath.Join(WorkspaceDir(dataRoot, wsName), "articles.json")
@@ -340,13 +346,24 @@ func articleManifestPath(dataRoot, wsName string) string {
 func readArticleManifest(dataRoot, wsName string) articleManifest {
 	data, err := os.ReadFile(articleManifestPath(dataRoot, wsName))
 	if err != nil {
-		return articleManifest{}
+		return nil
 	}
-	var m articleManifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return articleManifest{}
+
+	// Try new format (ordered list) first.
+	var list articleManifest
+	if err := json.Unmarshal(data, &list); err == nil && (len(list) == 0 || list[0].Slug != "") {
+		return list
 	}
-	return m
+
+	// Fall back to old format (map[string]string) and convert.
+	var oldMap map[string]string
+	if err := json.Unmarshal(data, &oldMap); err != nil {
+		return nil
+	}
+	for slug, ts := range oldMap {
+		list = append(list, articleManifestEntry{Slug: slug, LinkedAt: ts})
+	}
+	return list
 }
 
 func writeArticleManifest(dataRoot, wsName string, m articleManifest) {
@@ -355,6 +372,16 @@ func writeArticleManifest(dataRoot, wsName string, m articleManifest) {
 		return
 	}
 	_ = os.WriteFile(articleManifestPath(dataRoot, wsName), data, 0644)
+}
+
+// manifestIndex returns the index of slug in the manifest, or -1 if not found.
+func manifestIndex(m articleManifest, slug string) int {
+	for i, e := range m {
+		if e.Slug == slug {
+			return i
+		}
+	}
+	return -1
 }
 
 // AddArticleToWorkspace creates a relative symlink from workspace/articles/<slug>
@@ -376,9 +403,14 @@ func AddArticleToWorkspace(dataRoot, articlesRoot, articleSlug, workspaceName st
 		return err
 	}
 
-	// Record linking timestamp.
+	// Append to ordered manifest.
 	manifest := readArticleManifest(dataRoot, workspaceName)
-	manifest[articleSlug] = time.Now().Format(time.RFC3339)
+	if manifestIndex(manifest, articleSlug) == -1 {
+		manifest = append(manifest, articleManifestEntry{
+			Slug:     articleSlug,
+			LinkedAt: time.Now().Format(time.RFC3339),
+		})
+	}
 	writeArticleManifest(dataRoot, workspaceName, manifest)
 	return nil
 }
@@ -403,14 +435,16 @@ func RemoveArticleFromWorkspace(dataRoot, workspaceName, articleSlug string) err
 
 	// Remove from manifest.
 	manifest := readArticleManifest(dataRoot, workspaceName)
-	delete(manifest, articleSlug)
+	if idx := manifestIndex(manifest, articleSlug); idx >= 0 {
+		manifest = append(manifest[:idx], manifest[idx+1:]...)
+	}
 	writeArticleManifest(dataRoot, workspaceName, manifest)
 	return nil
 }
 
 // ListWorkspaceArticles returns article slugs linked in a workspace.
-// Articles are sorted by linking timestamp (from articles.json manifest).
-// Articles without a manifest entry are sorted by slug and listed first.
+// Articles are returned in manifest order (insertion order).
+// Symlinks on disk but not in the manifest are appended at the end (alphabetical).
 // Broken symlinks are reported separately.
 func ListWorkspaceArticles(dataRoot, name string) (articles []string, broken []string, err error) {
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "articles")
@@ -421,6 +455,9 @@ func ListWorkspaceArticles(dataRoot, name string) (articles []string, broken []s
 		}
 		return nil, nil, fmt.Errorf("read workspace articles dir: %w", err)
 	}
+
+	// Collect valid symlinks into a set.
+	onDisk := make(map[string]bool)
 	for _, e := range entries {
 		info, err := os.Lstat(filepath.Join(dir, e.Name()))
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -431,27 +468,28 @@ func ListWorkspaceArticles(dataRoot, name string) (articles []string, broken []s
 			broken = append(broken, e.Name())
 			continue
 		}
-		articles = append(articles, e.Name())
+		onDisk[e.Name()] = true
 	}
 
-	// Sort by manifest linked-at timestamp.
+	// Build result in manifest order, keeping only slugs that exist on disk.
 	manifest := readArticleManifest(dataRoot, name)
-	sort.SliceStable(articles, func(i, j int) bool {
-		ti, oki := manifest[articles[i]]
-		tj, okj := manifest[articles[j]]
-		// Both missing manifest → slug order (already sorted by ReadDir).
-		if !oki && !okj {
-			return articles[i] < articles[j]
+	seen := make(map[string]bool, len(manifest))
+	for _, entry := range manifest {
+		if onDisk[entry.Slug] {
+			articles = append(articles, entry.Slug)
+			seen[entry.Slug] = true
 		}
-		// Missing manifest entries come first.
-		if !oki {
-			return true
+	}
+
+	// Append any on-disk slugs not in the manifest (alphabetical).
+	var extra []string
+	for slug := range onDisk {
+		if !seen[slug] {
+			extra = append(extra, slug)
 		}
-		if !okj {
-			return false
-		}
-		return ti < tj
-	})
+	}
+	sort.Strings(extra)
+	articles = append(articles, extra...)
 
 	return articles, broken, nil
 }

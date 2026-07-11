@@ -32,6 +32,7 @@ type keyMap struct {
 	Refresh      key.Binding // Ctrl+R — refresh current view
 	Scratch      key.Binding // Ctrl+L — toggle scratch pane
 	AskX         key.Binding // Ctrl+X — toggle askX pane
+	Preview      key.Binding // Ctrl+O — toggle preview pane
 	FocusNav     key.Binding // Alt+1 — jump to nav pane
 	FocusContent key.Binding // Alt+2 — jump to content pane
 	FocusTabBar  key.Binding // Alt+3 — jump to tab bar
@@ -138,6 +139,10 @@ var keys = keyMap{
 	AskX: key.NewBinding(
 		key.WithKeys("ctrl+x"),
 		key.WithHelp("ctrl+x", "toggle global askX"),
+	),
+	Preview: key.NewBinding(
+		key.WithKeys("ctrl+o"),
+		key.WithHelp("ctrl+o", "toggle preview"),
 	),
 	FocusNav: key.NewBinding(
 		key.WithKeys("alt+1", "¡"), // ¡ = macOS Option+1
