@@ -224,10 +224,11 @@ func (m Model) View() string {
 		return m.renderResourceOverlay()
 	}
 
-	// Fixed rows: top bar (2) + split sep (1) + cmd (N) + status sep (1) + completions (N) + status bar (1) = 5+inputH+N
+	// Fixed rows: top bar (2) + split sep (1) + detail lines (N) + cmd (N) + status sep (1) + completions (N) + status bar (1) = 5+inputH+N
 	compLines := m.renderCompletionLines()
+	editDetailLines := m.populateEditDetailLines()
 	inputH := m.inputVisualHeight()
-	fixedRows := 5 + inputH + len(compLines)
+	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines)
 	mainHeight := m.height - fixedRows
 	if mainHeight < 1 {
 		mainHeight = 1
@@ -237,8 +238,9 @@ func (m Model) View() string {
 	topLines := []string{m.renderTabBar(), m.renderSplitSep(m.width, true)}
 	mainLines := strings.Split(m.renderMainArea(mainHeight), "\n")
 	cmdInput := m.renderCommandInput()
-	botLines := make([]string, 0, 4+inputH+len(compLines))
+	botLines := make([]string, 0, 4+len(editDetailLines)+inputH+len(compLines))
 	botLines = append(botLines, m.renderSplitSep(m.width, false))
+	botLines = append(botLines, editDetailLines...)
 	botLines = append(botLines, strings.Split(cmdInput, "\n")...)
 	botLines = append(botLines, m.renderStatusSep())
 	botLines = append(botLines, compLines...)

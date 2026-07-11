@@ -281,6 +281,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chromeWindowID = msg.windowID
 		}
 
+	case populateEditMsg:
+		m.populateRunning = false
+		m.populateLabel = ""
+		if len(msg.items) == 0 {
+			m.statusMsg = "✗ no suggestions to review"
+			break
+		}
+		m.populateEditing = true
+		m.populateEditItems = msg.items
+		m.populateEditIdx = 0
+		m.populateEditWs = msg.workspace
+		m.populateEditCost = msg.cost
+		m.populateEditHint = msg.hint
+		m.populateEditLog = msg.log
+		m.focus = paneCommand
+		m.cursorVisible = true
+		m.input.SetValue("")
+		m.input.CursorEnd()
+
 	case cmdDoneMsg:
 		m.populateRunning = false
 		m.populateLabel = ""
@@ -587,6 +606,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.statusLines = nil
 		m.pendingConfirm = nil
 		m.pendingConfirmMsg = ""
+		if m.populateEditing {
+			m.populateEditing = false
+			m.statusMsg = "populate edit cancelled"
+		}
 		m.input.SetValue("")
 		m.input.CursorEnd()
 		m.pastedBlob = ""
@@ -1974,6 +1997,10 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			m.pendingConfirmMsg = ""
 			m.statusMsg = "cancelled"
 			return nil
+		}
+		// Populate edit flow: accept/skip/done
+		if m.populateEditing {
+			return m.handlePopulateEditInput(val)
 		}
 		if val != "" {
 			if m.chatMode {
@@ -3921,12 +3948,13 @@ func (m *Model) cmdPopulateWorkspace(arg string) tea.Cmd {
 		return nil
 	}
 
-	// Parse arg: [workspace-name] [--hint "..."] [--include-collections] [--dry-run]
+	// Parse arg: [workspace-name] [--hint "..."] [--include-collections] [--dry-run] [--edit]
 	// First non-flag token is treated as workspace name override.
 	var hint string
 	var profile string
 	var includeCols bool
 	var dryRun bool
+	var edit bool
 	tokens := strings.Fields(arg)
 	for i := 0; i < len(tokens); i++ {
 		switch tokens[i] {
@@ -3934,6 +3962,8 @@ func (m *Model) cmdPopulateWorkspace(arg string) tea.Cmd {
 			includeCols = true
 		case "--dry-run":
 			dryRun = true
+		case "--edit":
+			edit = true
 		case "--profile":
 			if i+1 < len(tokens) {
 				i++
@@ -3980,6 +4010,32 @@ func (m *Model) cmdPopulateWorkspace(arg string) tea.Cmd {
 		})
 		if err != nil {
 			return cmdDoneMsg{err: err.Error()}
+		}
+
+		// Interactive edit: return items for one-by-one review in the input pane.
+		if edit {
+			var items []populateEditItem
+			for _, c := range result.Collections {
+				items = append(items, populateEditItem{
+					slug:         c.Slug,
+					display:      c.Display,
+					articleCount: c.ArticleCount,
+					isCollection: true,
+				})
+			}
+			for _, a := range result.Articles {
+				items = append(items, populateEditItem{
+					slug:    a.Slug,
+					display: a.Display,
+				})
+			}
+			return populateEditMsg{
+				workspace: wsName,
+				items:     items,
+				cost:      result.CostUSD,
+				hint:      hint,
+				log:       progressLog,
+			}
 		}
 
 		// Build output lines for status pane (CLI-style).
@@ -4060,6 +4116,140 @@ func (m *Model) cmdPopulateWorkspace(arg string) tea.Cmd {
 			reloadWorkspaces: !dryRun,
 		}
 	}
+}
+
+// handlePopulateEditInput processes user input during populate --edit review.
+// Empty string or anything other than "n"/"q" = accept current item.
+func (m *Model) handlePopulateEditInput(val string) tea.Cmd {
+	val = strings.ToLower(strings.TrimSpace(val))
+	switch val {
+	case "n":
+		// Skip — leave accepted=false, advance.
+	case "q":
+		// Done early — finish with what's accepted so far.
+		return m.finishPopulateEdit()
+	default:
+		// Accept (Enter or any other input).
+		m.populateEditItems[m.populateEditIdx].accepted = true
+	}
+	m.populateEditIdx++
+	if m.populateEditIdx >= len(m.populateEditItems) {
+		return m.finishPopulateEdit()
+	}
+	// Show next item.
+	m.input.SetValue("")
+	m.input.CursorEnd()
+	return nil
+}
+
+// finishPopulateEdit ends the populate review, links accepted items, and shows results.
+func (m *Model) finishPopulateEdit() tea.Cmd {
+	m.populateEditing = false
+	wsName := m.populateEditWs
+	svc := m.svc
+	cfg := m.cfg
+
+	// Collect accepted items.
+	var colSlugs, artSlugs []string
+	for _, item := range m.populateEditItems {
+		if !item.accepted {
+			continue
+		}
+		if item.isCollection {
+			colSlugs = append(colSlugs, item.slug)
+		} else {
+			artSlugs = append(artSlugs, item.slug)
+		}
+	}
+
+	// Build status lines with ✓/– markers.
+	var lines []string
+	lines = append(lines, fmt.Sprintf("populate --edit %s", wsName))
+	if m.populateEditHint != "" {
+		lines = append(lines, fmt.Sprintf("hint: %s", m.populateEditHint))
+	}
+	lines = append(lines, "")
+	for _, msg := range m.populateEditLog {
+		lines = append(lines, "  "+msg)
+	}
+	if len(m.populateEditLog) > 0 {
+		lines = append(lines, "")
+	}
+
+	hasCollections := false
+	hasArticles := false
+	for _, item := range m.populateEditItems {
+		if item.isCollection {
+			hasCollections = true
+		} else {
+			hasArticles = true
+		}
+	}
+
+	if hasCollections {
+		lines = append(lines, "Collections:")
+		for _, item := range m.populateEditItems {
+			if !item.isCollection {
+				continue
+			}
+			marker := "✓"
+			if !item.accepted {
+				marker = "–"
+			}
+			line := fmt.Sprintf("  %s %s", marker, item.slug)
+			if item.articleCount > 0 {
+				line += fmt.Sprintf(" (%d articles)", item.articleCount)
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "")
+	}
+
+	if hasArticles {
+		lines = append(lines, "Articles:")
+		for _, item := range m.populateEditItems {
+			if item.isCollection {
+				continue
+			}
+			marker := "✓"
+			if !item.accepted {
+				marker = "–"
+			}
+			line := fmt.Sprintf("  %s %s", marker, item.slug)
+			if item.display != "" {
+				line += fmt.Sprintf("  — %s", item.display)
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "")
+	}
+
+	// Link accepted items.
+	if svc != nil {
+		if len(colSlugs) > 0 {
+			_ = svc.AddCollectionsToWorkspace(context.Background(), wsName, colSlugs)
+		}
+		if len(artSlugs) > 0 {
+			_ = svc.AddArticlesToWorkspace(context.Background(), wsName, artSlugs)
+		}
+	}
+
+	lines = append(lines, fmt.Sprintf("✓ Linked: %d collections, %d articles (cost: $%.4f)",
+		len(colSlugs), len(artSlugs), m.populateEditCost))
+
+	// Save to scratch.
+	output := strings.Join(lines, "\n") + "\n"
+	_ = storefs.AppendScratch(cfg.DataRoot, wsName, output)
+
+	m.setStatusLines(lines)
+	m.input.SetValue("")
+
+	// Reload workspaces since we linked items.
+	if svc != nil && (len(colSlugs) > 0 || len(artSlugs) > 0) {
+		m.workspacesLoaded = false
+		return loadWorkspaces(svc)
+	}
+	return nil
 }
 
 // helpGroups defines the command groups shown by /help.

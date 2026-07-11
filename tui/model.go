@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -408,6 +409,15 @@ type Model struct {
 	populateRunning bool   // true while workspace populate LLM is in flight
 	populateLabel   string // label shown in wave indicator during populate
 
+	// Populate edit mode — sequential review of suggestions in input pane
+	populateEditing  bool                       // true while reviewing suggestions one-by-one
+	populateEditItems []populateEditItem         // all items to review (collections first, then articles)
+	populateEditIdx   int                        // current item index
+	populateEditWs    string                     // workspace name for linking
+	populateEditCost  float64                    // LLM cost for display
+	populateEditHint  string                     // hint used (for status output)
+	populateEditLog   []string                   // progress log from LLM run
+
 	askxStreaming        bool              // true while LLM response is in flight
 	askxStreamBuf       string             // accumulated streaming response text
 	askxSharedBuf       *streamBuf         // goroutine-safe buffer written by streaming goroutine
@@ -489,7 +499,7 @@ var workspaceCommands = []cmdCompletion{
 	{"/rename", "<new-name>", "rename current workspace"},
 	{"/describe", "<text>", "set workspace description"},
 	{"/reload", "", "reset chat engine to pick up corpus changes"},
-	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--include-collections]", "LLM-assisted article selection"},
+	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--edit] [--include-collections]", "LLM-assisted article selection"},
 }
 
 // chatCommands are available when workspace chat mode is active.
@@ -512,7 +522,7 @@ var chatCommands = []cmdCompletion{
 	{"/resource-edit", "<name>", "open resource file in $EDITOR"},
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
-	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--include-collections]", "LLM-assisted article selection"},
+	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--edit] [--include-collections]", "LLM-assisted article selection"},
 	{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
 	{"/Scratch", "[msg]", "global scratch (append / toggle)"},
 	{"/askX", "<prompt>", "workspace-local LLM query"},
@@ -628,6 +638,24 @@ type askxStreamDoneMsg struct {
 type correctionDoneMsg struct {
 	text string // corrected text (empty on error)
 	err  error
+}
+
+// populateEditItem is a single suggestion shown during --edit review.
+type populateEditItem struct {
+	slug         string
+	display      string // flash summary or collection description
+	articleCount int    // >0 for collections
+	isCollection bool
+	accepted     bool // set during review
+}
+
+// populateEditMsg signals that populate results are ready for interactive review.
+type populateEditMsg struct {
+	workspace string
+	items     []populateEditItem
+	cost      float64
+	hint      string
+	log       []string // progress log from LLM run
 }
 
 // correctionFlashMsg clears the correction flash after a delay.
@@ -828,10 +856,36 @@ func (m Model) inputPrompt() string {
 	if m.pendingConfirmMsg != "" {
 		return " " + m.pendingConfirmMsg + " "
 	}
+	if m.populateEditing && m.populateEditIdx < len(m.populateEditItems) {
+		n := len(m.populateEditItems)
+		return fmt.Sprintf(" [%d/%d] Enter=accept  n=skip  q=done > ", m.populateEditIdx+1, n)
+	}
 	if m.chatMode {
 		return m.chatWorkspace + "> "
 	}
 	return "> "
+}
+
+// populateEditDetailLines returns lines describing the current populate edit item,
+// rendered above the input pane.
+func (m Model) populateEditDetailLines() []string {
+	if !m.populateEditing || m.populateEditIdx >= len(m.populateEditItems) {
+		return nil
+	}
+	item := m.populateEditItems[m.populateEditIdx]
+	var lines []string
+	kind := "article"
+	if item.isCollection {
+		kind = "collection"
+	}
+	lines = append(lines, fmt.Sprintf("  %s: %s", kind, item.slug))
+	if item.isCollection && item.articleCount > 0 {
+		lines = append(lines, fmt.Sprintf("  (%d articles)", item.articleCount))
+	}
+	if item.display != "" {
+		lines = append(lines, "  "+item.display)
+	}
+	return lines
 }
 
 // inputVisualHeight returns the number of visual (wrapped) lines the input
