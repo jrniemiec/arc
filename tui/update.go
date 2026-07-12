@@ -115,6 +115,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				rows = append(rows, navRow{
 					kind:          rowCollection,
 					colSlug:       c.Slug,
+					colNumID:      c.NumID,
 					colName:       c.Name,
 					colDesc:       c.Description,
 					colCount:      c.ArticleCount,
@@ -149,6 +150,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				rows = append(rows, navRow{
 					kind:         rowCollection,
 					colSlug:      c.Slug,
+					colNumID:     c.NumID,
 					colName:      c.Name,
 					colDesc:      c.Description,
 					colCount:     c.ArticleCount,
@@ -3283,6 +3285,7 @@ func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
 			}
 			items[i] = navItem{
 				id:           a.ID,
+				numID:        a.NumID,
 				title:        a.Title,
 				date:         a.IngestedAt,
 				read:         a.ReadAt != nil,

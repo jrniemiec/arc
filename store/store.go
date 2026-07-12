@@ -5,6 +5,7 @@ import "time"
 // Article is the core domain type — one entry in the knowledge base.
 type Article struct {
 	ID             string     // "20260521-sparse-attention-survey"
+	NumID          int        // unique numeric ID for quick referencing
 	Title          string
 	URL            string
 	SourceType     string // url | pdf | text | rss | gmail
@@ -82,6 +83,7 @@ const (
 // Collection is a named grouping of articles.
 type Collection struct {
 	ID          string
+	NumID       int
 	Name        string
 	Description string
 	CreatedAt   time.Time

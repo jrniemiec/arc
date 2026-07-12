@@ -80,6 +80,10 @@ ALTER TABLE articles ADD COLUMN agent_reason   TEXT;
 CREATE INDEX IF NOT EXISTS idx_articles_agent_run ON articles(agent_run_id);
 ALTER TABLE articles ADD COLUMN favorited_at   TEXT;
 CREATE INDEX IF NOT EXISTS idx_articles_favorited ON articles(favorited_at);
+ALTER TABLE articles ADD COLUMN num_id INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_num_id ON articles(num_id);
+ALTER TABLE collections ADD COLUMN num_id INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_num_id ON collections(num_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS collections_fts USING fts5(
     collection_id,
     name,

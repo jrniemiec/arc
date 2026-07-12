@@ -736,7 +736,9 @@ func (m Model) renderChatPane(height, width int) []string {
 	// Show workspace description if available.
 	ws := m.selectedWorkspace()
 	if ws != nil && ws.description != "" {
-		lines = append(lines, fg(t.ContentDimmed, truncate(ws.description, width-1)))
+		for _, l := range wordWrap(ws.description, width-2) {
+			lines = append(lines, fg(t.ContentDimmed, l))
+		}
 	}
 	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
 

@@ -87,19 +87,20 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 	// Upsert article row
 	err := sqlitex.Execute(conn, `
 		INSERT INTO articles (
-			id, title, url, source_type, feed, author, published_at, language,
+			id, num_id, title, url, source_type, feed, author, published_at, language,
 			ingested_at, read_at, played_at, favorited_at,
 			summary_model, summary_style, flash_model, flashcard_model, flashcard_style,
 			embed_model, quality_score, root_path,
 			agent_run_id, agent_verdict, agent_reason
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?,
 			?, ?, ?, ?, ?,
 			?, ?, ?,
 			?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
+			num_id          = excluded.num_id,
 			title           = excluded.title,
 			url             = excluded.url,
 			source_type     = excluded.source_type,
@@ -121,7 +122,7 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 			agent_reason    = excluded.agent_reason
 	`, &sqlitex.ExecOptions{
 		Args: []any{
-			a.ID, a.Title, a.URL, a.SourceType, a.Feed, a.Author, a.PublishedAt, a.Language,
+			a.ID, nullInt(a.NumID), a.Title, a.URL, a.SourceType, a.Feed, a.Author, a.PublishedAt, a.Language,
 			a.IngestedAt.UTC().Format(time.RFC3339),
 			timePtr(a.ReadAt), timePtr(a.PlayedAt), timePtr(a.FavoritedAt),
 			a.SummaryModel, a.SummaryStyle, a.FlashModel, a.FlashcardModel, a.FlashcardStyle,
@@ -303,13 +304,14 @@ func (s *Store) UpsertCollection(ctx context.Context, c store.Collection) error 
 	}
 	defer s.pool.Put(conn)
 	if err := sqlitex.Execute(conn, `
-		INSERT INTO collections (id, name, description, created_at)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO collections (id, num_id, name, description, created_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
+			num_id      = excluded.num_id,
 			name        = excluded.name,
 			description = excluded.description
 	`, &sqlitex.ExecOptions{
-		Args: []any{c.ID, c.Name, c.Description, c.CreatedAt.UTC().Format(time.RFC3339)},
+		Args: []any{c.ID, nullInt(c.NumID), c.Name, c.Description, c.CreatedAt.UTC().Format(time.RFC3339)},
 	}); err != nil {
 		return err
 	}
@@ -520,61 +522,62 @@ func (s *Store) MarkPlayed(ctx context.Context, id string, t time.Time) error {
 
 // --- helpers ---
 
-const articleColumns = `id, title, url, source_type, feed, author, published_at, language,
+const articleColumns = `id, num_id, title, url, source_type, feed, author, published_at, language,
 	ingested_at, read_at, played_at, favorited_at,
 	summary_model, summary_style, flash_model, flashcard_model, flashcard_style,
 	embed_model, quality_score, root_path,
 	agent_run_id, agent_verdict, agent_reason`
 
 // articleColumnsQualified is used in JOINs to avoid ambiguous column names.
-const articleColumnsQualified = `a.id, a.title, a.url, a.source_type, a.feed, a.author, a.published_at, a.language,
+const articleColumnsQualified = `a.id, a.num_id, a.title, a.url, a.source_type, a.feed, a.author, a.published_at, a.language,
 	a.ingested_at, a.read_at, a.played_at, a.favorited_at,
 	a.summary_model, a.summary_style, a.flash_model, a.flashcard_model, a.flashcard_style,
 	a.embed_model, a.quality_score, a.root_path,
 	a.agent_run_id, a.agent_verdict, a.agent_reason`
 
 // columnCount is the number of columns in articleColumns (for offset calculations in Search).
-const columnCount = 23
+const columnCount = 24
 
 func scanArticle(stmt *sqlite.Stmt) store.Article {
 	a := store.Article{}
 	a.ID = stmt.ColumnText(0)
-	a.Title = stmt.ColumnText(1)
-	a.URL = stmt.ColumnText(2)
-	a.SourceType = stmt.ColumnText(3)
-	a.Feed = stmt.ColumnText(4)
-	a.Author = stmt.ColumnText(5)
-	a.PublishedAt = stmt.ColumnText(6)
-	a.Language = stmt.ColumnText(7)
+	a.NumID = int(stmt.ColumnInt64(1))
+	a.Title = stmt.ColumnText(2)
+	a.URL = stmt.ColumnText(3)
+	a.SourceType = stmt.ColumnText(4)
+	a.Feed = stmt.ColumnText(5)
+	a.Author = stmt.ColumnText(6)
+	a.PublishedAt = stmt.ColumnText(7)
+	a.Language = stmt.ColumnText(8)
 
-	if s := stmt.ColumnText(8); s != "" {
+	if s := stmt.ColumnText(9); s != "" {
 		t, _ := time.Parse(time.RFC3339, s)
 		a.IngestedAt = t
 	}
-	if s := stmt.ColumnText(9); s != "" {
+	if s := stmt.ColumnText(10); s != "" {
 		t, _ := time.Parse(time.RFC3339, s)
 		a.ReadAt = &t
 	}
-	if s := stmt.ColumnText(10); s != "" {
+	if s := stmt.ColumnText(11); s != "" {
 		t, _ := time.Parse(time.RFC3339, s)
 		a.PlayedAt = &t
 	}
-	if s := stmt.ColumnText(11); s != "" {
+	if s := stmt.ColumnText(12); s != "" {
 		t, _ := time.Parse(time.RFC3339, s)
 		a.FavoritedAt = &t
 	}
 
-	a.SummaryModel = stmt.ColumnText(12)
-	a.SummaryStyle = stmt.ColumnText(13)
-	a.FlashModel = stmt.ColumnText(14)
-	a.FlashcardModel = stmt.ColumnText(15)
-	a.FlashcardStyle = stmt.ColumnText(16)
-	a.EmbedModel = stmt.ColumnText(17)
-	a.QualityScore = stmt.ColumnFloat(18)
-	a.Files.Root = stmt.ColumnText(19)
-	a.AgentRunID = stmt.ColumnText(20)
-	a.AgentVerdict = stmt.ColumnText(21)
-	a.AgentReason = stmt.ColumnText(22)
+	a.SummaryModel = stmt.ColumnText(13)
+	a.SummaryStyle = stmt.ColumnText(14)
+	a.FlashModel = stmt.ColumnText(15)
+	a.FlashcardModel = stmt.ColumnText(16)
+	a.FlashcardStyle = stmt.ColumnText(17)
+	a.EmbedModel = stmt.ColumnText(18)
+	a.QualityScore = stmt.ColumnFloat(19)
+	a.Files.Root = stmt.ColumnText(20)
+	a.AgentRunID = stmt.ColumnText(21)
+	a.AgentVerdict = stmt.ColumnText(22)
+	a.AgentReason = stmt.ColumnText(23)
 
 	return a
 }
@@ -584,6 +587,13 @@ func nullStr(s string) any {
 		return nil
 	}
 	return s
+}
+
+func nullInt(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 func (s *Store) loadTags(conn *sqlite.Conn, a *store.Article) error {

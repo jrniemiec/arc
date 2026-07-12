@@ -121,9 +121,13 @@ Examples:
 				collStr = "  " + dim("["+collections+"]", tty)
 			}
 
-			// Line 1: read marker, date, slug, title
-			fmt.Fprintf(cmd.OutOrStdout(), "%s  %s  %-50s  %s%s\n",
-				read, date, truncate(a.ID, 50), truncate(a.Title, 50), collStr)
+			// Line 1: read marker, num_id, date, slug, title
+			numIDStr := "   "
+			if a.NumID > 0 {
+				numIDStr = fmt.Sprintf("%3d", a.NumID)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s  %s  %-50s  %s%s\n",
+				read, dim(numIDStr, tty), date, truncate(a.ID, 50), truncate(a.Title, 50), collStr)
 
 			// Line 2: variant indicators, model colored by cost tier
 			var variants []string

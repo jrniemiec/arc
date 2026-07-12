@@ -647,13 +647,27 @@ func (m Model) renderNavCollections(maxLines int) []string {
 			} else if row.item.read {
 				dot = "  "
 			}
-			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot))
+			idTag := ""
+			idTagLen := 0
+			if row.item.numID > 0 {
+				idTag = fmt.Sprintf("%d ", row.item.numID)
+				idTagLen = len(idTag)
+			}
+			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot)-idTagLen)
 			if selected {
-				line = reverse(prefix + dot + title)
+				line = reverse(prefix + idTag + dot + title)
 			} else if row.item.favorite {
-				line = fg(t.NavDimmed, prefix) + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
+				idPart := ""
+				if idTag != "" {
+					idPart = fg(t.NavDimmed, idTag)
+				}
+				line = fg(t.NavDimmed, prefix) + idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
 			} else {
-				line = fg(t.NavDimmed, prefix) + fg(t.NavMark, dot[:1]) + " " + fg(t.NavText, title)
+				idPart := ""
+				if idTag != "" {
+					idPart = fg(t.NavDimmed, idTag)
+				}
+				line = fg(t.NavDimmed, prefix) + idPart + fg(t.NavMark, dot[:1]) + " " + fg(t.NavText, title)
 			}
 		}
 		lines = append(lines, line)
@@ -754,12 +768,22 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				prefix = "    " // 4 spaces under collection
 			}
 			dot := "• "
-			title := truncate(oneLine(row.title), w-len(prefix)-len(dot))
-			label = prefix + dot + title
+			idTag := ""
+			idTagLen := 0
+			if row.numID > 0 {
+				idTag = fmt.Sprintf("%d ", row.numID)
+				idTagLen = len(idTag)
+			}
+			title := truncate(oneLine(row.title), w-len(prefix)-len(dot)-idTagLen)
+			label = prefix + idTag + dot + title
 			if selected {
 				label = reverse(label)
 			} else {
-				label = fg(t.NavDimmed, prefix) + fg(t.NavMark, "•") + " " + fg(t.NavText, title)
+				idPart := ""
+				if idTag != "" {
+					idPart = fg(t.NavDimmed, idTag)
+				}
+				label = fg(t.NavDimmed, prefix) + idPart + fg(t.NavMark, "•") + " " + fg(t.NavText, title)
 			}
 
 		case wsRowResourceGroup:
@@ -900,8 +924,27 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 	if end > len(m.navItems) {
 		end = len(m.navItems)
 	}
+	// Compute width of numeric ID column (e.g. 3 digits for IDs up to 999).
+	maxNumID := 0
+	for _, it := range m.navItems {
+		if it.numID > maxNumID {
+			maxNumID = it.numID
+		}
+	}
+	idWidth := len(fmt.Sprintf("%d", maxNumID))
+	if idWidth < 2 {
+		idWidth = 2
+	}
+
 	for i := m.navScroll; i < end; i++ {
 		item := m.navItems[i]
+
+		// Numeric ID prefix (dimmed)
+		idStr := fmt.Sprintf("%*d ", idWidth, item.numID)
+		if item.numID == 0 {
+			idStr = strings.Repeat(" ", idWidth+1)
+		}
+
 		var prefix string
 		if numbered {
 			prefix = fmt.Sprintf("%*d. ", numWidth-2, i+1) // right-align number
@@ -914,23 +957,24 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 				prefix = "• "
 			}
 		}
-		title := truncate(oneLine(item.title), m.navWidth()-len(prefix))
+		title := truncate(oneLine(item.title), m.navWidth()-len(prefix)-idWidth-1)
 		var line string
 		if i == m.navCursor {
-			line = reverse(prefix + title)
+			line = reverse(idStr + prefix + title)
 		} else {
+			idPart := fg(t.NavDimmed, idStr)
 			if numbered {
 				if item.favorite {
-					line = fg(t.Favorite, "★") + " " + fg(t.NavText, title)
+					line = idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
 				} else {
-					line = fg(t.NavDimmed, prefix) + fg(t.NavText, title)
+					line = idPart + fg(t.NavDimmed, prefix) + fg(t.NavText, title)
 				}
 			} else {
 				if item.favorite {
-					line = fg(t.Favorite, "★") + " " + fg(t.NavText, title)
+					line = idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
 				} else {
 					dotChar := prefix[:len(prefix)-1] // strip trailing space for coloring
-					line = fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
+					line = idPart + fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
 				}
 			}
 		}
@@ -1091,14 +1135,25 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	}
 
 	// ── Header ────────────────────────────────────────────────────────────────
-	// title · slug on same line
+	// #numID · title · slug on same line
 	sep := fg(t.ContentDimmed, "  ·  ")
+	idPrefix := ""
+	idPrefixLen := 0
+	if item.numID > 0 {
+		idPrefix = fmt.Sprintf("ID: %d", item.numID)
+		idPrefixLen = len(idPrefix) + 5 // "  ·  "
+	}
 	slugStr := fg(t.ContentDimmed, item.id)
-	titleMaxW := width - 1 - lipgloss.Width("  ·  "+item.id)
+	titleMaxW := width - 1 - lipgloss.Width("  ·  "+item.id) - idPrefixLen
 	if titleMaxW < 10 {
 		titleMaxW = 10
 	}
-	lines = append(lines, fgBold(titleColor, truncate(oneLine(item.title), titleMaxW))+sep+slugStr)
+	headerLine := ""
+	if idPrefix != "" {
+		headerLine = fg(t.ContentDimmed, idPrefix) + sep
+	}
+	headerLine += fgBold(titleColor, truncate(oneLine(item.title), titleMaxW)) + sep + slugStr
+	lines = append(lines, headerLine)
 
 	// meta line 1: ingest date · source type · url · read status · favorite
 	readMark := fg(t.ContentDimmed, "unread")
@@ -1257,7 +1312,12 @@ func (m Model) renderContentCollection(height, width int, col *navRow) []string 
 		titleColor = t.ContentTitle
 	}
 
-	lines = append(lines, fgBold(titleColor, truncate(col.colSlug, width-1)))
+	headerLine := ""
+	if col.colNumID > 0 {
+		headerLine = fg(t.ContentDimmed, fmt.Sprintf("ID: %d", col.colNumID)) + fg(t.ContentDimmed, "  ·  ")
+	}
+	headerLine += fgBold(titleColor, truncate(col.colSlug, width-1))
+	lines = append(lines, headerLine)
 
 	// meta line 1: article count · created at
 	meta1 := fg(t.ContentDimmed, fmt.Sprintf("%d articles", col.colCount))

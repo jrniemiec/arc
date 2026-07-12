@@ -214,6 +214,7 @@ type WorkspaceInfo struct {
 // CollectionInfo describes a collection with article count.
 type CollectionInfo struct {
 	Slug         string
+	NumID        int
 	Name         string
 	Description  string
 	CreatedAt    time.Time

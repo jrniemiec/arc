@@ -157,6 +157,7 @@ type navRow struct {
 
 	// rowCollection fields
 	colSlug       string
+	colNumID      int
 	colName       string
 	colDesc       string
 	colCount      int
@@ -223,6 +224,7 @@ type wsRow struct {
 	wsIdx  int    // index into workspaceItems
 	colSlug      string // wsRowCollection rows
 	slug         string // wsRowArticle rows
+	numID        int    // numeric ID (from navItemsAll)
 	title        string // article title (looked up from navItemsAll)
 	count        int    // article count for wsRowCollection
 	resourceName string // wsRowResource rows
@@ -232,6 +234,7 @@ type wsRow struct {
 // navItem is one entry in the left navigator.
 type navItem struct {
 	id           string
+	numID        int
 	title        string
 	date         time.Time
 	read         bool
@@ -742,6 +745,7 @@ func loadNav(svc *service.Service) tea.Cmd {
 			}
 			items[i] = navItem{
 				id:           a.ID,
+				numID:        a.NumID,
 				title:        a.Title,
 				date:         a.IngestedAt,
 				read:         a.ReadAt != nil,
@@ -1127,10 +1131,12 @@ func (m Model) Cleanup() {
 // Article titles are looked up from navItemsAll. Call after any expand/collapse
 // or after workspaceItems is set.
 func (m Model) buildWsRows() []wsRow {
-	// Build slug→title map from navItemsAll.
+	// Build slug→title and slug→numID maps from navItemsAll.
 	titleOf := make(map[string]string, len(m.navItemsAll))
+	numIDOf := make(map[string]int, len(m.navItemsAll))
 	for _, item := range m.navItemsAll {
 		titleOf[item.id] = item.title
+		numIDOf[item.id] = item.numID
 	}
 
 	var rows []wsRow
@@ -1158,7 +1164,7 @@ func (m Model) buildWsRows() []wsRow {
 					if title == "" {
 						title = item.id
 					}
-					rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, colSlug: colSlug, slug: item.id, title: title})
+					rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, colSlug: colSlug, slug: item.id, numID: item.numID, title: title})
 				}
 			}
 		}
@@ -1169,7 +1175,7 @@ func (m Model) buildWsRows() []wsRow {
 			if title == "" {
 				title = slug
 			}
-			rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, slug: slug, title: title})
+			rows = append(rows, wsRow{kind: wsRowArticle, wsIdx: i, slug: slug, numID: numIDOf[slug], title: title})
 		}
 
 		// Resources folder (always visible, like collections).
@@ -1207,7 +1213,7 @@ func (m Model) buildWsRows() []wsRow {
 					if title == "" {
 						title = slug
 					}
-					rows = append(rows, wsRow{kind: wsRowAtticArticle, wsIdx: i, slug: slug, title: title})
+					rows = append(rows, wsRow{kind: wsRowAtticArticle, wsIdx: i, slug: slug, numID: numIDOf[slug], title: title})
 				}
 			}
 		}

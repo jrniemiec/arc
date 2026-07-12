@@ -130,6 +130,16 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 		return result, fmt.Errorf("count articles: %w", err)
 	}
 
+	// Backfill numeric IDs for any articles/collections that don't have one yet
+	if _, err := fs.BackfillNumIDs(l.cfg.DataRoot, l.cfg.ArticlesRoot); err != nil {
+		return result, fmt.Errorf("backfill num_ids: %w", err)
+	}
+
+	// Validate numeric ID counter before dropping/rebuilding data
+	if err := fs.ValidateNumIDCounter(l.cfg.DataRoot, l.cfg.ArticlesRoot); err != nil {
+		return result, fmt.Errorf("reindex aborted: %w", err)
+	}
+
 	// Migrate old meta.json collections to symlinks (one-time, idempotent)
 	_ = fs.MigrateMetaCollections(l.cfg.DataRoot, l.cfg.ArticlesRoot)
 
@@ -143,6 +153,7 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 	for _, m := range colMetas {
 		if err := l.db.UpsertCollection(ctx, store.Collection{
 			ID:          m.Slug,
+			NumID:       m.NumID,
 			Name:        m.Name,
 			Description: m.Description,
 			CreatedAt:   m.CreatedAt,

@@ -718,11 +718,17 @@ func (s *Service) CreateCollection(ctx context.Context, slug, description string
 	if err := fs.CreateCollection(s.cfg.DataRoot, slug, description); err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
+	// Read back meta to get the allocated NumID
+	m, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug)
+	if err != nil {
+		return fmt.Errorf("read collection meta after create: %w", err)
+	}
 	return s.lib.UpsertCollection(ctx, store.Collection{
-		ID:          slug,
-		Name:        slug,
-		Description: description,
-		CreatedAt:   time.Now(),
+		ID:          m.Slug,
+		NumID:       m.NumID,
+		Name:        m.Name,
+		Description: m.Description,
+		CreatedAt:   m.CreatedAt,
 	})
 }
 
@@ -751,6 +757,7 @@ func (s *Service) ListCollections(ctx context.Context) ([]CollectionInfo, error)
 		_, hasSystemErr := os.Stat(filepath.Join(colDir, "system.txt"))
 		out = append(out, CollectionInfo{
 			Slug:         m.Slug,
+			NumID:        m.NumID,
 			Name:         m.Name,
 			Description:  m.Description,
 			CreatedAt:    m.CreatedAt,
@@ -930,8 +937,13 @@ func (s *Service) SearchCollections(ctx context.Context, query string) ([]Collec
 	counts, _ := s.lib.CollectionCounts(ctx)
 	out := make([]CollectionInfo, 0, len(cols))
 	for _, c := range cols {
+		numID := 0
+		if m, err := fs.ReadCollectionMeta(s.cfg.DataRoot, c.ID); err == nil {
+			numID = m.NumID
+		}
 		out = append(out, CollectionInfo{
 			Slug:         c.ID,
+			NumID:        numID,
 			Name:         c.Name,
 			Description:  c.Description,
 			CreatedAt:    c.CreatedAt,

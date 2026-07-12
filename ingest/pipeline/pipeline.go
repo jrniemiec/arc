@@ -431,9 +431,15 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 			_ = os.WriteFile(filepath.Join(dir, "source.url"), []byte(req.URL+"\n"), 0644)
 		}
 
+		numID, err := fs.AllocNumID(cfg.DataRoot)
+		if err != nil {
+			return Result{}, fmt.Errorf("alloc num_id: %w", err)
+		}
+
 		now := time.Now().UTC().Format(time.RFC3339)
 		meta := fs.Meta{
 			ID:           slug,
+			NumID:        numID,
 			Title:        title,
 			URL:          req.URL,
 			SourceType:   sourceType,
@@ -664,9 +670,15 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	}
 
 	// ── 11. meta.json ─────────────────────────────────────────────────────
+	numID, err := fs.AllocNumID(cfg.DataRoot)
+	if err != nil {
+		return Result{}, fmt.Errorf("alloc num_id: %w", err)
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	meta := fs.Meta{
 		ID:             slug,
+		NumID:          numID,
 		Title:          title,
 		URL:            req.URL,
 		SourceType:     sourceType,

@@ -106,8 +106,12 @@ var collectionsListCmd = &cobra.Command{
 			if c.Description != "" {
 				desc = "  " + dim(truncate(c.Description, 60), tty)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-20s  %s articles%s%s\n",
-				bold(c.Slug, tty), fmt.Sprintf("%3d", c.ArticleCount), ind, desc)
+			numIDStr := "   "
+			if c.NumID > 0 {
+				numIDStr = fmt.Sprintf("%3d", c.NumID)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s  %-20s  %s articles%s%s\n",
+				dim(numIDStr, tty), bold(c.Slug, tty), fmt.Sprintf("%3d", c.ArticleCount), ind, desc)
 		}
 		return nil
 	},

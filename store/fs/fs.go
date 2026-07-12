@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -173,6 +175,7 @@ func WriteMeta(dir string, m Meta) error {
 // It is intentionally separate from store.Article to allow forward compatibility.
 type Meta struct {
 	ID             string     `json:"id"`
+	NumID          int        `json:"num_id,omitempty"`
 	Title          string     `json:"title"`
 	URL            string     `json:"url"`
 	SourceType     string     `json:"source_type"`
@@ -217,6 +220,7 @@ type MetaRelation struct {
 func (m Meta) ToArticle(id string, files store.Files) store.Article {
 	a := store.Article{
 		ID:             nonEmpty(m.ID, id),
+		NumID:          m.NumID,
 		Title:          nonEmpty(m.Title, titleFromID(id)),
 		URL:            m.URL,
 		SourceType:     m.SourceType,
@@ -269,6 +273,7 @@ func (m Meta) ToArticle(id string, files store.Files) store.Article {
 // CollectionMeta is the on-disk representation of a collection's meta.json.
 type CollectionMeta struct {
 	Slug        string    `json:"slug"`
+	NumID       int       `json:"num_id,omitempty"`
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -295,7 +300,11 @@ func CreateCollection(dataRoot, slug, description string) error {
 	if pathExists(metaPath) {
 		return nil // already exists — idempotent
 	}
-	m := CollectionMeta{Slug: slug, Name: slug, Description: description, CreatedAt: time.Now().UTC()}
+	numID, err := AllocNumID(dataRoot)
+	if err != nil {
+		return fmt.Errorf("alloc num_id for collection %s: %w", slug, err)
+	}
+	m := CollectionMeta{Slug: slug, NumID: numID, Name: slug, Description: description, CreatedAt: time.Now().UTC()}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -536,6 +545,195 @@ func MigrateMetaCollections(dataRoot, articlesRoot string) error {
 		}
 	}
 	return nil
+}
+
+// ── Numeric ID counter ───────────────────────────────────────────────────────
+
+const nextIDFile = "next_id"
+
+// ReadNextID reads the next numeric ID from the counter file.
+// Returns 1 if the file doesn't exist.
+func ReadNextID(dataRoot string) (int, error) {
+	path := filepath.Join(dataRoot, nextIDFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 1, nil
+		}
+		return 0, fmt.Errorf("read next_id: %w", err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("parse next_id: %w", err)
+	}
+	return n, nil
+}
+
+// WriteNextID writes the next numeric ID to the counter file.
+func WriteNextID(dataRoot string, id int) error {
+	path := filepath.Join(dataRoot, nextIDFile)
+	return os.WriteFile(path, []byte(strconv.Itoa(id)+"\n"), 0644)
+}
+
+// AllocNumID reads the current counter, returns it, and increments the file.
+func AllocNumID(dataRoot string) (int, error) {
+	id, err := ReadNextID(dataRoot)
+	if err != nil {
+		return 0, err
+	}
+	if err := WriteNextID(dataRoot, id+1); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// MaxNumID scans all article and collection meta.json files and returns the
+// highest numeric ID found. Returns 0 if no IDs are assigned.
+func MaxNumID(dataRoot, articlesRoot string) (int, error) {
+	max := 0
+
+	// Scan articles
+	entries, err := os.ReadDir(articlesRoot)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("read articles dir: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		metaPath := filepath.Join(articlesRoot, e.Name(), "meta.json")
+		m, err := ReadMeta(metaPath)
+		if err != nil {
+			continue
+		}
+		if m.NumID > max {
+			max = m.NumID
+		}
+	}
+
+	// Scan collections
+	colMetas, _ := ListCollections(dataRoot)
+	for _, m := range colMetas {
+		if m.NumID > max {
+			max = m.NumID
+		}
+	}
+
+	return max, nil
+}
+
+// ValidateNumIDCounter checks that next_id == max(num_id) + 1 across all
+// articles and collections. Returns an error describing the mismatch if invalid.
+func ValidateNumIDCounter(dataRoot, articlesRoot string) error {
+	nextID, err := ReadNextID(dataRoot)
+	if err != nil {
+		return fmt.Errorf("read counter: %w", err)
+	}
+	maxID, err := MaxNumID(dataRoot, articlesRoot)
+	if err != nil {
+		return fmt.Errorf("scan max ID: %w", err)
+	}
+
+	// No IDs assigned yet — counter should be 1 (or hasn't been created)
+	if maxID == 0 {
+		return nil
+	}
+
+	if nextID != maxID+1 {
+		return fmt.Errorf("numeric ID counter mismatch: next_id file says %d, but max ID on disk is %d (expected next_id = %d)", nextID, maxID, maxID+1)
+	}
+	return nil
+}
+
+// backfillItem is used to sort unassigned articles/collections by date for ID assignment.
+type backfillItem struct {
+	kind string // "article" or "collection"
+	date time.Time
+	// article fields
+	articleDir string
+	meta       *Meta
+	// collection fields
+	colMeta *CollectionMeta
+	dataRoot string
+}
+
+// BackfillNumIDs assigns numeric IDs to all articles and collections that don't
+// have one yet. Items are sorted by date (ingested_at for articles, created_at
+// for collections) and assigned IDs in chronological order. Returns the number
+// of IDs assigned.
+func BackfillNumIDs(dataRoot, articlesRoot string) (int, error) {
+	var items []backfillItem
+
+	// Collect articles without num_id
+	entries, err := os.ReadDir(articlesRoot)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("read articles dir: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		metaPath := filepath.Join(articlesRoot, e.Name(), "meta.json")
+		m, err := ReadMeta(metaPath)
+		if err != nil || m.NumID > 0 {
+			continue
+		}
+		t, _ := time.Parse(time.RFC3339, m.IngestedAt)
+		mCopy := m
+		items = append(items, backfillItem{
+			kind:       "article",
+			date:       t,
+			articleDir: filepath.Join(articlesRoot, e.Name()),
+			meta:       &mCopy,
+		})
+	}
+
+	// Collect collections without num_id
+	colMetas, _ := ListCollections(dataRoot)
+	for i := range colMetas {
+		if colMetas[i].NumID > 0 {
+			continue
+		}
+		items = append(items, backfillItem{
+			kind:     "collection",
+			date:     colMetas[i].CreatedAt,
+			colMeta:  &colMetas[i],
+			dataRoot: dataRoot,
+		})
+	}
+
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	// Sort by date ascending
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].date.Before(items[j].date)
+	})
+
+	// Assign IDs
+	assigned := 0
+	for _, item := range items {
+		id, err := AllocNumID(dataRoot)
+		if err != nil {
+			return assigned, fmt.Errorf("alloc num_id during backfill: %w", err)
+		}
+		switch item.kind {
+		case "article":
+			item.meta.NumID = id
+			if err := WriteMeta(item.articleDir, *item.meta); err != nil {
+				return assigned, fmt.Errorf("write meta %s: %w", item.articleDir, err)
+			}
+		case "collection":
+			item.colMeta.NumID = id
+			if err := WriteCollectionMeta(item.dataRoot, *item.colMeta); err != nil {
+				return assigned, fmt.Errorf("write collection meta %s: %w", item.colMeta.Slug, err)
+			}
+		}
+		assigned++
+	}
+
+	return assigned, nil
 }
 
 func pathExists(path string) bool {
