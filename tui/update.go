@@ -2072,6 +2072,15 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					m.statusMsg = "waiting for response…"
 					return nil
 				}
+				// Resolve @<numID> references before sending to LLM.
+				if atRefPattern.MatchString(val) {
+					resolved, err := m.resolveAtRefs(val)
+					if err != nil {
+						m.setStatusError(err.Error())
+						return nil
+					}
+					val = resolved
+				}
 				if m.chatEngine == nil {
 					// Lazy init: queue prompt, start engine.
 					m.chatPendingPrompt = val
@@ -2079,6 +2088,15 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					return m.startChatCmd(m.chatWorkspace)
 				}
 				return m.sendChatMsg(val)
+			}
+			// Resolve @<numID> references for non-slash commands.
+			if !strings.HasPrefix(val, "/") && atRefPattern.MatchString(val) {
+				resolved, err := m.resolveAtRefs(val)
+				if err != nil {
+					m.setStatusError(err.Error())
+					return nil
+				}
+				val = resolved
 			}
 			return m.dispatchCommand(val)
 		}

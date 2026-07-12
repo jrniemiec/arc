@@ -61,6 +61,21 @@ func (l *Library) Get(ctx context.Context, id string) (store.Article, error) {
 	return a, nil
 }
 
+// GetByNumID returns the article with the given numeric ID, with files resolved.
+func (l *Library) GetByNumID(ctx context.Context, numID int) (store.Article, error) {
+	a, err := l.db.GetByNumID(ctx, numID)
+	if err != nil {
+		return store.Article{}, err
+	}
+	l.resolveFiles(&a)
+	return a, nil
+}
+
+// IsCollectionNumID checks if a numeric ID belongs to a collection.
+func (l *Library) IsCollectionNumID(ctx context.Context, numID int) (bool, error) {
+	return l.db.IsCollectionNumID(ctx, numID)
+}
+
 // List returns articles matching the filter with file paths resolved.
 func (l *Library) List(ctx context.Context, f store.Filter) ([]store.Article, error) {
 	articles, err := l.db.List(ctx, f)

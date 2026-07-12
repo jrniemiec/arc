@@ -221,6 +221,61 @@ func (s *Store) Get(ctx context.Context, id string) (store.Article, error) {
 	return a, nil
 }
 
+// GetByNumID returns the article with the given numeric ID.
+func (s *Store) GetByNumID(ctx context.Context, numID int) (store.Article, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return store.Article{}, err
+	}
+	defer s.pool.Put(conn)
+
+	var a store.Article
+	found := false
+	err = sqlitex.Execute(conn, `SELECT `+articleColumns+` FROM articles WHERE num_id = ?`,
+		&sqlitex.ExecOptions{
+			Args: []any{numID},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				a = scanArticle(stmt)
+				found = true
+				return nil
+			},
+		})
+	if err != nil {
+		return store.Article{}, fmt.Errorf("get article by num_id %d: %w", numID, err)
+	}
+	if !found {
+		return store.Article{}, fmt.Errorf("article not found: num_id %d", numID)
+	}
+
+	if err := s.loadTags(conn, &a); err != nil {
+		return store.Article{}, err
+	}
+	if err := s.loadCollections(conn, &a); err != nil {
+		return store.Article{}, err
+	}
+	return a, nil
+}
+
+// IsCollectionNumID checks if a numeric ID belongs to a collection.
+func (s *Store) IsCollectionNumID(ctx context.Context, numID int) (bool, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer s.pool.Put(conn)
+
+	found := false
+	err = sqlitex.Execute(conn, `SELECT 1 FROM collections WHERE num_id = ? LIMIT 1`,
+		&sqlitex.ExecOptions{
+			Args: []any{numID},
+			ResultFunc: func(_ *sqlite.Stmt) error {
+				found = true
+				return nil
+			},
+		})
+	return found, err
+}
+
 // List returns articles matching the filter.
 func (s *Store) List(ctx context.Context, f store.Filter) ([]store.Article, error) {
 	conn, err := s.pool.Take(ctx)

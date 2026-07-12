@@ -679,6 +679,31 @@ func (s *Service) GetArticle(ctx context.Context, id string) (store.Article, err
 	return a, nil
 }
 
+// GetArticleByNumID returns an article by its numeric ID with files resolved.
+func (s *Service) GetArticleByNumID(ctx context.Context, numID int) (store.Article, error) {
+	return s.lib.GetByNumID(ctx, numID)
+}
+
+// IsCollectionNumID checks if a numeric ID belongs to a collection.
+func (s *Service) IsCollectionNumID(ctx context.Context, numID int) (bool, error) {
+	return s.lib.IsCollectionNumID(ctx, numID)
+}
+
+// ReadFlash reads the preferred flash summary for an article.
+func (s *Service) ReadFlash(a store.Article) (string, error) {
+	return s.lib.ReadFlash(a)
+}
+
+// ReadSummary reads the preferred summary for an article.
+func (s *Service) ReadSummary(a store.Article) (string, error) {
+	return s.lib.ReadSummary(a)
+}
+
+// ReadBody reads the body text for an article.
+func (s *Service) ReadBody(a store.Article) (string, error) {
+	return s.lib.ReadBody(a)
+}
+
 // DeleteArticle removes an article from the filesystem, SQLite, and collection symlinks.
 func (s *Service) DeleteArticle(ctx context.Context, id string) error {
 	a, err := s.lib.Get(ctx, id)

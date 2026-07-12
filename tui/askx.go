@@ -292,6 +292,16 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 		m.askxGlobal = global
 	}
 
+	// Resolve @<numID> article references before parsing other @tokens.
+	if atRefPattern.MatchString(prompt) {
+		resolved, err := m.resolveAtRefs(prompt)
+		if err != nil {
+			m.setStatusError("askX: " + err.Error())
+			return nil
+		}
+		prompt = resolved
+	}
+
 	// Parse @tokens (profile override, file inclusions).
 	parsed, err := parseAskXTokens(prompt, m.cfg.Profiles)
 	if err != nil {
