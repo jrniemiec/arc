@@ -1417,16 +1417,16 @@ func (m Model) renderContentWorkspace(height, width int) []string {
 	lines = append(lines, fgBold(titleColor, truncate(titleStr, titleMaxW))+sep+slugStr)
 
 	// meta line 1: status · created · articles · collections
-	meta1 := fg(t.ContentDimmed, ws.status)
+	meta1Raw := ws.status
 	if !ws.createdAt.IsZero() {
-		meta1 += fg(t.ContentDimmed, "  ·  created "+ws.createdAt.Format("2006-01-02"))
+		meta1Raw += "  ·  created " + ws.createdAt.Format("2006-01-02")
 	}
-	meta1 += fg(t.ContentDimmed, fmt.Sprintf("  ·  %d articles  ·  %d collections", ws.articleCount, ws.collectionCount))
-	lines = append(lines, meta1)
+	meta1Raw += fmt.Sprintf("  ·  %d articles  ·  %d collections", ws.articleCount, ws.collectionCount)
+	lines = append(lines, fg(t.ContentDimmed, truncate(meta1Raw, width-1)))
 
 	// meta line 2: resources · outcomes
-	meta2 := fg(t.ContentDimmed, fmt.Sprintf("%d resources  ·  %d outcomes", ws.resourceCount, ws.outcomeCount))
-	lines = append(lines, meta2)
+	meta2Raw := fmt.Sprintf("%d resources  ·  %d outcomes", ws.resourceCount, ws.outcomeCount)
+	lines = append(lines, fg(t.ContentDimmed, truncate(meta2Raw, width-1)))
 
 	// meta line 3: chat config
 	chatParts := []string{}
@@ -1510,11 +1510,14 @@ func formatUSD(v float64) string {
 	return fmt.Sprintf("$%.2f", v)
 }
 
-// wordWrap splits text into lines of at most maxWidth runes.
+// wordWrap splits text into lines of at most maxWidth visible characters.
 func wordWrap(text string, maxWidth int) []string {
 	if maxWidth < 10 {
 		maxWidth = 10
 	}
+	// Normalize embedded newlines so they don't bypass width measurement.
+	text = strings.ReplaceAll(text, "\r\n", " ")
+	text = strings.ReplaceAll(text, "\n", " ")
 	if lipgloss.Width(text) <= maxWidth {
 		return []string{text}
 	}
