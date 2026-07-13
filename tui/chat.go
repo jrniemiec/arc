@@ -1447,18 +1447,27 @@ func (m *Model) cmdResourceList() {
 // Supports --into <dir> to place the resource inside a subdirectory.
 func (m *Model) cmdResourceAdd(rawArgs string) tea.Cmd {
 	if rawArgs == "" {
-		m.setStatusError("usage: /resource-add <file-or-dir> [--into <dir>]")
+		m.setStatusError("usage: /resource-add <file-or-dir|url> [--into <dir>] [--as <name>] [--comment \"...\"]")
 		return nil
 	}
-	// Parse --into flag from args.
-	path, into := parseIntoFlag(rawArgs)
+	// Parse --into, --as, and --comment flags from args.
+	path, into, asName, comment := parseResourceAddFlags(rawArgs)
 	if path == "" {
-		m.setStatusError("usage: /resource-add <file-or-dir> [--into <dir>]")
+		m.setStatusError("usage: /resource-add <file-or-dir|url> [--into <dir>] [--as <name>] [--comment \"...\"]")
 		return nil
 	}
 	ws := m.chatWorkspace
 	cfg := m.cfg
 	return func() tea.Msg {
+		// URL resource — no file stat needed.
+		if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+			name, err := storefs.AddURLResource(cfg.DataRoot, ws, path, asName, comment)
+			if err != nil {
+				return cmdDoneMsg{err: "resource-add: " + err.Error()}
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q added to workspace %q", name, ws), reloadWorkspaces: true}
+		}
+
 		// Expand ~ before stat.
 		expanded := path
 		if strings.HasPrefix(expanded, "~/") {
@@ -1513,20 +1522,58 @@ func (m *Model) cmdResourceAdd(rawArgs string) tea.Cmd {
 	}
 }
 
-// parseIntoFlag extracts --into <dir> from a raw argument string.
-// Returns the remaining path and the into value (empty if not specified).
-func parseIntoFlag(raw string) (path, into string) {
-	parts := strings.Fields(raw)
+// parseResourceAddFlags extracts --into, --as, and --comment flags from a raw argument string.
+// --comment consumes all remaining text (quoted or unquoted) after the flag.
+func parseResourceAddFlags(raw string) (path, into, as, comment string) {
+	// Extract --comment first: it consumes everything after the flag.
+	if idx := strings.Index(raw, "--comment "); idx >= 0 {
+		comment = strings.TrimSpace(raw[idx+len("--comment "):])
+		raw = raw[:idx]
+	}
+	parts := shellSplit(raw)
 	var pathParts []string
 	for i := 0; i < len(parts); i++ {
 		if parts[i] == "--into" && i+1 < len(parts) {
 			into = parts[i+1]
-			i++ // skip value
+			i++
+		} else if parts[i] == "--as" && i+1 < len(parts) {
+			as = parts[i+1]
+			i++
 		} else {
 			pathParts = append(pathParts, parts[i])
 		}
 	}
-	return strings.Join(pathParts, " "), into
+	return strings.Join(pathParts, " "), into, as, comment
+}
+
+// shellSplit splits a string into tokens, respecting single and double quotes.
+func shellSplit(s string) []string {
+	var tokens []string
+	var cur strings.Builder
+	var quote rune
+	for _, r := range s {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		case r == ' ' || r == '\t':
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
 }
 
 // cmdResourceMkdir creates a directory inside workspace/resources/.

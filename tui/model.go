@@ -534,7 +534,7 @@ var chatCommands = []cmdCompletion{
 	{"/rename", "<new-name>", "rename current workspace"},
 	{"/describe", "<text>", "set workspace description"},
 	{"/resource-list", "", "list files in workspace/resources/"},
-	{"/resource-add", "<file-or-dir> [--into <dir>]", "copy file or directory into workspace/resources/"},
+	{"/resource-add", "<path|url> [--into <dir>] [--as <name>] [--comment \"...\"]", "copy file/dir or add URL into workspace/resources/"},
 	{"/resource-mkdir", "<name>", "create a directory in workspace/resources/"},
 	{"/resource-remove", "<name>", "delete a resource file or directory (with confirmation)"},
 	{"/resource-view", "<name>", "open resource file in viewer overlay"},

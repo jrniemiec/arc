@@ -776,15 +776,25 @@ func AddDirResource(dataRoot, workspaceName, srcPath, into string) (string, erro
 
 // AddURLResource writes a .url stub file containing the URL into workspace/resources/.
 // Returns the basename of the stored stub file.
-func AddURLResource(dataRoot, workspaceName, rawURL string) (string, error) {
+func AddURLResource(dataRoot, workspaceName, rawURL, customName, comment string) (string, error) {
 	basename := urlToBasename(rawURL)
+	if customName != "" {
+		basename = customName
+		if !strings.HasSuffix(basename, ".url") {
+			basename += ".url"
+		}
+	}
 	destPath := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", basename)
 
 	if _, err := os.Stat(destPath); err == nil {
 		return "", fmt.Errorf("resource %q already exists in workspace", basename)
 	}
 
-	if err := os.WriteFile(destPath, []byte(rawURL+"\n"), 0644); err != nil {
+	content := rawURL + "\n"
+	if comment != "" {
+		content += comment + "\n"
+	}
+	if err := os.WriteFile(destPath, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write url stub: %w", err)
 	}
 	return basename, nil
@@ -832,7 +842,8 @@ func ListWorkspaceResources(dataRoot, name string) ([]ResourceEntry, error) {
 			re.IsURL = true
 			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 			if err == nil {
-				re.SrcURL = strings.TrimSpace(string(data))
+				line, _, _ := strings.Cut(string(data), "\n")
+				re.SrcURL = strings.TrimSpace(line)
 			}
 		}
 		resources = append(resources, re)
@@ -867,7 +878,8 @@ func ListWorkspaceDirResources(dataRoot, name, relDir string) ([]ResourceEntry, 
 			re.IsURL = true
 			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 			if err == nil {
-				re.SrcURL = strings.TrimSpace(string(data))
+				line, _, _ := strings.Cut(string(data), "\n")
+				re.SrcURL = strings.TrimSpace(line)
 			}
 		}
 		resources = append(resources, re)

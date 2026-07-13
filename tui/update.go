@@ -1189,6 +1189,12 @@ func (m *Model) navSelect() tea.Cmd {
 		case wsRowResourceGroup, wsRowOutcomeGroup, wsRowResourceDir, wsRowAtticGroup:
 			m.wsToggleExpand()
 		case wsRowResource:
+			if strings.HasSuffix(row.resourceName, ".url") {
+				path := m.wsFilePathForRow(&row)
+				if rawURL := readURLStub(path); rawURL != "" {
+					return openInChrome(rawURL)
+				}
+			}
 			return m.openWorkspaceFile(row.wsIdx, "resources", row.resourceName)
 		case wsRowOutcome:
 			return m.openWorkspaceFile(row.wsIdx, "outcomes", row.outcomeName)
@@ -1510,6 +1516,7 @@ func (m *Model) wsFilePathForRow(row *wsRow) string {
 }
 
 // openWsFileExternal opens the selected resource/outcome with the system default app.
+// For .url stub files, opens the contained URL in Chrome instead.
 func (m *Model) openWsFileExternal() tea.Cmd {
 	row := m.selectedWsRow()
 	if row == nil {
@@ -1519,9 +1526,24 @@ func (m *Model) openWsFileExternal() tea.Cmd {
 	if path == "" {
 		return nil
 	}
+	if row.kind == wsRowResource && strings.HasSuffix(row.resourceName, ".url") {
+		if rawURL := readURLStub(path); rawURL != "" {
+			return openInChrome(rawURL)
+		}
+	}
 	cmd := exec.Command("open", path)
 	cmd.Start()
 	return nil
+}
+
+// readURLStub reads the first line of a .url stub file (the URL), or "" on error.
+func readURLStub(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
+	return strings.TrimSpace(line)
 }
 
 // viewWsFileInTerminal opens the selected resource/outcome in an external terminal window.
@@ -2675,6 +2697,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		switch sub {
 		case navSubTabWorkspaces:
 			m.workspaceItems = m.workspaceItemsAll
+			m.wsFocusName = ""
 			m.wsRows = m.buildWsRows()
 			m.wsCursor = 0
 			m.wsScroll = 0

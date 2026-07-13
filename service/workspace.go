@@ -318,7 +318,7 @@ func (s *Service) RemoveCollectionsFromWorkspace(ctx context.Context, workspaceN
 // URLs (http:// or https://) are stored as .url stubs; directories are recursively copied;
 // everything else is hard-copied as a file. If into is non-empty, resources are placed
 // inside that subdirectory of resources/.
-func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName string, paths []string, into string) error {
+func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName string, paths []string, into, comment string) error {
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -326,7 +326,7 @@ func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName str
 	for _, p := range paths {
 		var err error
 		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-			_, err = fs.AddURLResource(s.cfg.DataRoot, workspaceName, p)
+			_, err = fs.AddURLResource(s.cfg.DataRoot, workspaceName, p, "", comment)
 		} else {
 			// Expand ~ before stat.
 			expanded := p

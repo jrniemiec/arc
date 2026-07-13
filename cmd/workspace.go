@@ -46,6 +46,7 @@ func init() {
 	workspaceAddCmd.Flags().StringSlice("collection", nil, "collection slug(s) to add")
 	workspaceAddCmd.Flags().StringSlice("resource", nil, "file path(s) or URL(s) to add as resources")
 	workspaceAddCmd.Flags().String("into", "", "target subdirectory within resources/ for --resource")
+	workspaceAddCmd.Flags().String("comment", "", "comment to include in .url resource file")
 
 	workspaceRemoveCmd.Flags().StringSlice("article", nil, "article slug(s) to remove")
 	workspaceRemoveCmd.Flags().StringSlice("collection", nil, "collection slug(s) to remove")
@@ -487,7 +488,8 @@ Examples:
 
 		if len(resources) > 0 {
 			into, _ := cmd.Flags().GetString("into")
-			if err := svc.AddResourcesToWorkspace(cmd.Context(), name, resources, into); err != nil {
+			comment, _ := cmd.Flags().GetString("comment")
+			if err := svc.AddResourcesToWorkspace(cmd.Context(), name, resources, into, comment); err != nil {
 				errs = append(errs, err.Error())
 			} else {
 				for _, r := range resources {
