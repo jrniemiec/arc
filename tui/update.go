@@ -1547,6 +1547,9 @@ func (m *Model) openArticleOverlay(item *navItem) tea.Cmd {
 	if title == "" {
 		title = item.id
 	}
+	if item.numID > 0 {
+		title = fmt.Sprintf("ID: %d · %s", item.numID, title)
+	}
 	m.openResourceOverlay(title, sb.String())
 	return nil
 }

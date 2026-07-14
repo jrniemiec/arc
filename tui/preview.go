@@ -118,7 +118,11 @@ func (m *Model) loadPreviewArticle(row *wsRow) {
 	}
 	if len(parts) == 0 {
 		m.previewLines = []string{"(no content files available)"}
-		m.previewTitle = row.title
+		noContentTitle := row.title
+		if row.numID > 0 {
+			noContentTitle = fmt.Sprintf("ID: %d · %s", row.numID, noContentTitle)
+		}
+		m.previewTitle = noContentTitle
 		m.previewLastSlug = row.slug
 		m.previewLastResource = ""
 		m.previewScroll = 0
@@ -146,6 +150,9 @@ func (m *Model) loadPreviewArticle(row *wsRow) {
 	title := row.title
 	if title == "" {
 		title = row.slug
+	}
+	if row.numID > 0 {
+		title = fmt.Sprintf("ID: %d · %s", row.numID, title)
 	}
 	m.previewTitle = title
 	m.previewLines = splitLines(sb.String())
