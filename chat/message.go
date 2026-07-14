@@ -64,17 +64,6 @@ func (h *History) AppendAssistant(content, profile string, ts time.Time) {
 	})
 }
 
-// NonNoteMsgs returns all messages except notes, for LLM context building.
-func (h *History) NonNoteMsgs() []Message {
-	out := make([]Message, 0, len(h.Msgs))
-	for _, m := range h.Msgs {
-		if m.Role != RoleNote {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
 // CollapseForContext reduces history to user + final-assistant pairs,
 // stripping tool-result messages and intermediate assistant messages
 // (those with ToolCalls). Notes are also stripped.
@@ -106,29 +95,3 @@ func (h *History) CollapseForContext() []Message {
 	return out
 }
 
-// ToMessages returns messages covering the last maxUserMessages user turns,
-// excluding note messages which are never sent to the LLM.
-func (h *History) ToMessages(maxUserMessages int) []Message {
-	if h == nil || len(h.Msgs) == 0 {
-		return nil
-	}
-	userCount := 0
-	start := 0
-	for i := len(h.Msgs) - 1; i >= 0; i-- {
-		if h.Msgs[i].Role == RoleUser && !h.Msgs[i].Commented {
-			userCount++
-			if userCount >= maxUserMessages {
-				start = i
-				break
-			}
-		}
-	}
-	msgs := h.Msgs[start:]
-	out := make([]Message, 0, len(msgs))
-	for _, m := range msgs {
-		if m.Role != RoleNote && !m.Commented {
-			out = append(out, m)
-		}
-	}
-	return out
-}

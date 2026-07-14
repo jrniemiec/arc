@@ -20,15 +20,16 @@ func (s *TokenBudgetStrategy) Apply(h *chat.History, prompt string) []chat.Messa
 		return nil
 	}
 
+	msgs := h.CollapseForContext()
 	var selected []chat.Message
 	used := 0
-	for i := len(h.Msgs) - 1; i >= 0; i-- {
-		cost := chat.ApproxTokens(h.Msgs[i].Content)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		cost := chat.ApproxTokens(msgs[i].Content)
 		if used+cost > budget {
 			break
 		}
 		used += cost
-		selected = append(selected, h.Msgs[i])
+		selected = append(selected, msgs[i])
 	}
 
 	// Reverse to chronological order.

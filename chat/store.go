@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"time"
 )
 
 // ChatStore persists chat state for a single workspace.
@@ -83,24 +83,24 @@ func (s *ChatStore) ClearHistory() error {
 }
 
 // LoadSummary loads the cached summary from chat/summary.txt.
-// Returns ("", -1, nil) if no summary exists.
-func (s *ChatStore) LoadSummary() (text string, coversThrough int, err error) {
+// Returns ("", time.Time{}, nil) if no summary exists.
+func (s *ChatStore) LoadSummary() (text string, coversThrough time.Time, err error) {
 	b, err := os.ReadFile(s.summaryPath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", -1, nil
+			return "", time.Time{}, nil
 		}
-		return "", -1, err
+		return "", time.Time{}, err
 	}
 	return parseSummaryFile(string(b))
 }
 
 // SaveSummary persists the summary atomically to chat/summary.txt.
-func (s *ChatStore) SaveSummary(text string, coversThrough int) error {
+func (s *ChatStore) SaveSummary(text string, coversThrough time.Time) error {
 	if err := os.MkdirAll(s.chatDir(), 0755); err != nil {
 		return err
 	}
-	content := fmt.Sprintf("covers_through: %d\n---\n%s", coversThrough, text)
+	content := fmt.Sprintf("covers_through_ts: %s\n---\n%s", coversThrough.UTC().Format(time.RFC3339Nano), text)
 	tmp := s.summaryPath() + ".tmp"
 	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
 		return err
@@ -110,24 +110,31 @@ func (s *ChatStore) SaveSummary(text string, coversThrough int) error {
 
 // --- helpers -----------------------------------------------------------------
 
-func parseSummaryFile(data string) (text string, coversThrough int, err error) {
+func parseSummaryFile(data string) (text string, coversThrough time.Time, err error) {
 	const sep = "\n---\n"
 	idx := strings.Index(data, sep)
 	if idx < 0 {
-		return "", 0, fmt.Errorf("summary file: missing '---' separator")
+		return "", time.Time{}, fmt.Errorf("summary file: missing '---' separator")
 	}
 	header := strings.TrimSpace(data[:idx])
 	body := data[idx+len(sep):]
 
-	const prefix = "covers_through: "
-	if !strings.HasPrefix(header, prefix) {
-		return "", 0, fmt.Errorf("summary file: missing 'covers_through:' header")
+	// New format: covers_through_ts: <RFC3339Nano>
+	const tsPrefix = "covers_through_ts: "
+	if strings.HasPrefix(header, tsPrefix) {
+		ts, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(header[len(tsPrefix):]))
+		if err != nil {
+			return "", time.Time{}, fmt.Errorf("summary file: bad covers_through_ts value: %w", err)
+		}
+		return body, ts, nil
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(header[len(prefix):]))
-	if err != nil {
-		return "", 0, fmt.Errorf("summary file: bad covers_through value: %w", err)
+
+	// Old format: covers_through: <int> — treat as no summary (reset gracefully).
+	if strings.HasPrefix(header, "covers_through: ") {
+		return "", time.Time{}, nil
 	}
-	return body, n, nil
+
+	return "", time.Time{}, fmt.Errorf("summary file: missing covers_through_ts header")
 }
 
 func loadHistoryFile(path string) (*History, error) {

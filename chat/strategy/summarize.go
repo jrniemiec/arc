@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/jrniemiec/arc/chat"
 )
 
 // SummaryStore is the minimal interface the summarize strategy needs.
+// coversThrough is the timestamp of the last message covered by the summary —
+// stored as time.Time so it remains stable as tool messages accumulate in raw history.
 type SummaryStore interface {
-	LoadSummary() (text string, coversThrough int, err error)
-	SaveSummary(text string, coversThrough int) error
+	LoadSummary() (text string, coversThrough time.Time, err error)
+	SaveSummary(text string, coversThrough time.Time) error
 }
 
 // SummarizeStrategy keeps recent messages verbatim and compresses older history
@@ -38,13 +41,26 @@ func (s *SummarizeStrategy) Apply(h *chat.History, prompt string) []chat.Message
 		return nil
 	}
 
-	msgs := h.NonNoteMsgs()
+	msgs := h.CollapseForContext()
 	verbatimBudget := int(float64(s.Budget) * s.verbatimRatio())
 
-	summaryText, coversThrough, err := s.Store.LoadSummary()
+	summaryText, coversThroughTS, err := s.Store.LoadSummary()
 	if err != nil {
 		s.warnf("failed to load summary: %v — falling back to token-budget", err)
 		return s.tokenBudgetFallback(h, prompt)
+	}
+
+	// Resolve coversThrough index by matching the stored timestamp against the
+	// collapsed slice. This is stable across sessions regardless of how many
+	// tool messages accumulate in raw history.
+	coversThrough := -1
+	if !coversThroughTS.IsZero() {
+		for i, m := range msgs {
+			if m.Time.Equal(coversThroughTS) {
+				coversThrough = i
+				break
+			}
+		}
 	}
 
 	verbatimStart := 0
@@ -72,10 +88,18 @@ func (s *SummarizeStrategy) Apply(h *chat.History, prompt string) []chat.Message
 	}
 
 	if needsCompaction {
-		newSummary, newCoversThrough, ok := s.compact(msgs, summaryText, coversThrough, verbatimStart, verbatimBudget)
+		newSummary, newCoversThroughTS, ok := s.compact(msgs, summaryText, coversThroughTS, verbatimStart, verbatimBudget)
 		if ok {
 			summaryText = newSummary
-			coversThrough = newCoversThrough
+			coversThroughTS = newCoversThroughTS
+			// Re-resolve verbatimStart from the new timestamp.
+			coversThrough = -1
+			for i, m := range msgs {
+				if m.Time.Equal(coversThroughTS) {
+					coversThrough = i
+					break
+				}
+			}
 			verbatimStart = coversThrough + 1
 			if verbatimStart > len(msgs) {
 				verbatimStart = len(msgs)
@@ -97,14 +121,14 @@ func (s *SummarizeStrategy) verbatimRatio() float64 {
 func (s *SummarizeStrategy) compact(
 	msgs []chat.Message,
 	existingSummary string,
-	oldCoversThrough int,
+	oldCoversThroughTS time.Time,
 	verbatimStart int,
 	verbatimBudget int,
-) (string, int, bool) {
+) (string, time.Time, bool) {
 	verbatimMsgs := msgs[verbatimStart:]
 	overflowMsgs := identifyOverflow(verbatimMsgs, verbatimBudget)
 	if len(overflowMsgs) == 0 && existingSummary == "" {
-		return existingSummary, oldCoversThrough, false
+		return existingSummary, oldCoversThroughTS, false
 	}
 
 	if s.SummarizerBudget > 0 {
@@ -122,7 +146,7 @@ func (s *SummarizeStrategy) compact(
 		fmt.Fprintf(s.Out, "Compacting history for workspace '%s'\n", s.WorkspaceName)
 		fmt.Fprintf(s.Out, "  history:         %d messages (~%s tokens)\n", len(msgs), chat.FormatTokens(allTokens))
 		if existingSummary != "" {
-			fmt.Fprintf(s.Out, "  summary covers:  messages 1-%d (~%s tokens)\n", oldCoversThrough+1, chat.FormatTokens(summaryTokens))
+			fmt.Fprintf(s.Out, "  summary covers:  through %s (~%s tokens)\n", oldCoversThroughTS.Format(time.RFC3339), chat.FormatTokens(summaryTokens))
 		}
 		fmt.Fprintf(s.Out, "  verbatim window: %d messages (~%s tokens)\n", len(verbatimMsgs), chat.FormatTokens(verbatimTokens))
 		fmt.Fprintf(s.Out, "  compacting:      %d overflow messages\n", len(overflowMsgs))
@@ -163,26 +187,30 @@ Conversation to summarize:
 	)
 	if err != nil {
 		s.warnf("history compaction failed: %v — sending partial context", err)
-		return existingSummary, oldCoversThrough, false
+		return existingSummary, oldCoversThroughTS, false
 	}
 
 	newCoversThrough := verbatimStart + len(overflowMsgs) - 1
+	var newCoversThroughTS time.Time
+	if newCoversThrough >= 0 && newCoversThrough < len(msgs) {
+		newCoversThroughTS = msgs[newCoversThrough].Time
+	}
 
 	if s.Out != nil {
 		remainingVerbatim := msgs[newCoversThrough+1:]
 		remainingTokens := totalTokens(remainingVerbatim)
 		totalCtx := chat.ApproxTokens(newSummaryText) + remainingTokens
-		fmt.Fprintf(s.Out, "  summary updated: covers messages 1-%d\n", newCoversThrough+1)
+		fmt.Fprintf(s.Out, "  summary updated: covers through %s\n", newCoversThroughTS.Format(time.RFC3339))
 		fmt.Fprintf(s.Out, "  context window:  ~%s summary + ~%s verbatim = ~%s total\n",
 			chat.FormatTokens(chat.ApproxTokens(newSummaryText)),
 			chat.FormatTokens(remainingTokens),
 			chat.FormatTokens(totalCtx))
 	}
 
-	if err := s.Store.SaveSummary(newSummaryText, newCoversThrough); err != nil {
+	if err := s.Store.SaveSummary(newSummaryText, newCoversThroughTS); err != nil {
 		s.warnf("failed to save summary: %v", err)
 	}
-	return newSummaryText, newCoversThrough, true
+	return newSummaryText, newCoversThroughTS, true
 }
 
 func (s *SummarizeStrategy) buildContext(summaryText string, verbatimMsgs []chat.Message, verbatimBudget int, prompt string) []chat.Message {
