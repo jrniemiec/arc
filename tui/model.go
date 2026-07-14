@@ -511,7 +511,7 @@ var collectionCommands = []cmdCompletion{
 
 // workspaceCommands are available when the Workspaces sub-tab is active.
 var workspaceCommands = []cmdCompletion{
-	{"/search", "<query>", "filter workspaces by name/description"},
+	{"/search", "<query>", "search workspaces (or articles within focused workspace)"},
 	{"/clear", "", "clear active filter"},
 	{"/new", "<name> [description]", "create a new workspace"},
 	{"/delete", "[name]", "delete workspace (selected or by name)"},

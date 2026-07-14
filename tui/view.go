@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -688,6 +689,12 @@ func (m Model) renderNavCollections(maxLines int) []string {
 func (m Model) renderNavWorkspaces(maxLines int) []string {
 	t := ActiveTheme
 
+	// When a workspace-scoped article search is active, show navItems (search
+	// results) using the standard article list renderer instead of the workspace tree.
+	if m.navFilter != "" && len(m.navItems) > 0 {
+		return m.renderNavLibrary(maxLines)
+	}
+
 	if !m.workspacesLoaded {
 		return []string{fg(t.NavDimmed, "  loading…")}
 	}
@@ -1075,6 +1082,12 @@ func (m Model) selectedCollection() *navRow {
 }
 
 // selectedNavItem returns the navItem currently under the cursor, or nil.
+// wsSearchActive reports whether a workspace-scoped article search is currently
+// showing results in the nav pane (instead of the workspace tree).
+func (m Model) wsSearchActive() bool {
+	return m.navSubTab == navSubTabWorkspaces && m.navFilter != "" && len(m.navItems) > 0
+}
+
 func (m Model) selectedNavItem() *navItem {
 	switch m.navSubTab {
 	case navSubTabArticles:
@@ -1089,6 +1102,14 @@ func (m Model) selectedNavItem() *navItem {
 			}
 		}
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			// Search results mode: use navCursor over navItems directly.
+			if m.navCursor >= 0 && m.navCursor < len(m.navItems) {
+				slog.Debug("selectedNavItem: ws search mode", "navCursor", m.navCursor, "id", m.navItems[m.navCursor].id)
+				return &m.navItems[m.navCursor]
+			}
+			return nil
+		}
 		if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
 			row := m.wsRows[m.wsCursor]
 			if row.kind == wsRowArticle && row.slug != "" {
@@ -1107,7 +1128,7 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	t := ActiveTheme
 	var lines []string
 
-	if m.navSubTab == navSubTabWorkspaces {
+	if m.navSubTab == navSubTabWorkspaces && !m.wsSearchActive() {
 		return m.renderContentWorkspace(height, width)
 	}
 

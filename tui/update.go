@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sort"
@@ -977,6 +978,15 @@ func (m *Model) navCursorUp() tea.Cmd {
 			return m.triggerCollectionContentLoad()
 		}
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			if m.navCursor > 0 {
+				m.navCursor--
+				m.clampNavScroll()
+				slog.Debug("navCursorUp: ws search mode", "navCursor", m.navCursor)
+				return m.triggerContentLoad()
+			}
+			return nil
+		}
 		if m.wsCursor > 0 {
 			m.wsCursor--
 			m.clampWsScroll()
@@ -1005,6 +1015,15 @@ func (m *Model) navCursorDown() tea.Cmd {
 			return m.triggerCollectionContentLoad()
 		}
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			if m.navCursor < len(m.navItems)-1 {
+				m.navCursor++
+				m.clampNavScroll()
+				slog.Debug("navCursorDown: ws search mode", "navCursor", m.navCursor)
+				return m.triggerContentLoad()
+			}
+			return nil
+		}
 		if m.wsCursor < len(m.wsRows)-1 {
 			m.wsCursor++
 			m.clampWsScroll()
@@ -1036,6 +1055,14 @@ func (m *Model) navPageUp() tea.Cmd {
 		m.clampNavRowScroll()
 		return m.triggerCollectionContentLoad()
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			m.navCursor -= h
+			if m.navCursor < 0 {
+				m.navCursor = 0
+			}
+			m.clampNavScroll()
+			return m.triggerContentLoad()
+		}
 		m.wsCursor -= h
 		if m.wsCursor < 0 {
 			m.wsCursor = 0
@@ -1073,6 +1100,17 @@ func (m *Model) navPageDown() tea.Cmd {
 		m.clampNavRowScroll()
 		return m.triggerCollectionContentLoad()
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			m.navCursor += h
+			if m.navCursor >= len(m.navItems) {
+				m.navCursor = len(m.navItems) - 1
+			}
+			if m.navCursor < 0 {
+				m.navCursor = 0
+			}
+			m.clampNavScroll()
+			return m.triggerContentLoad()
+		}
 		m.wsCursor += h
 		if m.wsCursor >= len(m.wsRows) {
 			m.wsCursor = len(m.wsRows) - 1
@@ -1100,6 +1138,11 @@ func (m *Model) navHome() tea.Cmd {
 		m.clampNavRowScroll()
 		return m.triggerCollectionContentLoad()
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			m.navCursor = 0
+			m.clampNavScroll()
+			return m.triggerContentLoad()
+		}
 		m.wsCursor = 0
 		m.clampWsScroll()
 		m.maybeReloadScratch()
@@ -1125,6 +1168,14 @@ func (m *Model) navEnd() tea.Cmd {
 			return m.triggerCollectionContentLoad()
 		}
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			if len(m.navItems) > 0 {
+				m.navCursor = len(m.navItems) - 1
+				m.clampNavScroll()
+				return m.triggerContentLoad()
+			}
+			return nil
+		}
 		if len(m.wsRows) > 0 {
 			m.wsCursor = len(m.wsRows) - 1
 			m.clampWsScroll()
@@ -1174,6 +1225,13 @@ func (m *Model) navSelect() tea.Cmd {
 			return m.openArticleOverlay(m.selectedNavItem())
 		}
 	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			slog.Debug("navSelect: ws search mode", "navCursor", m.navCursor, "items", len(m.navItems))
+			if m.navCursor >= 0 && m.navCursor < len(m.navItems) {
+				return m.openArticleOverlay(m.selectedNavItem())
+			}
+			return nil
+		}
 		if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
 			return nil
 		}
@@ -1332,6 +1390,7 @@ func (m *Model) wsToggleExpand() {
 	switch row.kind {
 	case wsRowWorkspace:
 		ws.expanded = !ws.expanded
+		slog.Debug("wsToggleExpand", "name", ws.name, "expanded", ws.expanded)
 	case wsRowCollection:
 		if ws.expandedCols == nil {
 			ws.expandedCols = make(map[string]bool)
@@ -1389,6 +1448,7 @@ func (m *Model) wsToggleFocus() {
 	m.wsCursor = 0
 	m.wsScroll = 0
 	m.statusMsg = "! focused: " + ws.name
+	slog.Debug("wsToggleFocus: focused", "name", ws.name)
 }
 
 // openWorkspaceFile reads a file from the workspace subdir and opens the resource overlay.
@@ -2442,6 +2502,19 @@ func (m *Model) updateCompletions() {
 // arg is the partial text already typed after the command (may include spaces for /help).
 func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 	switch cmd {
+	case "/search":
+		if m.activeTab == tabLibrary && m.navSubTab == navSubTabWorkspaces {
+			ws := m.contextWorkspace()
+			slog.Debug("paramSuggestions /search",
+				"wsFocusName", m.wsFocusName,
+				"contextWs", ws != nil,
+				"wsCursor", m.wsCursor)
+			if ws != nil {
+				return []cmdCompletion{{cmd: "→", desc: "searching articles in workspace: " + ws.name}}
+			}
+			return []cmdCompletion{{cmd: "→", desc: "searching workspaces by name/description"}}
+		}
+
 	case "/filter":
 		seen := map[string]bool{}
 		var items []cmdCompletion
@@ -2682,6 +2755,23 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 		switch sub {
 		case navSubTabWorkspaces:
+			ws := m.contextWorkspace()
+			slog.Debug("/search workspace dispatch",
+				"wsFocusName", m.wsFocusName,
+				"contextWs", ws != nil,
+				"arg", arg)
+			if ws != nil {
+				// Cursor is within an expanded/focused workspace: search its articles.
+				query, limit := parseSearchArg(arg)
+				slugs := m.workspaceArticleSlugs(ws)
+				slog.Debug("/search scoping to workspace", "name", ws.name, "articleCount", len(slugs))
+				if m.svc == nil || len(slugs) == 0 {
+					m.statusMsg = fmt.Sprintf("no articles in workspace %q", ws.name)
+					return nil
+				}
+				m.statusMsg = "searching…"
+				return cmdFTSSearch(m.svc, query, limit, slugs)
+			}
 			m.filterWorkspaces(arg)
 			return nil
 		case navSubTabCollections:
@@ -2698,7 +2788,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 				return nil
 			}
 			m.statusMsg = "searching…"
-			return cmdFTSSearch(m.svc, query, limit)
+			return cmdFTSSearch(m.svc, query, limit, nil)
 		}
 
 	case "/clear":
@@ -2710,6 +2800,9 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			m.wsCursor = 0
 			m.wsScroll = 0
 			m.navFilter = ""
+			m.navItems = m.navItemsAll
+			m.navCursor = 0
+			m.navScroll = 0
 			m.focus = paneNav
 			m.statusMsg = "✓ filter cleared"
 			return nil
@@ -2913,7 +3006,7 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 				query, limit := parseSearchArg(arg)
 				if m.svc != nil {
 					m.statusMsg = "searching…"
-					return tea.Batch(switchCmd, cmdFTSSearch(m.svc, query, limit))
+					return tea.Batch(switchCmd, cmdFTSSearch(m.svc, query, limit, nil))
 				}
 				m.applyNavFilter("search", query)
 			}
@@ -2978,6 +3071,66 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 	}
 
 	return switchCmd
+}
+
+// contextWorkspace returns the workspace the user is currently "within" for
+// search purposes. This is the workspace under the cursor if it is expanded
+// (or in solo/focus mode), or nil when the cursor is on a collapsed workspace
+// header (meaning the user wants to search the workspace list).
+func (m *Model) contextWorkspace() *workspaceItem {
+	// Solo/focus mode: wsFocusName was set via Enter.
+	if m.wsFocusName != "" {
+		for i := range m.workspaceItems {
+			if m.workspaceItems[i].name == m.wsFocusName {
+				slog.Debug("contextWorkspace: focus mode", "name", m.wsFocusName)
+				return &m.workspaceItems[i]
+			}
+		}
+	}
+	// Expanded workspace: cursor is on any row that belongs to an expanded workspace.
+	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
+		row := m.wsRows[m.wsCursor]
+		if row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+			ws := &m.workspaceItems[row.wsIdx]
+			slog.Debug("contextWorkspace: cursor row",
+				"kind", row.kind, "wsIdx", row.wsIdx,
+				"name", ws.name, "expanded", ws.expanded,
+				"wsFocusName", m.wsFocusName)
+			if ws.expanded {
+				return ws
+			}
+		}
+	}
+	return nil
+}
+
+// workspaceArticleSlugs returns all article slugs reachable from a workspace:
+// direct articles plus articles belonging to any of the workspace's collections.
+func (m *Model) workspaceArticleSlugs(ws *workspaceItem) []string {
+	seen := make(map[string]bool)
+	for _, slug := range ws.articles {
+		seen[slug] = true
+	}
+	colSet := make(map[string]bool, len(ws.collectionSlugs))
+	for _, c := range ws.collectionSlugs {
+		colSet[c] = true
+	}
+	for _, item := range m.navItemsAll {
+		if seen[item.id] {
+			continue
+		}
+		for _, c := range item.collections {
+			if colSet[c] {
+				seen[item.id] = true
+				break
+			}
+		}
+	}
+	slugs := make([]string, 0, len(seen))
+	for s := range seen {
+		slugs = append(slugs, s)
+	}
+	return slugs
 }
 
 // filterCollections filters navRowsAll to collections matching query (slug/name/description).
@@ -3307,10 +3460,10 @@ func parseSearchArg(arg string) (query string, limit int) {
 }
 
 // cmdFTSSearch runs a full-text search via the FTS5 index and replaces nav with results.
-// limit=0 uses the service default (20).
-func cmdFTSSearch(svc *service.Service, query string, limit int) tea.Cmd {
+// limit=0 uses the service default (20). slugs optionally restricts results to a set of article slugs.
+func cmdFTSSearch(svc *service.Service, query string, limit int, slugs []string) tea.Cmd {
 	return func() tea.Msg {
-		results, err := svc.Search(context.Background(), service.SearchRequest{Query: query, Limit: limit})
+		results, err := svc.Search(context.Background(), service.SearchRequest{Query: query, Limit: limit, Slugs: slugs})
 		if err != nil {
 			return cmdDoneMsg{err: fmt.Sprintf("search: %v", err)}
 		}
@@ -4649,7 +4802,7 @@ var helpGroups = []struct {
 		{"arc collections read", "<slug>", "read flash/summary across collection  (CLI only)"},
 	}},
 	{"workspace", []cmdCompletion{
-		{"/search", "<query>", "filter workspaces by name/description"},
+		{"/search", "<query>", "search workspaces · or articles within focused workspace"},
 		{"/clear", "", "clear active filter"},
 		{"/new", "<name>", "create a new workspace"},
 		{"/delete", "", "delete current workspace"},

@@ -421,6 +421,7 @@ func (s *Service) searchKeyword(ctx context.Context, req SearchRequest, limit in
 		Filter: store.Filter{
 			Collection: req.Collection,
 			Tags:       req.Tags,
+			Slugs:      req.Slugs,
 		},
 	}
 	hits, err := s.lib.Search(ctx, q)

@@ -30,6 +30,7 @@ type SearchRequest struct {
 	Query      string
 	Collection string
 	Tags       []string
+	Slugs      []string // restrict results to these article slugs (empty = no restriction)
 	Mode       store.QueryMode
 	Limit      int
 }
