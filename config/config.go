@@ -125,9 +125,10 @@ type Profile struct {
 // ProfileInfo holds human-readable metadata about a profile.
 // Displayed by `arc profiles` and useful for new users choosing a model.
 type ProfileInfo struct {
-	CostTier   string             `json:"cost_tier"`             // "local" | "very_low" | "low" | "medium" | "high" | "premium"
-	CostVsValue string            `json:"cost_vs_value"`         // one-line tradeoff summary
-	Pricing    *ProfilePricing    `json:"pricing_usd_per_1m_tokens,omitempty"`
+	CostTier      string          `json:"cost_tier"`                         // "local" | "very_low" | "low" | "medium" | "high" | "premium"
+	CostVsValue   string          `json:"cost_vs_value"`                     // one-line tradeoff summary
+	ContextWindow int             `json:"context_window,omitempty"`          // model context window in tokens (0 = unknown)
+	Pricing       *ProfilePricing `json:"pricing_usd_per_1m_tokens,omitempty"`
 }
 
 // ProfilePricing holds per-million-token pricing.
@@ -459,81 +460,90 @@ var builtinProfiles = map[string]Profile{
 		Provider: "openai",
 		Model:    "gpt-4o-mini",
 		Info: ProfileInfo{
-			CostTier:    "very_low",
-			CostVsValue: "Best for bulk summarization, flash, and flashcard generation. Lowest cost. Weaker on nuanced analysis of dense academic content.",
-			Pricing:     &ProfilePricing{Input: 0.15, Output: 0.60, CachedInput: 0.075},
+			CostTier:      "very_low",
+			CostVsValue:   "Best for bulk summarization, flash, and flashcard generation. Lowest cost. Weaker on nuanced analysis of dense academic content.",
+			ContextWindow: 128_000,
+			Pricing:       &ProfilePricing{Input: 0.15, Output: 0.60, CachedInput: 0.075},
 		},
 	},
 	"oai-4.1": {
 		Provider: "openai",
 		Model:    "gpt-4.1",
 		Info: ProfileInfo{
-			CostTier:    "high",
-			CostVsValue: "Excellent for summaries of technical and academic content. Strong instruction following, large context. Good cost-per-quality for serious reading lists.",
-			Pricing:     &ProfilePricing{Input: 2.00, Output: 8.00, CachedInput: 0.50},
+			CostTier:      "high",
+			CostVsValue:   "Excellent for summaries of technical and academic content. Strong instruction following, large context. Good cost-per-quality for serious reading lists.",
+			ContextWindow: 1_047_576,
+			Pricing:       &ProfilePricing{Input: 2.00, Output: 8.00, CachedInput: 0.50},
 		},
 	},
 	"oai-4o": {
 		Provider: "openai",
 		Model:    "gpt-4o",
 		Info: ProfileInfo{
-			CostTier:    "medium",
-			CostVsValue: "Balanced choice. Better than oai-mini for nuanced summarization, but not as cost-effective as oai-4.1 at the high end.",
-			Pricing:     &ProfilePricing{Input: 2.50, Output: 10.00, CachedInput: 1.25},
+			CostTier:      "medium",
+			CostVsValue:   "Balanced choice. Better than oai-mini for nuanced summarization, but not as cost-effective as oai-4.1 at the high end.",
+			ContextWindow: 128_000,
+			Pricing:       &ProfilePricing{Input: 2.50, Output: 10.00, CachedInput: 1.25},
 		},
 	},
 	"oai-5-mini": {
 		Provider: "openai",
 		Model:    "gpt-5-mini",
 		Info: ProfileInfo{
-			CostTier:    "low",
-			CostVsValue: "Attractive middle tier. Significantly stronger than gpt-4o-mini for reasoning-heavy summarization, still much cheaper than gpt-4.1.",
-			Pricing:     &ProfilePricing{Input: 0.25, Output: 2.00, CachedInput: 0.025},
+			CostTier:      "low",
+			CostVsValue:   "Attractive middle tier. Significantly stronger than gpt-4o-mini for reasoning-heavy summarization, still much cheaper than gpt-4.1.",
+			ContextWindow: 1_047_576,
+			Pricing:       &ProfilePricing{Input: 0.25, Output: 2.00, CachedInput: 0.025},
 		},
 	},
 	"oai-5": {
 		Provider: "openai",
 		Model:    "gpt-5",
 		Info: ProfileInfo{
-			CostTier:    "premium",
-			CostVsValue: "Best quality for deeply complex or long-form content. Use when summary quality is critical and cost is secondary.",
-			Pricing:     &ProfilePricing{Input: 1.25, Output: 10.00, CachedInput: 0.125},
+			CostTier:      "premium",
+			CostVsValue:   "Best quality for deeply complex or long-form content. Use when summary quality is critical and cost is secondary.",
+			ContextWindow: 1_047_576,
+			Pricing:       &ProfilePricing{Input: 1.25, Output: 10.00, CachedInput: 0.125},
 		},
 	},
 	"opus": {
 		Provider: "anthropic",
 		Model:    "claude-opus-4-6",
 		Info: ProfileInfo{
-			CostTier:    "premium",
-			CostVsValue: "Recommended for production summarization. Best coherence and reduction quality on long articles. Quality compounds in map-reduce — worth the cost.",
-			Pricing:     &ProfilePricing{Input: 15.00, Output: 75.00},
+			CostTier:      "premium",
+			CostVsValue:   "Recommended for production summarization. Best coherence and reduction quality on long articles. Quality compounds in map-reduce — worth the cost.",
+			ContextWindow: 200_000,
+			Pricing:       &ProfilePricing{Input: 15.00, Output: 75.00},
 		},
 	},
 	"sonnet": {
 		Provider: "anthropic",
 		Model:    "claude-sonnet-4-6",
 		Info: ProfileInfo{
-			CostTier:    "medium",
-			CostVsValue: "Recommended for production flashcard generation. Strong structured JSON output, good instruction following. Right balance for single-call tasks.",
-			Pricing:     &ProfilePricing{Input: 3.00, Output: 15.00},
+			CostTier:      "medium",
+			CostVsValue:   "Recommended for production flashcard generation. Strong structured JSON output, good instruction following. Right balance for single-call tasks.",
+			ContextWindow: 200_000,
+			Pricing:       &ProfilePricing{Input: 3.00, Output: 15.00},
 		},
 	},
 	"haiku": {
 		Provider: "anthropic",
 		Model:    "claude-haiku-4-5-20251001",
 		Info: ProfileInfo{
-			CostTier:    "very_low",
-			CostVsValue: "Recommended for production flash generation. Trivial single-call task — Haiku is fast, cheap, and more than capable for 3-5 sentence audio summaries.",
-			Pricing:     &ProfilePricing{Input: 0.80, Output: 4.00},
+			CostTier:      "very_low",
+			CostVsValue:   "Recommended for production flash generation. Trivial single-call task — Haiku is fast, cheap, and more than capable for 3-5 sentence audio summaries.",
+			ContextWindow: 200_000,
+			Pricing:       &ProfilePricing{Input: 0.80, Output: 4.00},
 		},
 	},
 	"oai-embed": {
 		Provider: "openai",
 		Model:    "text-embedding-3-small",
 		Info: ProfileInfo{
-			CostTier:    "very_low",
-			CostVsValue: "OpenAI text-embedding-3-small. Used for semantic search vector index. 1536 dims, ~$0.02/million tokens.",
-			Pricing:     &ProfilePricing{Input: 0.02},
+			CostTier:      "very_low",
+			CostVsValue:   "OpenAI text-embedding-3-small. Used for semantic search vector index. 1536 dims, ~$0.02/million tokens.",
+			ContextWindow: 8_191,
+			Pricing:       &ProfilePricing{Input: 0.02},
 		},
 	},
 	"llama": {
@@ -541,8 +551,9 @@ var builtinProfiles = map[string]Profile{
 		Host:     "http://localhost:11434",
 		Model:    "llama3.1:8b",
 		Info: ProfileInfo{
-			CostTier:    "local",
-			CostVsValue: "Free if you run Ollama locally. Good for experimentation and offline use. Lower quality ceiling than cloud models for dense academic content.",
+			CostTier:      "local",
+			CostVsValue:   "Free if you run Ollama locally. Good for experimentation and offline use. Lower quality ceiling than cloud models for dense academic content.",
+			ContextWindow: 128_000,
 		},
 	},
 	"qwen": {
@@ -550,8 +561,9 @@ var builtinProfiles = map[string]Profile{
 		Host:     "http://localhost:11434",
 		Model:    "qwen2.5-coder:7b",
 		Info: ProfileInfo{
-			CostTier:    "local",
-			CostVsValue: "Free local option, stronger than llama on technical content. Good for code-heavy articles.",
+			CostTier:      "local",
+			CostVsValue:   "Free local option, stronger than llama on technical content. Good for code-heavy articles.",
+			ContextWindow: 32_768,
 		},
 	},
 }
