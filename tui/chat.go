@@ -422,15 +422,17 @@ type chatVLine struct {
 	contentIdx  int    // index into chatDisplayLines; -1 for non-content lines
 	boxIdx      int    // which logical box (0-based) this line belongs to
 	isSelected  bool   // true when boxIdx == chatBoxCursor
+	isCommented bool   // true when the box is commented out (excluded from LLM context)
 }
 
 // chatBoxInfo holds per-box metadata derived from message history.
 type chatBoxInfo struct {
-	role     chatLineRole
-	ts       string
-	profile  string
-	msgStart int // inclusive index into msgs
-	msgEnd   int // exclusive index into msgs
+	role      chatLineRole
+	ts        string
+	profile   string
+	msgStart  int  // inclusive index into msgs
+	msgEnd    int  // exclusive index into msgs
+	commented bool // true when the box is commented (excluded from LLM context)
 }
 
 // chatBoxInfos walks message history and returns one entry per logical box.
@@ -448,7 +450,7 @@ func (m *Model) chatBoxInfos() []chatBoxInfo {
 			if !msg.Time.IsZero() {
 				ts = msg.Time.Format("Jan 2, 2006 · 15:04")
 			}
-			infos = append(infos, chatBoxInfo{role: chatLineUser, ts: ts, msgStart: i, msgEnd: i + 1})
+			infos = append(infos, chatBoxInfo{role: chatLineUser, ts: ts, msgStart: i, msgEnd: i + 1, commented: msg.Commented})
 		case chat.RoleAssistant:
 			if len(infos) > 0 && infos[len(infos)-1].role == chatLineUser {
 				infos[len(infos)-1].msgEnd = i + 1
@@ -555,6 +557,7 @@ func (m Model) buildChatVLines() []chatVLine {
 	for e, box := range boxes {
 		selected := e == m.chatBoxCursor && m.focus == paneContent && !m.selectionMode
 		collapsed := m.chatCollapsed != nil && m.chatCollapsed[e]
+		commented := e < len(infos) && infos[e].commented
 
 		var end int
 		if e+1 < len(boxes) {
@@ -573,7 +576,7 @@ func (m Model) buildChatVLines() []chatVLine {
 
 		if selected {
 			// Focused box: full border + header line with hints.
-			vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1, boxIdx: e, isSelected: true})
+			vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented})
 
 			// Header line: "time  model" on left, hints on right.
 			var leftParts []string
@@ -587,7 +590,7 @@ func (m Model) buildChatVLines() []chatVLine {
 				}
 			}
 			metaLeft := strings.Join(leftParts, "  ")
-			vlines = append(vlines, chatVLine{isHeader: true, metaText: metaLeft, contentIdx: -1, boxIdx: e, isSelected: true})
+			vlines = append(vlines, chatVLine{isHeader: true, metaText: metaLeft, contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented})
 
 			// Content lines (possibly collapsed).
 			if collapsed {
@@ -596,23 +599,23 @@ func (m Model) buildChatVLines() []chatVLine {
 					limit = trimEnd
 				}
 				for i := box.idx; i < limit; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true, isCommented: commented})
 				}
 				if limit < trimEnd {
 					remaining := totalContent - (limit - box.idx)
 					vlines = append(vlines, chatVLine{
 						isEllipsis: true,
 						metaText:   fmt.Sprintf("... (%d more lines)", remaining),
-						contentIdx: -1, boxIdx: e, isSelected: true,
+						contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented,
 					})
 				}
 			} else {
 				for i := box.idx; i < trimEnd; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true, isCommented: commented})
 				}
 			}
 
-			vlines = append(vlines, chatVLine{isBoxBottom: true, contentIdx: -1, boxIdx: e, isSelected: true})
+			vlines = append(vlines, chatVLine{isBoxBottom: true, contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented})
 		} else {
 			// Non-focused: plain content, no border.
 			// Collapse state still applies — show only first 3 lines + ellipsis.
@@ -622,19 +625,19 @@ func (m Model) buildChatVLines() []chatVLine {
 					limit = trimEnd
 				}
 				for i := box.idx; i < limit; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: false})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: false, isCommented: commented})
 				}
 				if limit < trimEnd {
 					remaining := totalContent - (limit - box.idx)
 					vlines = append(vlines, chatVLine{
 						isEllipsis: true,
 						metaText:   fmt.Sprintf("... (%d more lines)", remaining),
-						contentIdx: -1, boxIdx: e, isSelected: false,
+						contentIdx: -1, boxIdx: e, isSelected: false, isCommented: commented,
 					})
 				}
 			} else {
 				for i := box.idx; i < trimEnd; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: false})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: false, isCommented: commented})
 				}
 			}
 		}
@@ -737,6 +740,58 @@ func (m *Model) cmdChatDeleteBox(boxIdx int) tea.Cmd {
 	}
 }
 
+// cmdChatCommentBox toggles the commented state of the box at boxIdx.
+// All messages in the box range are toggled atomically so they stay in sync.
+func (m *Model) cmdChatCommentBox(boxIdx int) tea.Cmd {
+	infos := m.chatBoxInfos()
+	if boxIdx < 0 || boxIdx >= len(infos) {
+		return nil
+	}
+	info := infos[boxIdx]
+	newState := !info.commented
+
+	toggle := func(msgs []chat.Message) {
+		for i := info.msgStart; i < info.msgEnd && i < len(msgs); i++ {
+			msgs[i].Commented = newState
+		}
+	}
+
+	if m.chatEngine != nil {
+		toggle(m.chatEngine.History().Msgs)
+	} else {
+		toggle(m.chatRawMsgs)
+	}
+
+	m.rebuildChatLines(m.chatBuildWidth())
+
+	// Collect messages to save.
+	cfg := m.cfg
+	ws := m.chatWorkspace
+	var toSave []chat.Message
+	if m.chatEngine != nil {
+		src := m.chatEngine.History().Msgs
+		toSave = make([]chat.Message, len(src))
+		copy(toSave, src)
+	} else {
+		toSave = make([]chat.Message, len(m.chatRawMsgs))
+		copy(toSave, m.chatRawMsgs)
+	}
+
+	status := "✓ exchange commented out"
+	if !newState {
+		status = "✓ exchange uncommented"
+	}
+
+	return func() tea.Msg {
+		st := chat.NewChatStore(cfg.DataRoot, ws)
+		h := &chat.History{Msgs: toSave}
+		if err := st.SaveHistory(h); err != nil {
+			return cmdDoneMsg{err: "comment: " + err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: status}
+	}
+}
+
 // renderChatPane renders the chat conversation in the right content pane.
 func (m Model) renderChatPane(height, width int) []string {
 	t := ActiveTheme
@@ -794,6 +849,11 @@ func (m Model) renderChatPane(height, width int) []string {
 		botRule := fg(t.BoxBorder, "╰"+strings.Repeat("─", width-2)+"╯")
 		bL := fg(t.BoxBorder, "│ ")
 		bR := fg(t.BoxBorder, " │")
+		// Commented-box border variants (muted).
+		topRuleC := fg(t.ContentDimmed, "╭"+strings.Repeat("─", width-2)+"╮")
+		botRuleC := fg(t.ContentDimmed, "╰"+strings.Repeat("─", width-2)+"╯")
+		bLC := fg(t.ContentDimmed, "│ ")
+		bRC := fg(t.ContentDimmed, " │")
 
 		total := len(vlines)
 		start := m.chatScroll
@@ -815,6 +875,8 @@ func (m Model) renderChatPane(height, width int) []string {
 			case vl.isBoxTop:
 				if selPlain {
 					lines = append(lines, "")
+				} else if vl.isCommented {
+					lines = append(lines, topRuleC)
 				} else {
 					lines = append(lines, topRule)
 				}
@@ -822,6 +884,8 @@ func (m Model) renderChatPane(height, width int) []string {
 			case vl.isBoxBottom:
 				if selPlain {
 					lines = append(lines, "")
+				} else if vl.isCommented {
+					lines = append(lines, botRuleC)
 				} else {
 					lines = append(lines, botRule)
 				}
@@ -835,14 +899,22 @@ func (m Model) renderChatPane(height, width int) []string {
 					lines = append(lines, fg(t.ContentDimmed, vl.metaText))
 				} else {
 					// Header line inside the selected box:
-					// left = "time  model", right = "v expand/collapse · s speak · x delete"
-					// All in t.Dimmed — identical to c2.
+					// left = "time  model", right = hints
+					// All in t.ContentDimmed.
 					expandHint := "v expand"
 					if m.chatCollapsed != nil && m.chatCollapsed[vl.boxIdx] {
 						expandHint = "v collapse"
 					}
-					hintsStr := expandHint + " · s speak · x delete"
+					var hintsStr string
+					if vl.isCommented {
+						hintsStr = "# uncomment · " + expandHint + " · x delete"
+					} else {
+						hintsStr = "# comment · " + expandHint + " · s speak · x delete"
+					}
 					left := vl.metaText
+					if vl.isCommented {
+						left = "📌 " + left
+					}
 					leftW := lipgloss.Width(left)
 					hintsW := lipgloss.Width(hintsStr)
 					pad := innerW - leftW - hintsW
@@ -857,7 +929,11 @@ func (m Model) renderChatPane(height, width int) []string {
 					if total < innerW {
 						headerContent += strings.Repeat(" ", innerW-total)
 					}
-					lines = append(lines, bL+headerContent+bR)
+					borderL, borderR := bL, bR
+					if vl.isCommented {
+						borderL, borderR = bLC, bRC
+					}
+					lines = append(lines, borderL+headerContent+borderR)
 				}
 
 			case vl.isEllipsis:
@@ -869,18 +945,31 @@ func (m Model) renderChatPane(height, width int) []string {
 					if visW < innerW {
 						text += strings.Repeat(" ", innerW-visW)
 					}
-					lines = append(lines, bL+text+bR)
+					borderL, borderR := bL, bR
+					if vl.isCommented {
+						borderL, borderR = bLC, bRC
+					}
+					lines = append(lines, borderL+text+borderR)
 				}
 
 			default:
 				cl := m.chatDisplayLines[vl.contentIdx]
 				if selPlain || !vl.isSelected {
 					// Plain text — no box border.
-					lines = append(lines, colorChatLine(cl, t))
+					if vl.isCommented {
+						// Commented non-selected: render dimmed regardless of role.
+						lines = append(lines, fg(t.ContentDimmed, cl.text))
+					} else {
+						lines = append(lines, colorChatLine(cl, t))
+					}
 				} else {
 					// Inside the box border: pad to innerW.
+					borderL, borderR := bL, bR
+					if vl.isCommented {
+						borderL, borderR = bLC, bRC
+					}
 					if cl.role == chatLineBlank || cl.text == "" {
-						lines = append(lines, bL+strings.Repeat(" ", innerW)+bR)
+						lines = append(lines, borderL+strings.Repeat(" ", innerW)+borderR)
 						continue
 					}
 					budget := innerW
@@ -901,8 +990,13 @@ func (m Model) renderChatPane(height, width int) []string {
 					} else if visW < budget {
 						text = text + strings.Repeat(" ", budget-visW)
 					}
-					colored := colorChatLine(chatLine{role: cl.role, text: text}, t)
-					lines = append(lines, bL+colored+bR)
+					var colored string
+					if vl.isCommented {
+						colored = fg(t.ContentDimmed, text)
+					} else {
+						colored = colorChatLine(chatLine{role: cl.role, text: text}, t)
+					}
+					lines = append(lines, borderL+colored+borderR)
 				}
 			}
 		}

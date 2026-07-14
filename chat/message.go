@@ -30,6 +30,9 @@ type Message struct {
 	// Tool fields — zero values for pre-tool messages; omitted from JSON when empty.
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // assistant only: tool invocations requested
 	ToolCallID string     `json:"tool_call_id,omitempty"` // tool-result only: correlates to ToolCall.ID
+
+	// Commented messages are kept in history but excluded from LLM context.
+	Commented bool `json:"commented,omitempty"`
 }
 
 // History is the full append-only message log for a workspace chat.
@@ -89,6 +92,8 @@ func (h *History) CollapseForContext() []Message {
 		switch {
 		case m.Role == RoleNote:
 			continue
+		case m.Commented:
+			continue
 		case m.Role == RoleToolResult:
 			continue
 		case m.Role == RoleAssistant && len(m.ToolCalls) > 0:
@@ -110,7 +115,7 @@ func (h *History) ToMessages(maxUserMessages int) []Message {
 	userCount := 0
 	start := 0
 	for i := len(h.Msgs) - 1; i >= 0; i-- {
-		if h.Msgs[i].Role == RoleUser {
+		if h.Msgs[i].Role == RoleUser && !h.Msgs[i].Commented {
 			userCount++
 			if userCount >= maxUserMessages {
 				start = i
@@ -121,7 +126,7 @@ func (h *History) ToMessages(maxUserMessages int) []Message {
 	msgs := h.Msgs[start:]
 	out := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
-		if m.Role != RoleNote {
+		if m.Role != RoleNote && !m.Commented {
 			out = append(out, m)
 		}
 	}

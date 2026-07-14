@@ -1783,6 +1783,11 @@ func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 				m.cmdChatCollapseBox(m.chatBoxCursor)
 			}
 			return nil
+		case "#":
+			if numBoxes > 0 {
+				return m.cmdChatCommentBox(m.chatBoxCursor)
+			}
+			return nil
 		case "x":
 			if numBoxes > 0 {
 				return m.cmdChatDeleteBox(m.chatBoxCursor)
