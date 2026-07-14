@@ -102,14 +102,17 @@ type ChatConfig struct {
 	// Default: 0.4 (40% verbatim, 60% summary).
 	VerbatimRatio float64 `json:"verbatim_ratio"`
 
+	// GroundingMode controls how the chat assistant sources its answers.
+	// Options: "corpus-only", "corpus-first" (default), "open".
+	GroundingMode string `json:"grounding_mode"`
+
 	// RAGMode controls how the LLM uses the injected knowledge base.
-	// Options: "open" (default — no instruction), "strict", "hybrid".
-	// Use `arc workspace chat-config --list-rag-modes` to see all modes and their instructions.
+	// Deprecated: replaced by GroundingMode. Kept for backward compatibility
+	// with existing chat.json files until the RAG system is fully removed.
 	RAGMode string `json:"rag_mode"`
 
 	// RAGInstruction overrides the default instruction text for the selected RAGMode.
-	// When set, this text is used instead of the built-in instruction for the mode.
-	// When empty, the built-in instruction for RAGMode is used.
+	// Deprecated: replaced by grounding mode prompt blocks.
 	RAGInstruction string `json:"rag_instruction,omitempty"`
 }
 
@@ -611,6 +614,7 @@ func Default() Config {
 			MaxOutputTokens: 0,
 			MaxUserMessages: 50,
 			VerbatimRatio:   0.4,
+			GroundingMode:   "corpus-first",
 			RAGMode:         "open",
 		},
 		AskX: AskXConfig{
@@ -771,6 +775,9 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Chat.VerbatimRatio != 0 {
 		cfg.Chat.VerbatimRatio = overlay.Chat.VerbatimRatio
+	}
+	if overlay.Chat.GroundingMode != "" {
+		cfg.Chat.GroundingMode = overlay.Chat.GroundingMode
 	}
 	if overlay.Chat.RAGMode != "" {
 		cfg.Chat.RAGMode = overlay.Chat.RAGMode

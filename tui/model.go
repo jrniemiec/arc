@@ -385,7 +385,8 @@ type Model struct {
 	chatPendingPrompt  string                // prompt queued before engine is initialized
 	chatRawMsgs        []chat.Message        // history msgs for display before engine is ready
 	chatArticleCount   int                   // total articles in workspace (populated by loadChatHistoryCmd)
-	chatRagMode        string                // effective RAG mode for this workspace ("open"/"strict"/"hybrid")
+	chatGroundingMode  string                // effective grounding mode ("corpus-only"/"corpus-first"/"open")
+	chatActivityLine   string                // tool activity indicator (e.g. "→ reading: wal-internals")
 	chatBoxCursor      int                   // selected box index in boxed view (focus==paneContent)
 	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
@@ -524,9 +525,10 @@ var workspaceCommands = []cmdCompletion{
 // chatCommands are available when workspace chat mode is active.
 var chatCommands = []cmdCompletion{
 	{"/clear", "", "clear conversation history"},
-	{"/reload", "", "reset engine to pick up new articles/collections"},
+	{"/mode", "[corpus-only|corpus-first|open]", "show or switch grounding mode"},
+	{"/reload", "", "rebuild corpus map to pick up article changes"},
 	{"/stats", "", "show session token usage and cost"},
-	{"/system", "", "print system prompt (includes RAG + knowledge base)"},
+	{"/system", "", "print system prompt"},
 	{"/meta", "", "show workspace details"},
 	{"/save", "[filename]", "save session to outcomes/<filename>.md"},
 	{"/new", "<name> [description]", "create a new workspace"},
@@ -631,7 +633,7 @@ type chatHistoryLoadedMsg struct {
 	err          string
 	focus        bool   // true = user explicitly selected this workspace (Enter/click), switch focus to command pane
 	articleCount int    // total articles in workspace (direct + via collections)
-	ragMode      string // effective RAG mode ("open" / "strict" / "hybrid")
+	groundingMode string // effective grounding mode ("corpus-only" / "corpus-first" / "open")
 }
 
 // chatReadyMsg signals that the chat engine has been constructed.
@@ -702,9 +704,11 @@ type cmdDoneMsg struct {
 
 // streamBuf is a goroutine-safe string buffer for streaming LLM responses.
 // The streaming goroutine appends via Append; the UI reads via Get on each tick.
+// It also carries a tool activity line set by the streaming goroutine.
 type streamBuf struct {
-	mu  sync.Mutex
-	buf string
+	mu       sync.Mutex
+	buf      string
+	activity string // tool activity indicator (e.g. "→ reading: wal-internals")
 }
 
 func (b *streamBuf) Append(s string) {
@@ -717,6 +721,18 @@ func (b *streamBuf) Get() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf
+}
+
+func (b *streamBuf) SetActivity(s string) {
+	b.mu.Lock()
+	b.activity = s
+	b.mu.Unlock()
+}
+
+func (b *streamBuf) GetActivity() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.activity
 }
 
 // ── Cmds ─────────────────────────────────────────────────────────────────────

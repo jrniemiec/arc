@@ -317,17 +317,32 @@ func (s *Store) Search(ctx context.Context, q store.Query) ([]store.Result, erro
 		topK = 20
 	}
 
-	var results []store.Result
-	err = sqlitex.Execute(conn, `
-		SELECT `+articleColumnsQualified+`, bm25(articles_fts) AS score,
+	// Build query with optional slug filtering.
+	query := `
+		SELECT ` + articleColumnsQualified + `, bm25(articles_fts) AS score,
 		       snippet(articles_fts, 2, '[', ']', '...', 20) AS excerpt
 		FROM articles_fts
 		JOIN articles a ON a.id = articles_fts.article_id
-		WHERE articles_fts MATCH ?
+		WHERE articles_fts MATCH ?`
+	args := []any{q.Text}
+
+	if len(q.Filter.Slugs) > 0 {
+		placeholders := make([]string, len(q.Filter.Slugs))
+		for i, slug := range q.Filter.Slugs {
+			placeholders[i] = "?"
+			args = append(args, slug)
+		}
+		query += ` AND a.id IN (` + strings.Join(placeholders, ",") + `)`
+	}
+
+	query += `
 		ORDER BY bm25(articles_fts)
-		LIMIT ?
-	`, &sqlitex.ExecOptions{
-		Args: []any{q.Text, topK},
+		LIMIT ?`
+	args = append(args, topK)
+
+	var results []store.Result
+	err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
+		Args: args,
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			a := scanArticle(stmt)
 			score := stmt.ColumnFloat(columnCount)

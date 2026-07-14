@@ -100,6 +100,7 @@ type Filter struct {
 	Unplayed   bool
 	AgentOnly  bool   // only articles ingested by the feed agent (agent_run_id IS NOT NULL)
 	AgentRunID string // only articles from this specific agent run
+	Slugs      []string // restrict to these article slugs (empty = no restriction)
 	Limit      int
 	Offset     int
 }

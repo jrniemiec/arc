@@ -176,3 +176,14 @@ func (p *OllamaProvider) ChatStream(
 	}
 	return sb.String(), u, nil
 }
+
+func (p *OllamaProvider) ChatStreamWithTools(
+	ctx context.Context,
+	systemPrompt string,
+	messages []chat.Message,
+	tools []chat.ToolDef,
+	onTextDelta func(string) error,
+	onToolStart func(toolName string) error,
+) (chat.StreamResponse, error) {
+	return chat.StreamResponse{}, errors.New("ollama: tool calling not yet supported")
+}

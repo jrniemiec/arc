@@ -110,3 +110,14 @@ func (p *OpenAIProvider) ChatStream(
 	}
 	return sb.String(), u, nil
 }
+
+func (p *OpenAIProvider) ChatStreamWithTools(
+	ctx context.Context,
+	systemPrompt string,
+	messages []chat.Message,
+	tools []chat.ToolDef,
+	onTextDelta func(string) error,
+	onToolStart func(toolName string) error,
+) (chat.StreamResponse, error) {
+	return chat.StreamResponse{}, errors.New("openai: tool calling not yet supported")
+}

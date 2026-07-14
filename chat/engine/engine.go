@@ -6,14 +6,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jrniemiec/arc/chat"
+	"github.com/jrniemiec/arc/chat/corpusmap"
+	"github.com/jrniemiec/arc/chat/prompt"
 	"github.com/jrniemiec/arc/chat/provider"
 	"github.com/jrniemiec/arc/chat/strategy"
+	"github.com/jrniemiec/arc/chat/tools"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/store/fs"
 )
@@ -29,16 +34,23 @@ func chatCfgWithDefaults(chatCfg config.ChatConfig) config.ChatConfig {
 	if chatCfg.VerbatimRatio == 0 {
 		chatCfg.VerbatimRatio = 0.4
 	}
+	if chatCfg.GroundingMode == "" {
+		chatCfg.GroundingMode = prompt.DefaultMode
+	}
 	return chatCfg
 }
 
 const defaultMaxUserMessages = 50
 const defaultTokenBudget = 8000
+const maxToolRounds = 5
 
-// defaultDensityInstruction is prepended to every workspace system prompt unless
-// the user's system.txt already contains it. It instructs the model to produce
-// concise, information-dense responses rather than verbose prose.
-const defaultDensityInstruction = `Be concise and information-dense. Skip preamble, summaries of what you're about to say, and filler transitions. Prefer structured lists and short paragraphs over long prose. Omit obvious caveats. Get to the point immediately.`
+// ChatCallbacks groups the callback functions used during a tool-aware chat turn.
+type ChatCallbacks struct {
+	OnTextDelta  func(string) error        // streaming text to TUI/CLI
+	OnToolStart  func(toolName string)     // tool execution started
+	OnToolDone   func(toolName string)     // tool execution finished
+	OnRoundStart func(round int)           // new tool round started
+}
 
 // Engine manages a workspace chat session.
 type Engine struct {
@@ -51,6 +63,15 @@ type Engine struct {
 	st            *chat.ChatStore
 	history       *chat.History
 	systemPrompt  string
+
+	// Tool-loop state.
+	groundingMode  string
+	corpusMap      corpusmap.Result
+	mapFingerprint string
+	wsDescription  string
+	persona        string // user-authored system.txt content
+	tools          []chat.ToolDef
+	turnID         int
 
 	mu        sync.Mutex
 	streaming bool
@@ -74,13 +95,14 @@ type ChatOptions struct {
 type ChatResult struct {
 	Usage   chat.Usage
 	Elapsed time.Duration
+	Rounds  int
 }
 
 // New creates an Engine for the given workspace, loading history and system prompt.
 // profileName may be empty — falls back to chatCfg.Profile, then cfg.Ingest.FlashProfile.
 //
-// The system prompt is assembled once at init (system.txt + RAG instruction + knowledge base)
-// and sent unchanged on every LLM call. See local/CHAT_ARCHITECTURE.md for full details.
+// The system prompt is assembled from persona (system.txt), base instructions,
+// grounding mode, and corpus map. It is rebuilt when the workspace changes.
 func New(cfg config.Config, workspaceName, profileName string) (*Engine, error) {
 	// Resolve chat config (apply in-code defaults for fields missing from file).
 	rawChatCfg, _ := fs.ReadChatConfig(cfg.DataRoot, workspaceName)
@@ -119,53 +141,62 @@ func New(cfg config.Config, workspaceName, profileName string) (*Engine, error) 
 		return nil, fmt.Errorf("load history: %w", err)
 	}
 
-	systemPrompt, err := st.LoadSystem()
+	persona, err := st.LoadSystem()
 	if err != nil {
 		return nil, fmt.Errorf("load system: %w", err)
 	}
 
-	// Prepend default density instruction unless system.txt already contains it.
-	// This ensures responses are concise and information-dense by default.
-	// Users can override or extend this in system.txt.
-	if !strings.Contains(systemPrompt, defaultDensityInstruction) {
-		if systemPrompt != "" {
-			systemPrompt = defaultDensityInstruction + "\n\n" + strings.TrimSpace(systemPrompt)
-		} else {
-			systemPrompt = defaultDensityInstruction
-		}
+	// Read workspace description for the corpus map header.
+	var wsDescription string
+	if wsMeta, err := fs.ReadWorkspaceMeta(cfg.DataRoot, workspaceName); err == nil {
+		wsDescription = wsMeta.Description
 	}
 
-	// Build RAG prefix from workspace corpus and prepend to system prompt.
-	ragInstruction := chat.RAGModeInstruction(chatCfg.RAGMode, chatCfg.RAGInstruction)
-	ragPrefix, err := chat.BuildRAGContext(cfg, workspaceName, ragInstruction)
+	// Build initial corpus map.
+	cm, err := corpusmap.Build(cfg, workspaceName, wsDescription, 0)
 	if err != nil {
-		return nil, fmt.Errorf("build RAG context: %w", err)
+		return nil, fmt.Errorf("build corpus map: %w", err)
 	}
-	if ragPrefix != "" {
-		if systemPrompt != "" {
-			systemPrompt = strings.TrimSpace(systemPrompt) + "\n\n" + ragPrefix
-		} else {
-			systemPrompt = ragPrefix
-		}
-	}
+
+	groundingMode := chatCfg.GroundingMode
+	systemPrompt := prompt.AssembleSystemPrompt(persona, groundingMode, cm.Text)
+
+	// Build tool set for current grounding mode.
+	tools := toolSet(groundingMode)
 
 	return &Engine{
-		cfg:           cfg,
-		workspaceName: workspaceName,
-		profileName:   resolved,
-		profile:       prof,
-		chatCfg:       chatCfg,
-		prov:          prov,
-		st:            st,
-		history:       history,
-		systemPrompt:  systemPrompt,
+		cfg:            cfg,
+		workspaceName:  workspaceName,
+		profileName:    resolved,
+		profile:        prof,
+		chatCfg:        chatCfg,
+		prov:           prov,
+		st:             st,
+		history:        history,
+		systemPrompt:   systemPrompt,
+		groundingMode:  groundingMode,
+		corpusMap:      cm,
+		mapFingerprint: cm.Fingerprint,
+		wsDescription:  wsDescription,
+		persona:        persona,
+		tools:          tools,
 	}, nil
 }
 
-// Chat sends prompt to the provider, applies the context strategy, and
-// (unless SkipHistory) persists the exchange to history.
+// Chat sends prompt to the provider with the tool loop, applies the context
+// strategy, and (unless SkipHistory) persists the exchange to history.
 // onDelta is called for each streaming token; pass nil to suppress streaming.
-func (e *Engine) Chat(ctx context.Context, prompt string, opts ChatOptions, onDelta func(string) error) (ChatResult, error) {
+func (e *Engine) Chat(ctx context.Context, userPrompt string, opts ChatOptions, onDelta func(string) error) (ChatResult, error) {
+	cb := ChatCallbacks{OnTextDelta: onDelta}
+	return e.ChatWithTools(ctx, userPrompt, opts, cb)
+}
+
+// ChatWithTools sends prompt to the provider with tool calling support.
+// The tool loop runs up to maxToolRounds rounds; each round may execute
+// multiple tool calls concurrently. Tool results are appended to the
+// working message list and sent back to the model until it produces a
+// final text response (stop_reason == "end_turn").
+func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts ChatOptions, cb ChatCallbacks) (ChatResult, error) {
 	e.mu.Lock()
 	if e.streaming {
 		e.mu.Unlock()
@@ -179,57 +210,299 @@ func (e *Engine) Chat(ctx context.Context, prompt string, opts ChatOptions, onDe
 		e.mu.Unlock()
 	}()
 
+	e.turnID++
+	turnStart := time.Now()
+
+	// --- 1. Check corpus map freshness ---
+	if err := e.refreshCorpusMap(); err != nil {
+		slog.Warn("corpus map refresh failed", "err", err)
+	}
+
+	// --- 2. Build context messages from collapsed history ---
 	strat := e.buildStrategy(opts)
-	contextMsgs := strat.Apply(e.history, prompt)
-	allMsgs := append(contextMsgs, chat.Message{Role: chat.RoleUser, Content: prompt})
+	contextMsgs := strat.Apply(e.history, userPrompt)
+	workingMsgs := append(contextMsgs, chat.Message{Role: chat.RoleUser, Content: userPrompt})
 
-	if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[debug] profile=%s provider=%s model=%s\n",
-			e.profileName, e.profile.Provider, e.profile.Model)
-		fmt.Fprintf(os.Stderr, "[debug] strategy=%s context_messages=%d system=%v\n",
-			strat.Name(), len(allMsgs), e.systemPrompt != "")
-		for i, m := range allMsgs {
-			preview := m.Content
-			if len(preview) > 80 {
-				preview = preview[:80] + "..."
+	// Audit trail — everything to persist after the turn.
+	auditMsgs := []chat.Message{{Role: chat.RoleUser, Content: userPrompt, Time: turnStart}}
+
+	slog.Info("chat turn start",
+		"workspace", e.workspaceName,
+		"profile", e.profileName,
+		"mode", e.groundingMode,
+		"turn", e.turnID,
+		"context_msgs", len(workingMsgs))
+
+	// --- 3. Tool loop ---
+	var turnUsage chat.Usage
+	var finalText string
+	round := 0
+
+	for {
+		round++
+		if cb.OnRoundStart != nil {
+			cb.OnRoundStart(round)
+		}
+
+		// Debug: save effective request snapshot.
+		if opts.Debug {
+			e.saveRequestSnapshot(workingMsgs)
+		}
+
+		// --- 3a. Send request ---
+		resp, err := e.prov.ChatStreamWithTools(
+			ctx,
+			e.systemPrompt,
+			workingMsgs,
+			e.tools,
+			cb.OnTextDelta,
+			func(toolName string) error {
+				if cb.OnToolStart != nil {
+					cb.OnToolStart(toolName)
+				}
+				return nil
+			},
+		)
+		if err != nil {
+			return ChatResult{Usage: turnUsage, Elapsed: time.Since(turnStart), Rounds: round}, err
+		}
+
+		// Accumulate usage.
+		turnUsage.InputTokens += resp.Usage.InputTokens
+		turnUsage.OutputTokens += resp.Usage.OutputTokens
+
+		slog.Info("chat api call",
+			"workspace", e.workspaceName,
+			"turn", e.turnID,
+			"round", round,
+			"input_tokens", resp.Usage.InputTokens,
+			"output_tokens", resp.Usage.OutputTokens,
+			"stop_reason", resp.StopReason)
+		e.appendAPICallEvent(resp.Usage, round)
+
+		// --- 3b. Extract text and tool calls ---
+		var textParts []string
+		var toolCalls []chat.ToolCall
+		for _, block := range resp.Content {
+			switch block.Type {
+			case "text":
+				textParts = append(textParts, block.Text)
+			case "tool_use":
+				toolCalls = append(toolCalls, chat.ToolCall{
+					ID:    block.ToolUseID,
+					Name:  block.ToolUseName,
+					Input: block.ToolUseInput,
+				})
 			}
-			fmt.Fprintf(os.Stderr, "[debug]   [%d] %s: %q\n", i, m.Role, preview)
+		}
+		assistantText := strings.Join(textParts, "")
+
+		// --- 3c. No tool calls — turn is done ---
+		if resp.StopReason == "end_turn" || len(toolCalls) == 0 {
+			finalText = assistantText
+			now := time.Now()
+			auditMsgs = append(auditMsgs, chat.Message{
+				Role:    chat.RoleAssistant,
+				Content: assistantText,
+				Profile: e.profileName,
+				Time:    now,
+			})
+			break
+		}
+
+		// --- 3d. Tool calls — record intermediate assistant, execute, loop ---
+		now := time.Now()
+		assistantMsg := chat.Message{
+			Role:      chat.RoleAssistant,
+			Content:   assistantText,
+			Profile:   e.profileName,
+			Time:      now,
+			ToolCalls: toolCalls,
+		}
+		auditMsgs = append(auditMsgs, assistantMsg)
+		workingMsgs = append(workingMsgs, assistantMsg)
+
+		// Execute tool calls concurrently.
+		results := e.parallelExec(ctx, toolCalls, cb)
+
+		// Record results and append to working list.
+		for i, call := range toolCalls {
+			resultMsg := chat.Message{
+				Role:       chat.RoleToolResult,
+				Content:    results[i].content,
+				ToolCallID: call.ID,
+				Time:       time.Now(),
+			}
+			auditMsgs = append(auditMsgs, resultMsg)
+			workingMsgs = append(workingMsgs, resultMsg)
+		}
+
+		// --- 3e. Cap check ---
+		if round >= maxToolRounds {
+			slog.Info("tool cap hit", "workspace", e.workspaceName, "turn", e.turnID, "round", round)
+			e.appendToolCapEvent()
+			// Inject nudge so the model answers with what it has.
+			workingMsgs = append(workingMsgs, chat.Message{
+				Role:    chat.RoleUser,
+				Content: prompt.CapHitNudge,
+			})
+			// Allow one more round (the loop will send the nudge and the
+			// model should respond with end_turn).
 		}
 	}
 
-	start := time.Now()
-	var (
-		response string
-		usage    chat.Usage
-		err      error
-	)
-	if opts.NoStream || onDelta == nil {
-		response, usage, err = e.prov.Chat(ctx, e.systemPrompt, allMsgs)
-	} else {
-		response, usage, err = e.prov.ChatStream(ctx, e.systemPrompt, allMsgs, onDelta)
-	}
-	elapsed := time.Since(start)
+	elapsed := time.Since(turnStart)
 
-	if err != nil {
-		return ChatResult{Usage: usage, Elapsed: elapsed}, err
-	}
-
+	// --- 4. Persist to history ---
 	if !opts.SkipHistory {
-		logTs := time.Now()
-		e.history.Append(chat.RoleUser, prompt)
-		e.history.AppendAssistant(response, e.profileName, logTs)
-		if saveErr := e.st.SaveHistory(e.history); saveErr != nil {
-			fmt.Fprintf(io.Discard, "save history: %v", saveErr)
+		for _, msg := range auditMsgs {
+			e.history.Msgs = append(e.history.Msgs, msg)
 		}
-		e.appendChatEvent(usage, logTs)
+		if saveErr := e.st.SaveHistory(e.history); saveErr != nil {
+			slog.Warn("save history failed", "err", saveErr)
+		}
 	}
 
+	// --- 5. Log turn complete ---
+	costUSD := e.cfg.CalcCost(e.profile.Model, turnUsage.InputTokens, turnUsage.OutputTokens)
+	slog.Info("chat turn complete",
+		"workspace", e.workspaceName,
+		"turn", e.turnID,
+		"rounds", round,
+		"input_tokens", turnUsage.InputTokens,
+		"output_tokens", turnUsage.OutputTokens,
+		"cost_usd", fmt.Sprintf("%.6f", costUSD),
+		"elapsed", elapsed)
+	e.appendTurnCompleteEvent(turnUsage, round, elapsed)
+
+	// --- 6. Update session accounting ---
 	e.mu.Lock()
-	e.sessionIn += usage.InputTokens
-	e.sessionOut += usage.OutputTokens
+	e.sessionIn += turnUsage.InputTokens
+	e.sessionOut += turnUsage.OutputTokens
 	e.mu.Unlock()
 
-	return ChatResult{Usage: usage, Elapsed: elapsed}, nil
+	_ = finalText // response text is in history; callers read it from there
+
+	return ChatResult{Usage: turnUsage, Elapsed: elapsed, Rounds: round}, nil
+}
+
+// toolResult holds the output of a single tool execution.
+type toolResult struct {
+	content string
+	elapsed time.Duration
+}
+
+// parallelExec runs all tool calls concurrently, returns results in call order.
+func (e *Engine) parallelExec(ctx context.Context, calls []chat.ToolCall, cb ChatCallbacks) []toolResult {
+	results := make([]toolResult, len(calls))
+	var wg sync.WaitGroup
+	for i, call := range calls {
+		wg.Add(1)
+		go func(i int, call chat.ToolCall) {
+			defer wg.Done()
+			start := time.Now()
+			content, err := execTool(ctx, e.cfg, e.workspaceName, call)
+			if err != nil {
+				content = "Tool error: " + err.Error()
+			}
+			el := time.Since(start)
+			results[i] = toolResult{content: content, elapsed: el}
+
+			slog.Info("tool result",
+				"tool", call.Name,
+				"size", len(content),
+				"elapsed", el)
+
+			if cb.OnToolDone != nil {
+				cb.OnToolDone(call.Name)
+			}
+		}(i, call)
+	}
+	wg.Wait()
+	return results
+}
+
+// execTool delegates to the tools package for execution.
+func execTool(ctx context.Context, cfg config.Config, workspaceName string, call chat.ToolCall) (string, error) {
+	return tools.ExecTool(ctx, cfg, workspaceName, call)
+}
+
+// refreshCorpusMap checks the corpus map fingerprint and rebuilds if changed.
+func (e *Engine) refreshCorpusMap() error {
+	fp, err := corpusmap.ComputeFingerprint(e.cfg, e.workspaceName)
+	if err != nil {
+		return err
+	}
+	if fp == e.mapFingerprint {
+		return nil
+	}
+	cm, err := corpusmap.Build(e.cfg, e.workspaceName, e.wsDescription, 0)
+	if err != nil {
+		return err
+	}
+	e.corpusMap = cm
+	e.mapFingerprint = cm.Fingerprint
+	e.systemPrompt = prompt.AssembleSystemPrompt(e.persona, e.groundingMode, cm.Text)
+	slog.Info("corpus map rebuilt", "workspace", e.workspaceName, "articles", cm.Articles)
+	return nil
+}
+
+// SetGroundingMode changes the grounding mode for this session.
+func (e *Engine) SetGroundingMode(mode string) error {
+	if !prompt.ValidMode(mode) {
+		return fmt.Errorf("unknown grounding mode: %q (valid: corpus-only, corpus-first, open)", mode)
+	}
+	e.groundingMode = mode
+	e.systemPrompt = prompt.AssembleSystemPrompt(e.persona, e.groundingMode, e.corpusMap.Text)
+	e.tools = toolSet(mode)
+	slog.Info("grounding mode changed", "mode", mode)
+	return nil
+}
+
+// GroundingMode returns the current grounding mode.
+func (e *Engine) GroundingMode() string { return e.groundingMode }
+
+// ForceMapRebuild forces a corpus map rebuild regardless of fingerprint.
+func (e *Engine) ForceMapRebuild() error {
+	cm, err := corpusmap.Build(e.cfg, e.workspaceName, e.wsDescription, 0)
+	if err != nil {
+		return err
+	}
+	e.corpusMap = cm
+	e.mapFingerprint = cm.Fingerprint
+	e.systemPrompt = prompt.AssembleSystemPrompt(e.persona, e.groundingMode, cm.Text)
+	slog.Info("corpus map force rebuilt", "workspace", e.workspaceName, "articles", cm.Articles)
+	return nil
+}
+
+// toolSet returns tool definitions filtered by grounding mode.
+func toolSet(mode string) []chat.ToolDef {
+	return tools.ToolSet(mode)
+}
+
+// saveRequestSnapshot writes the effective request to disk for debugging.
+func (e *Engine) saveRequestSnapshot(msgs []chat.Message) {
+	type snapshot struct {
+		Timestamp     time.Time      `json:"timestamp"`
+		GroundingMode string         `json:"grounding_mode"`
+		SystemPrompt  string         `json:"system_prompt"`
+		Tools         []chat.ToolDef `json:"tools"`
+		Messages      []chat.Message `json:"messages"`
+	}
+	s := snapshot{
+		Timestamp:     time.Now().UTC(),
+		GroundingMode: e.groundingMode,
+		SystemPrompt:  e.systemPrompt,
+		Tools:         e.tools,
+		Messages:      msgs,
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return
+	}
+	chatDir := filepath.Join(e.cfg.DataRoot, "workspaces", e.workspaceName, "chat")
+	_ = os.MkdirAll(chatDir, 0755)
+	_ = os.WriteFile(filepath.Join(chatDir, "request-effective-history.json"), data, 0644)
 }
 
 // ClearHistory resets history (in memory and on disk).
@@ -304,15 +577,7 @@ func (e *Engine) buildStrategy(opts ChatOptions) strategy.ContextStrategy {
 	return strategy.New(name, budget, e.systemPrompt, e.chatCfg.MaxUserMessages)
 }
 
-// chatEventRecord is the JSON structure written to events.jsonl for chat turns.
-type chatEventRecord struct {
-	TS            time.Time    `json:"ts"`
-	Type          string       `json:"type"`
-	WorkspaceName string       `json:"workspace_name"`
-	Profile       string       `json:"profile"`
-	Model         string       `json:"model"`
-	Cost          chatCostInfo `json:"cost"`
-}
+// --- Event logging ---
 
 type chatCostInfo struct {
 	InputTokens  int     `json:"input_tokens"`
@@ -320,21 +585,8 @@ type chatCostInfo struct {
 	CostUSD      float64 `json:"cost_usd,omitempty"`
 }
 
-func (e *Engine) appendChatEvent(u chat.Usage, ts time.Time) {
-	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens)
-	ev := chatEventRecord{
-		TS:            ts.UTC(),
-		Type:          "chat",
-		WorkspaceName: e.workspaceName,
-		Profile:       e.profileName,
-		Model:         e.profile.Model,
-		Cost: chatCostInfo{
-			InputTokens:  u.InputTokens,
-			OutputTokens: u.OutputTokens,
-			CostUSD:      costUSD,
-		},
-	}
-	data, err := json.Marshal(ev)
+func (e *Engine) appendEvent(v any) {
+	data, err := json.Marshal(v)
 	if err != nil {
 		return
 	}
@@ -344,4 +596,77 @@ func (e *Engine) appendChatEvent(u chat.Usage, ts time.Time) {
 	}
 	defer f.Close()
 	_, _ = f.Write(append(data, '\n'))
+}
+
+// appendAPICallEvent logs a single API call within a turn.
+func (e *Engine) appendAPICallEvent(u chat.Usage, round int) {
+	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens)
+	e.appendEvent(struct {
+		TS            time.Time    `json:"ts"`
+		Type          string       `json:"type"`
+		WorkspaceName string       `json:"workspace_name"`
+		TurnID        int          `json:"turn_id"`
+		Round         int          `json:"round"`
+		Profile       string       `json:"profile"`
+		Model         string       `json:"model"`
+		Cost          chatCostInfo `json:"cost"`
+	}{
+		TS:            time.Now().UTC(),
+		Type:          "chat_api_call",
+		WorkspaceName: e.workspaceName,
+		TurnID:        e.turnID,
+		Round:         round,
+		Profile:       e.profileName,
+		Model:         e.profile.Model,
+		Cost: chatCostInfo{
+			InputTokens:  u.InputTokens,
+			OutputTokens: u.OutputTokens,
+			CostUSD:      costUSD,
+		},
+	})
+}
+
+// appendTurnCompleteEvent logs the completion of an entire turn (all rounds).
+func (e *Engine) appendTurnCompleteEvent(u chat.Usage, rounds int, elapsed time.Duration) {
+	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens)
+	e.appendEvent(struct {
+		TS            time.Time    `json:"ts"`
+		Type          string       `json:"type"`
+		WorkspaceName string       `json:"workspace_name"`
+		TurnID        int          `json:"turn_id"`
+		Rounds        int          `json:"rounds"`
+		Profile       string       `json:"profile"`
+		Model         string       `json:"model"`
+		Cost          chatCostInfo `json:"cost"`
+		ElapsedMs     int64        `json:"elapsed_ms"`
+	}{
+		TS:            time.Now().UTC(),
+		Type:          "chat_turn_complete",
+		WorkspaceName: e.workspaceName,
+		TurnID:        e.turnID,
+		Rounds:        rounds,
+		Profile:       e.profileName,
+		Model:         e.profile.Model,
+		Cost: chatCostInfo{
+			InputTokens:  u.InputTokens,
+			OutputTokens: u.OutputTokens,
+			CostUSD:      costUSD,
+		},
+		ElapsedMs: elapsed.Milliseconds(),
+	})
+}
+
+// appendToolCapEvent logs when the tool-round cap is hit.
+func (e *Engine) appendToolCapEvent() {
+	e.appendEvent(struct {
+		TS            time.Time `json:"ts"`
+		Type          string    `json:"type"`
+		WorkspaceName string    `json:"workspace_name"`
+		TurnID        int       `json:"turn_id"`
+	}{
+		TS:            time.Now().UTC(),
+		Type:          "chat_tool_cap_hit",
+		WorkspaceName: e.workspaceName,
+		TurnID:        e.turnID,
+	})
 }

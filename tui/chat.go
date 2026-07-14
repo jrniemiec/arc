@@ -44,15 +44,15 @@ func (m *Model) loadChatHistoryCmd(workspaceName string, focus bool) tea.Cmd {
 		history, err := st.LoadHistory()
 
 		chatCfg, _ := storefs.ReadChatConfig(cfg.DataRoot, workspaceName)
-		ragMode := chatCfg.RAGMode
-		if ragMode == "" {
-			ragMode = "open"
+		groundingMode := chatCfg.GroundingMode
+		if groundingMode == "" {
+			groundingMode = "corpus-first"
 		}
 
 		if err != nil {
-			return chatHistoryLoadedMsg{workspace: workspaceName, err: err.Error(), focus: focus, articleCount: articleCount, ragMode: ragMode}
+			return chatHistoryLoadedMsg{workspace: workspaceName, err: err.Error(), focus: focus, articleCount: articleCount, groundingMode: groundingMode}
 		}
-		return chatHistoryLoadedMsg{workspace: workspaceName, msgs: history.Msgs, focus: focus, articleCount: articleCount, ragMode: ragMode}
+		return chatHistoryLoadedMsg{workspace: workspaceName, msgs: history.Msgs, focus: focus, articleCount: articleCount, groundingMode: groundingMode}
 	}
 }
 
@@ -68,21 +68,32 @@ func (m *Model) startChatCmd(workspaceName string) tea.Cmd {
 	}
 }
 
-// sendChatMsg sends the user prompt to the engine with streaming deltas.
+// sendChatMsg sends the user prompt to the engine with streaming deltas
+// and tool activity callbacks.
 func (m *Model) sendChatMsg(prompt string) tea.Cmd {
 	eng := m.chatEngine
 	ctx, cancel := context.WithCancel(context.Background())
 	m.chatCancelStream = cancel
 	m.chatStreaming = true
 	m.chatStreamBuf = ""
+	m.chatActivityLine = ""
 	shared := &streamBuf{}
 	m.chatSharedBuf = shared
 
 	return func() tea.Msg {
-		result, err := eng.Chat(ctx, prompt, chatengine.ChatOptions{}, func(delta string) error {
-			shared.Append(delta)
-			return nil
-		})
+		cb := chatengine.ChatCallbacks{
+			OnTextDelta: func(delta string) error {
+				shared.Append(delta)
+				return nil
+			},
+			OnToolStart: func(toolName string) {
+				shared.SetActivity("→ " + toolName)
+			},
+			OnToolDone: func(toolName string) {
+				shared.SetActivity("")
+			},
+		}
+		result, err := eng.ChatWithTools(ctx, prompt, chatengine.ChatOptions{}, cb)
 		if err != nil {
 			return chatStreamDoneMsg{usage: result.Usage, elapsed: result.Elapsed, err: err.Error()}
 		}
@@ -335,6 +346,11 @@ func (m *Model) rebuildChatLines(width int) {
 		case chat.RoleUser:
 			appendUser(msg.Content)
 		case chat.RoleAssistant:
+			// Skip intermediate assistant messages (those with tool calls) —
+			// only render the final answer.
+			if len(msg.ToolCalls) > 0 {
+				continue
+			}
 			mdLines := m.appendMarkdown(msg.Content, width)
 			// Trim leading/trailing blank lines from rendered markdown.
 			for len(mdLines) > 0 && mdLines[0].role == chatLineBlank {
@@ -347,6 +363,8 @@ func (m *Model) rebuildChatLines(width int) {
 			prevHadContent = len(mdLines) > 0
 		case chat.RoleNote:
 			appendNote(msg.Content)
+		default:
+			// Unknown roles (e.g. tool-result) — skip silently.
 		}
 	}
 
@@ -444,6 +462,12 @@ func (m *Model) chatBoxInfos() []chatBoxInfo {
 				ts = msg.Time.Format("Jan 2, 2006 · 15:04")
 			}
 			infos = append(infos, chatBoxInfo{role: chatLineNote, ts: ts, msgStart: i, msgEnd: i + 1})
+		default:
+			// Unknown roles (e.g. tool-result, intermediate assistant) —
+			// absorbed into the preceding user box's range.
+			if len(infos) > 0 && infos[len(infos)-1].role == chatLineUser {
+				infos[len(infos)-1].msgEnd = i + 1
+			}
 		}
 	}
 	return infos
@@ -726,8 +750,8 @@ func (m Model) renderChatPane(height, width int) []string {
 	header := fgBold(t.ContentTitle, m.chatWorkspace)
 	if m.chatEngine != nil {
 		header += fg(t.ContentDimmed, "  ·  "+m.chatEngine.Profile().Model)
-		if m.chatRagMode != "" {
-			header += fg(t.ContentDimmed, "  ·  mode: "+m.chatRagMode)
+		if m.chatGroundingMode != "" {
+			header += fg(t.ContentDimmed, "  ·  mode: "+m.chatGroundingMode)
 		}
 	}
 	header += fg(t.ContentDimmed, fmt.Sprintf("  ·  %d msgs", msgCount))
@@ -931,7 +955,9 @@ func (m Model) renderChatStatusLine() string {
 		left = renderWaveIndicator(m.spinnerFrame, m.populateLabel, t.StreamingText, t.Dimmed)
 	} else if m.chatStreaming {
 		streamLabel := "streaming"
-		if m.chatEngine != nil {
+		if m.chatActivityLine != "" {
+			streamLabel = m.chatActivityLine
+		} else if m.chatEngine != nil {
 			streamLabel += " · " + m.chatEngine.Profile().Model
 		}
 		left = renderWaveIndicator(m.spinnerFrame, streamLabel, t.StreamingText, t.Dimmed)
@@ -1091,11 +1117,35 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		return m.chatSave(arg)
 
 	case "/reload":
-		m.chatEngine = nil
-		m.statusMsg = "✓ engine reset — will reinitialise on next message"
+		if m.chatEngine != nil {
+			if err := m.chatEngine.ForceMapRebuild(); err != nil {
+				m.statusMsg = "✗ " + err.Error()
+			} else {
+				m.statusMsg = "✓ corpus map rebuilt"
+			}
+		} else {
+			m.statusMsg = "✓ engine not initialized — will build on next message"
+		}
 		if m.svc != nil {
 			m.workspacesLoaded = false
 			return loadWorkspaces(m.svc)
+		}
+		return nil
+
+	case "/mode":
+		if m.chatEngine == nil {
+			m.statusMsg = "✗ send a message first to initialise the engine"
+			return nil
+		}
+		if fullArg == "" {
+			m.statusMsg = fmt.Sprintf("current mode: %s  (options: corpus-only, corpus-first, open)", m.chatEngine.GroundingMode())
+			return nil
+		}
+		if err := m.chatEngine.SetGroundingMode(fullArg); err != nil {
+			m.statusMsg = "✗ " + err.Error()
+		} else {
+			m.chatGroundingMode = fullArg
+			m.statusMsg = "✓ mode set to " + fullArg
 		}
 		return nil
 
@@ -1285,6 +1335,8 @@ func (m *Model) formatChatMarkdown(msgs []chat.Message) string {
 			sb.WriteString("**You:** " + msg.Content + "\n\n")
 		case chat.RoleAssistant:
 			sb.WriteString("**Assistant:** " + msg.Content + "\n\n")
+		default:
+			// Unknown roles (e.g. tool-result) — skip in export.
 		}
 	}
 	return sb.String()
@@ -1352,7 +1404,8 @@ func (m *Model) exitChatMode() {
 	m.chatLastElapsed = 0
 	m.chatPendingPrompt = ""
 	m.chatArticleCount = 0
-	m.chatRagMode = ""
+	m.chatGroundingMode = ""
+	m.chatActivityLine = ""
 	m.chatBoxCursor = 0
 	m.chatCollapsed = nil
 	m.closeScratch()

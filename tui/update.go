@@ -64,6 +64,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.chatMode && m.chatStreaming {
 			if m.chatSharedBuf != nil {
 				m.chatStreamBuf = m.chatSharedBuf.Get()
+				m.chatActivityLine = m.chatSharedBuf.GetActivity()
 			}
 			m.rebuildChatLines(m.chatBuildWidth())
 			chatViewH := m.height - 6 - m.completionCount() - 2
@@ -482,7 +483,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatWorkspace = msg.workspace
 			m.chatRawMsgs = msg.msgs
 			m.chatArticleCount = msg.articleCount
-			m.chatRagMode = msg.ragMode
+			m.chatGroundingMode = msg.groundingMode
 			m.chatAutoScroll = true
 			m.chatStreaming = false
 			m.chatStreamBuf = ""
@@ -511,6 +512,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.chatMode && m.chatWorkspace == msg.workspace {
 			// Only apply if user hasn't navigated away.
 			m.chatEngine = msg.engine
+			m.chatGroundingMode = msg.engine.GroundingMode()
 			// Sync raw msgs from engine history.
 			m.chatRawMsgs = msg.engine.History().Msgs
 			m.rebuildChatLines(m.chatBuildWidth())
@@ -527,6 +529,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatStreaming = false
 		m.chatStreamBuf = ""
 		m.chatSharedBuf = nil
+		m.chatActivityLine = ""
 		if m.chatCancelStream != nil {
 			m.chatCancelStream = nil
 		}
