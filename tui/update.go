@@ -448,6 +448,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.chatTTSText = ""
+		// Drain preview paragraph-block queue.
+		if len(m.previewTTSQueue) > 0 && m.previewOpen {
+			next := m.previewTTSQueue[0]
+			m.previewTTSQueue = m.previewTTSQueue[1:]
+			m.previewLineCursor = next.cursorLine
+			m.previewTTSText = next.text
+			viewH := m.previewViewH()
+			m.scrollPreviewToCursor(viewH)
+			text := tts.Strip(m.previewTTSText)
+			playFn := m.ttsPlayer.Play(text)
+			m.ttsGen = m.ttsPlayer.Gen()
+			m.ttsCurrentText = text
+			cmds = append(cmds, func() tea.Msg {
+				done := playFn()
+				return ttsDoneMsg{err: done.Err, gen: done.Gen}
+			})
+			break
+		}
+		m.previewTTSText = ""
 		m.statusMsg = ""
 
 	case shellDoneMsg:
@@ -5032,13 +5051,13 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 		// Scratch/AskX/Preview pane wheel (bottom of content pane).
 		if msg.X > m.dividerCol() && (m.scratchOpen || m.askxOpen || m.previewOpen) {
-			mainH := m.height - 6 - m.completionCount()
-			splitH := mainH / 3
-			if splitH < 3 {
-				splitH = 3
-			}
-			splitStartRow := topBarHeight + (mainH - splitH)
+			splitStartRow := m.splitPaneStartRow()
 			if msg.Y >= splitStartRow {
+				mainH := m.mainAreaHeight()
+				splitH := mainH / 3
+				if splitH < 3 {
+					splitH = 3
+				}
 				viewH := splitH - 1
 				if m.scratchOpen {
 					m.scratchScroll += delta
@@ -5205,12 +5224,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Check if click is in the scratch or askX region.
 			splitOpen := m.scratchOpen || m.askxOpen || m.previewOpen
 			if splitOpen {
-				mainH := m.height - 6 - m.completionCount()
-				splitH := mainH / 3
-				if splitH < 3 {
-					splitH = 3
-				}
-				splitStartRow := topBarHeight + (mainH - splitH)
+				splitStartRow := m.splitPaneStartRow()
 				if msg.Y >= splitStartRow {
 					if m.scratchOpen {
 						m.scratchFocused = true
@@ -6406,6 +6420,83 @@ func (m *Model) cmdChatTTSAdjustRate(delta int) tea.Cmd {
 	m.ttsPlayer.Stop()
 
 	text := tts.Strip(m.chatTTSText)
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// ── Preview TTS ─────────────────────────────────────────────────────────────
+
+// cmdPreviewTTS plays or stops TTS for the preview pane, using the same
+// paragraph-block queue as the resource overlay.
+func (m *Model) cmdPreviewTTS() tea.Cmd {
+	if m.ttsPlayer.Playing() {
+		m.stopTTS()
+		m.statusMsg = ""
+		return nil
+	}
+
+	blocks := buildResourceTTSBlocks(m.previewLines, m.previewLineCursor)
+	if len(blocks) == 0 {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	m.previewLineCursor = blocks[0].cursorLine
+	m.previewTTSText = blocks[0].text
+	m.previewTTSQueue = blocks[1:]
+
+	viewH := m.previewViewH()
+	m.scrollPreviewToCursor(viewH)
+
+	text := tts.Strip(m.previewTTSText)
+	m.ttsCurrentText = text
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.statusMsg = ""
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// scrollPreviewToCursor adjusts m.previewScroll so that m.previewLineCursor is visible.
+func (m *Model) scrollPreviewToCursor(viewH int) {
+	if m.previewLineCursor < m.previewScroll {
+		m.previewScroll = m.previewLineCursor
+	} else if m.previewLineCursor >= m.previewScroll+viewH {
+		m.previewScroll = m.previewLineCursor - viewH + 1
+	}
+}
+
+// cmdPreviewTTSAdjustRate changes the TTS rate and restarts playback of the
+// current preview block only. No-op if not playing.
+func (m *Model) cmdPreviewTTSAdjustRate(delta int) tea.Cmd {
+	if !m.ttsPlayer.Playing() || m.previewTTSText == "" {
+		return nil
+	}
+
+	newRate := m.cfg.TTSRate + delta
+	if m.cfg.TTSRate == 0 {
+		newRate = 200 + delta
+	}
+	if newRate < 80 {
+		newRate = 80
+	}
+	if newRate > 500 {
+		newRate = 500
+	}
+	m.cfg.TTSRate = newRate
+	m.ttsPlayer.SetRate(newRate)
+	m.ttsPlayer.Stop()
+
+	text := tts.Strip(m.previewTTSText)
 	playFn := m.ttsPlayer.Play(text)
 	m.ttsGen = m.ttsPlayer.Gen()
 	m.ttsCurrentText = text

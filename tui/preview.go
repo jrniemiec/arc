@@ -15,9 +15,19 @@ import (
 
 // ── Toggle & lifecycle ──────────────────────────────────────────────────────
 
-// togglePreview toggles the preview pane (Ctrl+O). Workspace-only.
+// togglePreview cycles the preview pane state (Ctrl+O). Workspace-only.
+//   - Closed              → open and focus
+//   - Open, not focused   → focus
+//   - Open, focused       → close
 func (m *Model) togglePreview() {
 	if m.previewOpen {
+		if !m.previewFocused {
+			// Already open but unfocused — just focus it.
+			m.previewFocused = true
+			m.focus = paneContent
+			return
+		}
+		// Open and focused — close.
 		m.closePreview()
 		return
 	}
@@ -34,6 +44,8 @@ func (m *Model) togglePreview() {
 		m.clearAskXInput()
 	}
 	m.previewOpen = true
+	m.previewFocused = true
+	m.focus = paneContent
 	m.updatePreviewContent()
 }
 
@@ -42,6 +54,7 @@ func (m *Model) closePreview() {
 	m.previewOpen = false
 	m.previewFocused = false
 	m.previewScroll = 0
+	m.previewLineCursor = 0
 	m.previewLines = nil
 	m.previewTitle = ""
 	m.previewLastSlug = ""
@@ -126,6 +139,7 @@ func (m *Model) loadPreviewArticle(row *wsRow) {
 		m.previewLastSlug = row.slug
 		m.previewLastResource = ""
 		m.previewScroll = 0
+		m.previewLineCursor = 0
 		return
 	}
 
@@ -159,6 +173,7 @@ func (m *Model) loadPreviewArticle(row *wsRow) {
 	m.previewLastSlug = row.slug
 	m.previewLastResource = ""
 	m.previewScroll = 0
+	m.previewLineCursor = 0
 }
 
 // loadPreviewFile loads a workspace resource or outcome file into the preview pane.
@@ -189,6 +204,7 @@ func (m *Model) loadPreviewFile(row *wsRow) {
 		m.previewLastResource = filename
 		m.previewLastSlug = ""
 		m.previewScroll = 0
+		m.previewLineCursor = 0
 		return
 	}
 
@@ -203,6 +219,7 @@ func (m *Model) loadPreviewFile(row *wsRow) {
 		m.previewLastResource = filename
 		m.previewLastSlug = ""
 		m.previewScroll = 0
+		m.previewLineCursor = 0
 		return
 	}
 
@@ -216,6 +233,7 @@ func (m *Model) loadPreviewFile(row *wsRow) {
 	m.previewLastResource = filename
 	m.previewLastSlug = ""
 	m.previewScroll = 0
+	m.previewLineCursor = 0
 }
 
 // ── Rendering ───────────────────────────────────────────────────────────────
@@ -231,7 +249,7 @@ func (m Model) renderPreviewPane(height, width int) []string {
 		title = "Preview"
 	}
 	label := " " + title + " "
-	hints := " V view "
+	hints := " s speak · V view "
 	sepLen := width - len([]rune(label)) - len([]rune(hints))
 	if sepLen < 0 {
 		sepLen = 0
@@ -268,7 +286,11 @@ func (m Model) renderPreviewPane(height, width int) []string {
 		end = total
 	}
 	for i := start; i < end; i++ {
-		lines = append(lines, dl[i])
+		if i == m.previewLineCursor {
+			lines = append(lines, fgBold(t.InputPrompt, "▶ ")+fg(t.TopBarText, dl[i]))
+		} else {
+			lines = append(lines, fg(t.Dimmed, "  ")+fg(t.ChatAssistant, dl[i]))
+		}
 	}
 
 	for len(lines) < height {
@@ -279,7 +301,7 @@ func (m Model) renderPreviewPane(height, width int) []string {
 
 // previewViewH returns the usable height for preview content (excluding header).
 func (m *Model) previewViewH() int {
-	mainH := m.height - 6 - m.completionCount()
+	mainH := m.mainAreaHeight()
 	h := mainH / 3
 	if h < 3 {
 		h = 3
@@ -295,42 +317,46 @@ func (m *Model) handlePreviewKey(msg tea.KeyMsg) tea.Cmd {
 	total := len(m.previewLines)
 
 	switch {
+	case msg.Type == tea.KeyRunes && msg.String() == "g", key.Matches(msg, keys.Home):
+		m.previewLineCursor = 0
+		m.previewScroll = 0
+	case msg.Type == tea.KeyRunes && msg.String() == "G", key.Matches(msg, keys.End):
+		if total > 0 {
+			m.previewLineCursor = total - 1
+		}
+		m.scrollPreviewToCursor(viewH)
 	case key.Matches(msg, keys.NavUp):
-		if m.previewScroll > 0 {
-			m.previewScroll--
+		if m.previewLineCursor > 0 {
+			m.previewLineCursor--
+			m.scrollPreviewToCursor(viewH)
 		}
 	case key.Matches(msg, keys.NavDown):
-		maxScroll := total - viewH
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if m.previewScroll < maxScroll {
-			m.previewScroll++
+		if m.previewLineCursor < total-1 {
+			m.previewLineCursor++
+			m.scrollPreviewToCursor(viewH)
 		}
 	case key.Matches(msg, keys.PageUp):
-		m.previewScroll -= viewH
-		if m.previewScroll < 0 {
-			m.previewScroll = 0
+		step := viewH / 2
+		m.previewLineCursor -= step
+		if m.previewLineCursor < 0 {
+			m.previewLineCursor = 0
 		}
+		m.scrollPreviewToCursor(viewH)
 	case key.Matches(msg, keys.PageDown):
-		m.previewScroll += viewH
-		maxScroll := total - viewH
-		if maxScroll < 0 {
-			maxScroll = 0
+		step := viewH / 2
+		m.previewLineCursor += step
+		if m.previewLineCursor >= total {
+			m.previewLineCursor = total - 1
 		}
-		if m.previewScroll > maxScroll {
-			m.previewScroll = maxScroll
-		}
-	case key.Matches(msg, keys.Home):
-		m.previewScroll = 0
-	case key.Matches(msg, keys.End):
-		maxScroll := total - viewH
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		m.previewScroll = maxScroll
+		m.scrollPreviewToCursor(viewH)
 	case key.Matches(msg, keys.Back):
 		m.previewFocused = false
+	case msg.Type == tea.KeyRunes && msg.String() == "s":
+		return m.cmdPreviewTTS()
+	case msg.Type == tea.KeyRunes && msg.String() == "[":
+		return m.cmdPreviewTTSAdjustRate(-20)
+	case msg.Type == tea.KeyRunes && msg.String() == "]":
+		return m.cmdPreviewTTSAdjustRate(20)
 	}
 	return nil
 }

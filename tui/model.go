@@ -462,6 +462,9 @@ type Model struct {
 	chatTTSQueue     []resourceTTSBlock // paragraph blocks still to be spoken in chat
 	chatTTSCursor    int                // absolute index into chatDisplayLines for the current TTS block
 	chatTTSBoxIdx    int                // box index being spoken (for cursor highlight)
+	previewTTSText   string             // text of the preview block currently playing (for speed-change restart)
+	previewTTSQueue  []resourceTTSBlock // paragraph blocks still to be spoken in preview
+	previewLineCursor int               // persistent highlighted line index in previewLines (advances during TTS)
 }
 
 // cmdCompletion is one entry in the command completion popup.
@@ -1004,6 +1007,8 @@ func (m *Model) stopTTS() {
 	m.chatTTSText = ""
 	m.chatTTSQueue = nil
 	m.chatTTSCursor = 0
+	m.previewTTSText = ""
+	m.previewTTSQueue = nil
 }
 
 func (m *Model) setStatusError(msg string) {
@@ -1046,6 +1051,54 @@ func (m *Model) completionCount() int {
 		return len(m.paramItems)
 	}
 	return len(m.statusLines)
+}
+
+// visibleCompletionCount returns the number of completion/status lines
+// actually rendered, capped at the visible maximum — mirroring renderCompletionLines.
+// Use this for layout calculations that must match the rendered output.
+func (m Model) visibleCompletionCount() int {
+	if len(m.cmdComplete) > 0 {
+		return len(m.cmdComplete)
+	}
+	if len(m.paramItems) > 0 {
+		return len(m.paramItems)
+	}
+	if len(m.statusLines) > 0 {
+		maxVisible := m.height * 30 / 100
+		if maxVisible < 3 {
+			maxVisible = 3
+		}
+		n := len(m.statusLines)
+		if n > maxVisible {
+			n = maxVisible
+		}
+		return n
+	}
+	return 0
+}
+
+// mainAreaHeight returns the height of the main content area in rows,
+// matching the View() calculation exactly. Use this for mouse hit-testing.
+func (m Model) mainAreaHeight() int {
+	inputH := m.inputVisualHeight()
+	compH := m.visibleCompletionCount()
+	editH := len(m.reviewDetailLines())
+	h := m.height - 5 - inputH - compH - editH
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+// splitPaneStartRow returns the first screen row (0-indexed) of the
+// scratch/askX/preview split pane. Only valid when a split pane is open.
+func (m Model) splitPaneStartRow() int {
+	mainH := m.mainAreaHeight()
+	splitH := mainH / 3
+	if splitH < 3 {
+		splitH = 3
+	}
+	return topBarHeight + (mainH - splitH)
 }
 
 // New creates the initial Model.
