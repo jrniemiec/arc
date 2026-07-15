@@ -426,6 +426,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.contentTTSText = ""
+		// Drain chat paragraph-block queue.
+		if len(m.chatTTSQueue) > 0 && m.focus == paneContent && m.chatMode {
+			next := m.chatTTSQueue[0]
+			m.chatTTSQueue = m.chatTTSQueue[1:]
+			m.chatTTSCursor = next.cursorLine
+			m.chatTTSText = next.text
+			viewH := m.height - 4
+			if viewH < 1 {
+				viewH = 1
+			}
+			m.scrollToChatTTSLine(viewH)
+			text := tts.Strip(m.chatTTSText)
+			playFn := m.ttsPlayer.Play(text)
+			m.ttsGen = m.ttsPlayer.Gen()
+			m.ttsCurrentText = text
+			cmds = append(cmds, func() tea.Msg {
+				done := playFn()
+				return ttsDoneMsg{err: done.Err, gen: done.Gen}
+			})
+			break
+		}
+		m.chatTTSText = ""
 		m.statusMsg = ""
 
 	case shellDoneMsg:
@@ -6242,53 +6264,92 @@ func correctionResolveAPIKey(provider string) string {
 // ── TTS ─────────────────────────────────────────────────────────────────────
 
 // cmdChatTTS plays or stops TTS for the selected chat box.
-// First press extracts the assistant text from the selected exchange and speaks it.
-// Second press while playing stops playback.
+// Uses the same paragraph-block queue as the resource overlay: each block is
+// spoken in turn, the line cursor advances with playback, and rate changes
+// restart only the current block.
 func (m *Model) cmdChatTTS() tea.Cmd {
 	// Toggle: if already playing, stop.
 	if m.ttsPlayer.Playing() {
 		m.stopTTS()
+		m.chatAutoScroll = false
 		m.statusMsg = ""
 		return nil
 	}
 
-	// Extract text from the selected chat box.
+	// Guard: refuse on the actively-streaming box.
 	infos := m.chatBoxInfos()
 	if m.chatBoxCursor < 0 || m.chatBoxCursor >= len(infos) {
 		m.statusMsg = "nothing to speak"
 		return nil
 	}
-	info := infos[m.chatBoxCursor]
+	if m.chatStreaming && m.chatBoxCursor == len(infos)-1 {
+		m.statusMsg = "cannot speak while streaming"
+		return nil
+	}
 
-	// Collect message content from the exchange.
-	var parts []string
-	{
-		msgs := m.chatRawMsgs
-		if m.chatEngine != nil {
-			msgs = m.chatEngine.History().Msgs
-		}
-		for i := info.msgStart; i < info.msgEnd && i < len(msgs); i++ {
-			content := strings.TrimSpace(msgs[i].Content)
-			if content != "" {
-				parts = append(parts, content)
+	// Find this box's line range in chatDisplayLines (same logic as buildChatVLines).
+	dl := m.chatDisplayLines
+	type boxBound struct{ start, end int }
+	var bounds []boxBound
+	for i, cl := range dl {
+		if cl.role == chatLineUser && (i == 0 || dl[i-1].role != chatLineUser) {
+			bounds = append(bounds, boxBound{i, len(dl)})
+			if len(bounds) > 1 {
+				bounds[len(bounds)-2].end = i
+			}
+		} else if cl.role == chatLineNote && (i == 0 || dl[i-1].role != chatLineNote) {
+			bounds = append(bounds, boxBound{i, len(dl)})
+			if len(bounds) > 1 {
+				bounds[len(bounds)-2].end = i
 			}
 		}
 	}
-	if len(parts) == 0 {
+	if m.chatBoxCursor >= len(bounds) {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+	b := bounds[m.chatBoxCursor]
+	// Trim trailing blank lines.
+	trimEnd := b.end
+	for trimEnd > b.start && dl[trimEnd-1].role == chatLineBlank {
+		trimEnd--
+	}
+
+	// Extract plain text from the box's display lines.
+	boxLines := make([]string, trimEnd-b.start)
+	for i := b.start; i < trimEnd; i++ {
+		boxLines[i-b.start] = dl[i].text
+	}
+
+	blocks := buildResourceTTSBlocks(boxLines, 0)
+	if len(blocks) == 0 {
 		m.statusMsg = "nothing to speak"
 		return nil
 	}
 
-	text := tts.Strip(strings.Join(parts, "\n\n"))
-	if text == "" {
-		m.statusMsg = "nothing to speak (stripped)"
-		return nil
+	// Offset cursorLine values from box-relative to absolute chatDisplayLines index.
+	base := b.start
+	for i := range blocks {
+		blocks[i].cursorLine += base
 	}
 
-	m.statusMsg = ""
+	m.chatTTSBoxIdx = m.chatBoxCursor
+	m.chatTTSCursor = blocks[0].cursorLine
+	m.chatTTSText = blocks[0].text
+	m.chatTTSQueue = blocks[1:]
+	m.chatAutoScroll = false
+
+	viewH := m.height - 4
+	if viewH < 1 {
+		viewH = 1
+	}
+	m.scrollToChatTTSLine(viewH)
+
+	text := tts.Strip(m.chatTTSText)
 	m.ttsCurrentText = text
 	playFn := m.ttsPlayer.Play(text)
 	m.ttsGen = m.ttsPlayer.Gen()
+	m.statusMsg = ""
 
 	return func() tea.Msg {
 		done := playFn()
@@ -6296,14 +6357,40 @@ func (m *Model) cmdChatTTS() tea.Cmd {
 	}
 }
 
-// cmdChatTTSAdjustRate changes the TTS rate by delta wpm (e.g. -20 or +20)
-// and restarts playback from the current text. No-op if not playing.
+// scrollToChatTTSLine adjusts m.chatScroll so that the current TTS cursor line
+// (m.chatTTSCursor, an absolute index into chatDisplayLines) is visible.
+func (m *Model) scrollToChatTTSLine(viewH int) {
+	vlines := m.buildChatVLines()
+	if vlines == nil {
+		// Flat mode: chatScroll is an offset into chatDisplayLines.
+		if m.chatTTSCursor < m.chatScroll {
+			m.chatScroll = m.chatTTSCursor
+		} else if m.chatTTSCursor >= m.chatScroll+viewH {
+			m.chatScroll = m.chatTTSCursor - viewH + 1
+		}
+		return
+	}
+	// Boxed mode: chatScroll is an offset into vlines.
+	// Find the vline whose contentIdx matches m.chatTTSCursor.
+	for vi, vl := range vlines {
+		if vl.contentIdx == m.chatTTSCursor {
+			if vi < m.chatScroll {
+				m.chatScroll = vi
+			} else if vi >= m.chatScroll+viewH {
+				m.chatScroll = vi - viewH + 1
+			}
+			return
+		}
+	}
+}
+
+// cmdChatTTSAdjustRate changes the TTS rate and restarts playback of the
+// current chat block only. No-op if not playing.
 func (m *Model) cmdChatTTSAdjustRate(delta int) tea.Cmd {
-	if !m.ttsPlayer.Playing() || m.ttsCurrentText == "" {
+	if !m.ttsPlayer.Playing() || m.chatTTSText == "" {
 		return nil
 	}
 
-	// Clamp rate to 80–500 wpm.
 	newRate := m.cfg.TTSRate + delta
 	if m.cfg.TTSRate == 0 {
 		newRate = 200 + delta
@@ -6316,13 +6403,12 @@ func (m *Model) cmdChatTTSAdjustRate(delta int) tea.Cmd {
 	}
 	m.cfg.TTSRate = newRate
 	m.ttsPlayer.SetRate(newRate)
-
-	// Kill current playback and restart with new rate.
 	m.ttsPlayer.Stop()
 
-	text := m.ttsCurrentText
+	text := tts.Strip(m.chatTTSText)
 	playFn := m.ttsPlayer.Play(text)
 	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
 
 	return func() tea.Msg {
 		done := playFn()

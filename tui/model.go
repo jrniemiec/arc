@@ -458,6 +458,10 @@ type Model struct {
 	resourceTTSQueue []resourceTTSBlock // paragraph blocks still to be spoken
 	contentTTSText   string             // text of the content block currently playing
 	contentTTSQueue  []resourceTTSBlock // paragraph blocks for content pane TTS
+	chatTTSText      string             // text of the chat block currently playing (for speed-change restart)
+	chatTTSQueue     []resourceTTSBlock // paragraph blocks still to be spoken in chat
+	chatTTSCursor    int                // absolute index into chatDisplayLines for the current TTS block
+	chatTTSBoxIdx    int                // box index being spoken (for cursor highlight)
 }
 
 // cmdCompletion is one entry in the command completion popup.
@@ -997,6 +1001,9 @@ func (m *Model) stopTTS() {
 	m.resourceTTSQueue = nil
 	m.contentTTSText = ""
 	m.contentTTSQueue = nil
+	m.chatTTSText = ""
+	m.chatTTSQueue = nil
+	m.chatTTSCursor = 0
 }
 
 func (m *Model) setStatusError(msg string) {

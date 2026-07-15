@@ -907,7 +907,7 @@ func (m Model) renderChatPane(height, width int) []string {
 					}
 					var hintsStr string
 					if vl.isCommented {
-						hintsStr = "# uncomment · " + expandHint + " · x delete"
+						hintsStr = "# uncomment · " + expandHint + " · s speak · x delete"
 					} else {
 						hintsStr = "# comment · " + expandHint + " · s speak · x delete"
 					}
@@ -972,9 +972,19 @@ func (m Model) renderChatPane(height, width int) []string {
 						lines = append(lines, borderL+strings.Repeat(" ", innerW)+borderR)
 						continue
 					}
+					// TTS cursor highlight: ▶ on the current playback line.
+					isTTSLine := m.ttsPlayer.Playing() &&
+						vl.boxIdx == m.chatTTSBoxIdx &&
+						vl.contentIdx == m.chatTTSCursor
 					budget := innerW
 					if cl.role == chatLineQuote {
 						budget = innerW - 2
+						if budget < 2 {
+							budget = 2
+						}
+					}
+					if isTTSLine {
+						budget -= 2
 						if budget < 2 {
 							budget = 2
 						}
@@ -995,6 +1005,9 @@ func (m Model) renderChatPane(height, width int) []string {
 						colored = fg(t.ContentDimmed, text)
 					} else {
 						colored = colorChatLine(chatLine{role: cl.role, text: text}, t)
+					}
+					if isTTSLine {
+						colored = fgBold(t.InputPrompt, "▶ ") + colored
 					}
 					lines = append(lines, borderL+colored+borderR)
 				}
@@ -1043,7 +1056,7 @@ func (m Model) renderChatStatusLine() string {
 		if rate <= 0 {
 			rate = 200
 		}
-		label := fmt.Sprintf("♪ #%d  say  %d wpm  [ slower  ] faster", m.chatBoxCursor+1, rate)
+		label := fmt.Sprintf("♪ chat entry #%d  say  %d wpm  [ slower  ] faster", m.chatBoxCursor+1, rate)
 		left = renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
 	} else if m.populateRunning {
 		left = renderWaveIndicator(m.spinnerFrame, m.populateLabel, t.StreamingText, t.Dimmed)
