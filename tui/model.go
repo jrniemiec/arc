@@ -315,8 +315,9 @@ type Model struct {
 	workspacesErr     string
 
 	// Content pane — single concatenated document: Flash → Summary → Body → Cards
-	contentScroll   int
-	contentLines    []string        // all sections joined
+	contentScroll     int
+	contentLineCursor int      // persistent highlighted line index in contentLines (advances during TTS)
+	contentLines      []string // all sections joined
 	contentOffsets  [ctCount]int    // line index where each section starts (-1 = absent)
 	contentHas      [ctCount]bool   // which sections exist
 	contentFiles    store.Files

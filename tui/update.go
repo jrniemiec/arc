@@ -413,7 +413,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.contentTTSQueue) > 0 && m.focus == paneContent && !m.chatMode {
 			next := m.contentTTSQueue[0]
 			m.contentTTSQueue = m.contentTTSQueue[1:]
-			m.contentScroll = next.cursorLine
+			m.contentLineCursor = next.cursorLine
+			viewH := m.contentViewHeight()
+			m.scrollContentToCursor(viewH)
 			m.contentTTSText = next.text
 			text := tts.Strip(m.contentTTSText)
 			playFn := m.ttsPlayer.Play(text)
@@ -508,6 +510,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.contentOffsets = msg.offsets
 		m.contentHas = msg.has
 		m.contentScroll = 0
+		m.contentLineCursor = 0
 		m.contentLoading = false
 
 	case chatHistoryLoadedMsg:
@@ -1811,41 +1814,42 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	if m.chatMode {
 		return m.handleChatContentKey(msg)
 	}
+	total := len(m.contentLines)
+	viewH := m.contentViewHeight()
+
 	switch {
+	case msg.Type == tea.KeyRunes && msg.String() == "g", key.Matches(msg, keys.Home):
+		m.contentLineCursor = 0
+		m.contentScroll = 0
+	case msg.Type == tea.KeyRunes && msg.String() == "G", key.Matches(msg, keys.End):
+		if total > 0 {
+			m.contentLineCursor = total - 1
+		}
+		m.scrollContentToCursor(viewH)
 	case key.Matches(msg, keys.NavUp):
-		if m.contentScroll > 0 {
-			m.contentScroll--
+		if m.contentLineCursor > 0 {
+			m.contentLineCursor--
+			m.scrollContentToCursor(viewH)
 		}
 	case key.Matches(msg, keys.NavDown):
-		maxScroll := len(m.contentLines) - m.contentViewHeight()
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		if m.contentScroll < maxScroll {
-			m.contentScroll++
+		if m.contentLineCursor < total-1 {
+			m.contentLineCursor++
+			m.scrollContentToCursor(viewH)
 		}
 	case key.Matches(msg, keys.PageUp):
-		m.contentScroll -= m.contentViewHeight()
-		if m.contentScroll < 0 {
-			m.contentScroll = 0
+		step := viewH / 2
+		m.contentLineCursor -= step
+		if m.contentLineCursor < 0 {
+			m.contentLineCursor = 0
 		}
+		m.scrollContentToCursor(viewH)
 	case key.Matches(msg, keys.PageDown):
-		maxScroll := len(m.contentLines) - m.contentViewHeight()
-		if maxScroll < 0 {
-			maxScroll = 0
+		step := viewH / 2
+		m.contentLineCursor += step
+		if m.contentLineCursor >= total {
+			m.contentLineCursor = total - 1
 		}
-		m.contentScroll += m.contentViewHeight()
-		if m.contentScroll > maxScroll {
-			m.contentScroll = maxScroll
-		}
-	case key.Matches(msg, keys.Home):
-		m.contentScroll = 0
-	case key.Matches(msg, keys.End):
-		maxScroll := len(m.contentLines) - m.contentViewHeight()
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		m.contentScroll = maxScroll
+		m.scrollContentToCursor(viewH)
 	case key.Matches(msg, keys.ContentTabNext):
 		return m.cycleContentTab(1)
 	case key.Matches(msg, keys.ContentTabPrev):
@@ -2426,6 +2430,7 @@ func (m *Model) cycleContentTab(delta int) tea.Cmd {
 	next := present[(idx+delta+len(present))%len(present)]
 	if m.contentOffsets[next] >= 0 {
 		m.contentScroll = m.contentOffsets[next]
+		m.contentLineCursor = m.contentOffsets[next]
 	}
 	return nil
 }
@@ -2438,6 +2443,7 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 	}
 	m.contentLoading = true
 	m.contentLines = nil
+	m.contentLineCursor = 0
 	return loadContent(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
 }
 
@@ -6635,14 +6641,16 @@ func (m *Model) cmdContentTTS() tea.Cmd {
 		return nil
 	}
 
-	blocks := buildResourceTTSBlocks(m.contentLines, m.contentScroll)
+	blocks := buildResourceTTSBlocks(m.contentLines, m.contentLineCursor)
 	if len(blocks) == 0 {
 		m.statusMsg = "nothing to speak"
 		return nil
 	}
 
 	m.contentTTSQueue = blocks[1:]
-	m.contentScroll = blocks[0].cursorLine
+	m.contentLineCursor = blocks[0].cursorLine
+	viewH := m.contentViewHeight()
+	m.scrollContentToCursor(viewH)
 	m.contentTTSText = blocks[0].text
 
 	text := tts.Strip(m.contentTTSText)
@@ -6653,6 +6661,15 @@ func (m *Model) cmdContentTTS() tea.Cmd {
 	return func() tea.Msg {
 		done := playFn()
 		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// scrollContentToCursor adjusts m.contentScroll so that m.contentLineCursor is visible.
+func (m *Model) scrollContentToCursor(viewH int) {
+	if m.contentLineCursor < m.contentScroll {
+		m.contentScroll = m.contentLineCursor
+	} else if m.contentLineCursor >= m.contentScroll+viewH {
+		m.contentScroll = m.contentLineCursor - viewH + 1
 	}
 }
 

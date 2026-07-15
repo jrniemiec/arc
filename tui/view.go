@@ -1270,18 +1270,26 @@ func (m Model) renderContentLibrary(height, width int) []string {
 		lines = append(lines, fg(t.ContentDimmed, "(not available — use  arc reprocess  to generate)"))
 	} else {
 		// Render from contentScroll (logical lines), wrapping each line to width.
+		// All lines get a 2-char prefix: "▶ " for the cursor line, "  " otherwise.
 		// Stop when viewH visual rows are consumed.
 		visual := 0
 		for i := m.contentScroll; i < len(m.contentLines) && visual < viewH; i++ {
-			wrapped := wordWrap(m.contentLines[i], width-1)
+			wrapped := wordWrap(m.contentLines[i], width-3)
 			if len(wrapped) == 0 {
 				wrapped = []string{""}
 			}
-			for _, wl := range wrapped {
+			isCursor := i == m.contentLineCursor
+			for wi, wl := range wrapped {
 				if visual >= viewH {
 					break
 				}
-				lines = append(lines, fg(t.ContentText, wl))
+				if isCursor && wi == 0 {
+					lines = append(lines, fgBold(t.InputPrompt, "▶ ")+fg(t.TopBarText, wl))
+				} else if isCursor {
+					lines = append(lines, "  "+fg(t.TopBarText, wl))
+				} else {
+					lines = append(lines, fg(t.Dimmed, "  ")+fg(t.ContentText, wl))
+				}
 				visual++
 			}
 		}
@@ -1290,9 +1298,9 @@ func (m Model) renderContentLibrary(height, width int) []string {
 			pct := 0
 			maxScroll := len(m.contentLines) - 1
 			if maxScroll > 0 {
-				pct = m.contentScroll * 100 / maxScroll
+				pct = m.contentLineCursor * 100 / maxScroll
 			}
-			indicator := fmt.Sprintf(" line %d/%d (%d%%)", m.contentScroll+1, len(m.contentLines), pct)
+			indicator := fmt.Sprintf(" line %d/%d (%d%%)", m.contentLineCursor+1, len(m.contentLines), pct)
 			lines = append(lines, fg(t.ContentDimmed, indicator))
 		}
 	}
@@ -1303,8 +1311,8 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	return lines[:height]
 }
 
-// renderContentTabs renders the [Flash] [Summary] [Body] [Cards] tab strip.
-// The active tab is derived from scroll position via activeSection().
+// renderContentTabs renders the [Flash] [Summary] [Body] [Cards] tab strip
+// with a right-aligned "s speak" hint when the content pane is focused.
 func (m Model) renderContentTabs(width int) string {
 	t := ActiveTheme
 	var parts []string
@@ -1320,7 +1328,15 @@ func (m Model) renderContentTabs(width int) string {
 			parts = append(parts, fg(t.Dimmed, label))
 		}
 	}
-	return strings.Join(parts, " ")
+	tabStr := strings.Join(parts, " ")
+	if m.focus == paneContent && !m.chatMode && len(m.contentLines) > 0 {
+		hint := fg(t.Dimmed, " s speak ")
+		gap := width - lipgloss.Width(tabStr) - lipgloss.Width(hint)
+		if gap > 0 {
+			tabStr += strings.Repeat(" ", gap) + hint
+		}
+	}
+	return tabStr
 }
 
 // renderContentCollection renders collection metadata in the content pane.
