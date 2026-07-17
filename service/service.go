@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1169,7 +1170,7 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 	}
 
 	// Cost from events.jsonl
-	costTotal, costMonth, costByModel := s.aggregateCosts()
+	costToday, costWeek, costMonth, costTotal, costByModel := s.aggregateCosts()
 
 	return Stats{
 		TotalArticles:        len(articles),
@@ -1178,6 +1179,8 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		Unread:               unread,
 		Unplayed:             unplayed,
 		EmbedCoverage:        embedCoverage,
+		CostToday:            costToday,
+		CostThisWeek:         costWeek,
 		CostThisMonth:        costMonth,
 		CostTotal:            costTotal,
 		CostByModel:          costByModel,
@@ -1537,43 +1540,90 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 	}, nil
 }
 
-// aggregateCosts reads events.jsonl and sums up costs.
-// Returns total, thisMonth, and a per-model USD breakdown.
-func (s *Service) aggregateCosts() (total, thisMonth float64, byModel map[string]float64) {
+// aggregateCosts reads events.jsonl and sums up costs across all event types
+// (ingest pipeline events and chat turn events).
+// Returns today, thisWeek, thisMonth, total, and a per-model USD breakdown.
+func (s *Service) aggregateCosts() (today, thisWeek, thisMonth, total float64, byModel map[string]float64) {
 	byModel = make(map[string]float64)
 	data, err := os.ReadFile(s.cfg.EventsPath)
 	if err != nil {
-		return 0, 0, byModel
+		return
 	}
 
 	now := time.Now()
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	weekStart := now.AddDate(0, 0, -7)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+
+	// chatEvent is a minimal struct to extract cost from chat_api_call / chat_turn_complete events.
+	type chatCost struct {
+		CostUSD float64 `json:"cost_usd"`
+		Model   string  `json:"model"`
+	}
+	type chatEvent struct {
+		TS    time.Time `json:"ts"`
+		Type  string    `json:"type"`
+		Model string    `json:"model"`
+		Cost  *chatCost `json:"cost"`
+	}
 
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
+
+		// Try ingest event first (has store.CostRecord under "cost").
 		var e store.Event
-		if err := parseEventLine(line, &e); err != nil {
-			continue
-		}
-		if e.Cost == nil {
-			continue
-		}
-		total += e.Cost.TotalUSD
-		if e.TS.After(monthStart) {
-			thisMonth += e.Cost.TotalUSD
-		}
-		// Accumulate per-model costs across all operation types
-		for _, entry := range []store.CostEntry{e.Cost.Summary, e.Cost.Flash, e.Cost.Flashcards} {
-			if entry.Model != "" {
-				byModel[entry.Model] += entry.USD
+		if err := parseEventLine(line, &e); err == nil && e.Cost != nil {
+			usd := e.Cost.TotalUSD
+			total += usd
+			if e.TS.After(todayStart) {
+				today += usd
 			}
+			if e.TS.After(weekStart) {
+				thisWeek += usd
+			}
+			if e.TS.After(monthStart) {
+				thisMonth += usd
+			}
+			for _, entry := range []store.CostEntry{e.Cost.Summary, e.Cost.Flash, e.Cost.Flashcards} {
+				if entry.Model != "" {
+					byModel[entry.Model] += entry.USD
+				}
+			}
+			if e.Cost.Embed.Model != "" {
+				byModel[e.Cost.Embed.Model] += e.Cost.Embed.USD
+			}
+			continue
 		}
-		if e.Cost.Embed.Model != "" {
-			byModel[e.Cost.Embed.Model] += e.Cost.Embed.USD
+
+		// Try chat event (chat_api_call, chat_turn_complete, askx_call).
+		var ce chatEvent
+		if err := json.Unmarshal([]byte(line), &ce); err != nil {
+			continue
+		}
+		if ce.Cost == nil || ce.Cost.CostUSD == 0 {
+			continue
+		}
+		// Only count turn_complete to avoid double-counting (api_call is per-round).
+		if ce.Type != "chat_turn_complete" && ce.Type != "askx_call" {
+			continue
+		}
+		usd := ce.Cost.CostUSD
+		total += usd
+		if ce.TS.After(todayStart) {
+			today += usd
+		}
+		if ce.TS.After(weekStart) {
+			thisWeek += usd
+		}
+		if ce.TS.After(monthStart) {
+			thisMonth += usd
+		}
+		if ce.Model != "" {
+			byModel[ce.Model] += usd
 		}
 	}
-	return total, thisMonth, byModel
+	return
 }

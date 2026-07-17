@@ -598,9 +598,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		chatViewH := m.chatViewHeight()
 		m.chatAutoScrollToBottom(chatViewH)
+		if msg.err == "" {
+			cmds = append(cmds, loadStats(m.svc))
+		}
 
 	case askxStreamDoneMsg:
 		m.handleAskXStreamDone(msg)
+		if msg.costUSD > 0 {
+			cmds = append(cmds, loadStats(m.svc))
+		}
 
 	case tea.KeyMsg:
 		cmds = append(cmds, m.handleKey(msg))
@@ -3720,7 +3726,23 @@ func (m *Model) cmdStats() tea.Cmd {
 	s := m.stats
 	lines := []string{
 		fmt.Sprintf("articles: %d  ·  unread: %d  ·  collections: %d", s.TotalArticles, s.Unread, s.TotalCollections),
-		fmt.Sprintf("cost this month: %s  ·  total: %s", formatUSD(s.CostThisMonth), formatUSD(s.CostTotal)),
+		fmt.Sprintf("cost: today %s  ·  7d %s  ·  30d %s  ·  total %s",
+			formatUSD(s.CostToday), formatUSD(s.CostThisWeek), formatUSD(s.CostThisMonth), formatUSD(s.CostTotal)),
+	}
+	// Per-model spend, sorted descending, skipping zero.
+	type modelCost struct {
+		model string
+		usd   float64
+	}
+	var mc []modelCost
+	for model, usd := range s.CostByModel {
+		if usd > 0 {
+			mc = append(mc, modelCost{model, usd})
+		}
+	}
+	sort.Slice(mc, func(i, j int) bool { return mc[i].usd > mc[j].usd })
+	for _, entry := range mc {
+		lines = append(lines, fmt.Sprintf("  %-40s %s", entry.model, formatUSD(entry.usd)))
 	}
 	m.setStatusLines(lines)
 	return nil

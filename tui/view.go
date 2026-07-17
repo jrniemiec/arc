@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -270,7 +271,7 @@ func (m Model) View() string {
 	return strings.Join(out, "\n")
 }
 
-// renderTabBar renders the top tab bar line.
+// renderTabBar renders the top tab bar line with cost summary right-aligned.
 func (m Model) renderTabBar() string {
 	t := ActiveTheme
 	var parts []string
@@ -285,7 +286,25 @@ func (m Model) renderTabBar() string {
 			parts = append(parts, fg(t.Dimmed, "  "))
 		}
 	}
-	return strings.Join(parts, "")
+	left := strings.Join(parts, "")
+	leftW := lipgloss.Width(left)
+
+	// Cost summary — only shown when there's been spend.
+	if m.statsLoaded && m.stats.CostTotal > 0 {
+		costStr := fmt.Sprintf("Cost: today %s · 7d %s · 30d %s · ∑ %s ",
+			formatUSD(m.stats.CostToday),
+			formatUSD(m.stats.CostThisWeek),
+			formatUSD(m.stats.CostThisMonth),
+			formatUSD(m.stats.CostTotal),
+		)
+		costRendered := fg(t.ContentDimmed, costStr)
+		costW := lipgloss.Width(costStr)
+		pad := m.width - leftW - costW
+		if pad > 0 {
+			return left + strings.Repeat(" ", pad) + costRendered
+		}
+	}
+	return left
 }
 
 // tabBarHitTest returns the tab index at column x in the tab bar, or -1 if none.
@@ -1514,8 +1533,40 @@ func (m Model) renderContentStats(height, width int) []string {
 		lines = append(lines, row("Collections", fmt.Sprintf("%d", s.TotalCollections)))
 		lines = append(lines, row("With embedding", fmt.Sprintf("%d", s.EmbedCoverage)))
 		lines = append(lines, "")
-		lines = append(lines, row("Cost this month", formatUSD(s.CostThisMonth)))
+		lines = append(lines, row("Cost today", formatUSD(s.CostToday)))
+		lines = append(lines, row("Cost 7d", formatUSD(s.CostThisWeek)))
+		lines = append(lines, row("Cost 30d", formatUSD(s.CostThisMonth)))
 		lines = append(lines, row("Cost total", formatUSD(s.CostTotal)))
+
+		// Per-model spend, sorted descending, skipping zero.
+		type modelCost struct {
+			model string
+			usd   float64
+		}
+		var mc []modelCost
+		for model, usd := range s.CostByModel {
+			if usd > 0 {
+				mc = append(mc, modelCost{model, usd})
+			}
+		}
+		sort.Slice(mc, func(i, j int) bool { return mc[i].usd > mc[j].usd })
+		if len(mc) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, fg(t.ContentDimmed, "  Spend by model"))
+			// Compute column width from longest model name.
+			maxModelW := 0
+			for _, entry := range mc {
+				if len(entry.model) > maxModelW {
+					maxModelW = len(entry.model)
+				}
+			}
+			modelRow := func(model, val string) string {
+				return fg(t.ContentDimmed, fmt.Sprintf("    %-*s", maxModelW+2, model)) + fg(t.ContentText, val)
+			}
+			for _, entry := range mc {
+				lines = append(lines, modelRow(entry.model, formatUSD(entry.usd)))
+			}
+		}
 	}
 
 	for len(lines) < height {

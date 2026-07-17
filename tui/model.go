@@ -659,6 +659,7 @@ type chatStreamDoneMsg struct {
 type askxStreamDoneMsg struct {
 	fullText string // complete response text
 	err      string
+	costUSD  float64
 }
 
 // correctionDoneMsg is returned by doCorrection when the LLM call completes.

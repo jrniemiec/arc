@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -407,15 +408,49 @@ func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 			{Role: llm.RoleUser, Content: prompt},
 		}
 
-		fullText, _, err := prov.ChatStream(ctx, systemPrompt, msgs, func(delta string) error {
+		fullText, usage, err := prov.ChatStream(ctx, systemPrompt, msgs, func(delta string) error {
 			shared.Append(delta)
 			return nil
 		})
 		if err != nil {
 			return askxStreamDoneMsg{err: fmt.Sprintf("askX: %v", err), fullText: fullText}
 		}
-		return askxStreamDoneMsg{fullText: fullText}
+		costUSD := cfg.CalcCost(prof.Model, usage.InputTokens, usage.OutputTokens)
+		appendAskXEvent(cfg.EventsPath, prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
+		return askxStreamDoneMsg{fullText: fullText, costUSD: costUSD}
 	}
+}
+
+// appendAskXEvent writes a cost event for an AskX call to events.jsonl.
+func appendAskXEvent(eventsPath, model string, inputTokens, outputTokens int, costUSD float64) {
+	type askxCost struct {
+		CostUSD float64 `json:"cost_usd,omitempty"`
+		Model   string  `json:"model"`
+	}
+	ev := struct {
+		TS    time.Time `json:"ts"`
+		Type  string    `json:"type"`
+		Model string    `json:"model"`
+		Cost  askxCost  `json:"cost"`
+	}{
+		TS:    time.Now().UTC(),
+		Type:  "askx_call",
+		Model: model,
+		Cost: askxCost{
+			CostUSD: costUSD,
+			Model:   model,
+		},
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
 }
 
 // handleAskXStreamDone processes the completion of an askX streaming response.

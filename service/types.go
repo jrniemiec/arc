@@ -232,6 +232,8 @@ type Stats struct {
 	Unread           int
 	Unplayed         int
 	EmbedCoverage    int // articles with an embedding
+	CostToday        float64
+	CostThisWeek     float64
 	CostThisMonth    float64
 	CostTotal        float64
 
