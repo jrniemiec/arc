@@ -86,9 +86,6 @@ const (
 	paneResource                 // full-screen resource file overlay
 )
 
-// Tab rotation order: Nav → Content → Command → TabBar → Nav
-var nextPane = [4]focusPane{paneNav, paneContent, paneCommand, paneTabBar}
-var prevPane = [4]focusPane{paneCommand, paneTabBar, paneNav, paneContent}
 
 // contentTab identifies the active sub-tab in the content pane.
 type contentTab int
@@ -1085,6 +1082,30 @@ func (m Model) mainAreaHeight() int {
 	compH := m.visibleCompletionCount()
 	editH := len(m.reviewDetailLines())
 	h := m.height - 5 - inputH - compH - editH
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+// chatViewHeight returns the number of visible lines in the chat content area.
+// Accounts for the split pane (askX/preview/scratch) taking 1/3 of the height
+// when open. The chat header (workspace title + separator) occupies 2 lines.
+func (m Model) chatViewHeight() int {
+	mainH := m.mainAreaHeight()
+	contentH := mainH
+	if m.scratchOpen || m.askxOpen || m.previewOpen {
+		splitH := mainH / 3
+		if splitH < 3 {
+			splitH = 3
+		}
+		contentH = mainH - splitH
+		if contentH < 3 {
+			contentH = 3
+		}
+	}
+	const chatHeaderLines = 2 // workspace title + separator
+	h := contentH - chatHeaderLines
 	if h < 1 {
 		h = 1
 	}

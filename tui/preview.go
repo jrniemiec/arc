@@ -45,6 +45,10 @@ func (m *Model) togglePreview() {
 	}
 	m.previewOpen = true
 	m.previewFocused = true
+	if m.chatMode {
+		// Force scroll to bottom; render will clamp to the reduced viewport.
+		m.chatScroll = m.chatTotalLines()
+	}
 	m.focus = paneContent
 	m.updatePreviewContent()
 }

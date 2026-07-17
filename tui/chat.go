@@ -1069,7 +1069,7 @@ func (m Model) renderChatStatusLine() string {
 		}
 		left = renderWaveIndicator(m.spinnerFrame, streamLabel, t.StreamingText, t.Dimmed)
 	} else if m.statusMsg != "" {
-		if m.statusErr {
+		if m.statusErr || strings.HasPrefix(m.statusMsg, "✗") {
 			left = fgBold(t.StatusError, " "+m.statusMsg)
 		} else {
 			left = fg(t.StatusText, " "+m.statusMsg)

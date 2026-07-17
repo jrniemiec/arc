@@ -39,6 +39,9 @@ func (m *Model) toggleAskX() {
 	m.askxOpen = true
 	m.loadAskXHistory()
 	m.rebuildAskXLines()
+	if m.chatMode {
+		m.chatScroll = m.chatTotalLines()
+	}
 	m.focus = paneCommand
 	m.cursorVisible = true
 	m.input.SetValue("/AskX ")

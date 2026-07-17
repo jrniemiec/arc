@@ -68,7 +68,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatActivityLine = m.chatSharedBuf.GetActivity()
 			}
 			m.rebuildChatLines(m.chatBuildWidth())
-			chatViewH := m.height - 6 - m.completionCount() - 2
+			chatViewH := m.chatViewHeight()
 			m.chatAutoScrollToBottom(chatViewH)
 		}
 		if m.askxStreaming && m.askxSharedBuf != nil {
@@ -541,7 +541,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.rebuildChatLines(m.chatBuildWidth())
 			m.collapseAllBoxes()
-			chatViewH := m.height - 6 - m.completionCount() - 2
+			chatViewH := m.chatViewHeight()
 			m.chatAutoScrollToBottom(chatViewH)
 			m.chatBoxCursor = 0
 			m.statusMsg = ""
@@ -596,7 +596,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatBoxCursor = n - 1
 			}
 		}
-		chatViewH := m.height - 6 - m.completionCount() - 2
+		chatViewH := m.chatViewHeight()
 		m.chatAutoScrollToBottom(chatViewH)
 
 	case askxStreamDoneMsg:
@@ -751,10 +751,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.acceptCompletion()
 			return nil
 		}
-		m.setFocusPane(nextPane[m.focus])
+		// Tab toggles Nav ↔ Content; from anywhere else, go to Nav.
+		if m.focus == paneNav {
+			m.setFocusPane(paneContent)
+		} else {
+			m.setFocusPane(paneNav)
+		}
 		return nil
 	case key.Matches(msg, keys.PanePrev):
-		m.setFocusPane(prevPane[m.focus])
+		// Shift+Tab always jumps to Nav.
+		m.setFocusPane(paneNav)
 		return nil
 	}
 
@@ -788,7 +794,10 @@ func (m *Model) setFocusPane(p focusPane) {
 	if m.chatMode {
 		m.rebuildChatLines(m.chatBuildWidth())
 		if p == paneContent {
-			m.chatBoxCursor = 0
+			if n := m.chatBoxCount(); n > 0 {
+				m.chatBoxCursor = n - 1
+			}
+			m.chatScroll = m.chatTotalLines()
 		}
 	}
 }
@@ -1875,7 +1884,7 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 // j/k navigate between boxes; v/x/s act on the selected box.
 // PgUp/PgDn/Home/End scroll the view.
 func (m *Model) handleChatContentKey(msg tea.KeyMsg) tea.Cmd {
-	chatViewH := m.height - 6 - m.completionCount() - 2
+	chatViewH := m.chatViewHeight()
 	if chatViewH < 1 {
 		chatViewH = 1
 	}
@@ -2102,7 +2111,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case tea.KeyPgUp:
 		if m.chatMode {
-			chatViewH := m.height - 6 - m.completionCount() - 2
+			chatViewH := m.chatViewHeight()
 			if chatViewH < 1 {
 				chatViewH = 1
 			}
@@ -2114,7 +2123,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case tea.KeyPgDown:
 		if m.chatMode {
-			chatViewH := m.height - 6 - m.completionCount() - 2
+			chatViewH := m.chatViewHeight()
 			if chatViewH < 1 {
 				chatViewH = 1
 			}
@@ -2995,6 +3004,25 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		return m.cmdDescribeWorkspace(arg)
+
+	case "/mode":
+		if !m.chatMode {
+			m.statusMsg = "✗ /mode is only available in workspace chat"
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "grounding mode: " + m.chatGroundingMode
+			return nil
+		}
+		if m.chatEngine != nil {
+			if err := m.chatEngine.SetGroundingMode(arg); err != nil {
+				m.statusMsg = "✗ " + err.Error()
+				return nil
+			}
+		}
+		m.chatGroundingMode = arg
+		m.statusMsg = "grounding mode → " + arg
+		return nil
 
 	case "/reload":
 		if sub != navSubTabWorkspaces {
@@ -5150,7 +5178,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		// Content pane wheel (right of divider).
 		if msg.X > m.dividerCol() {
 			if m.chatMode {
-				chatViewH := m.height - 6 - m.completionCount() - 2
+				chatViewH := m.chatViewHeight()
 				if chatViewH < 1 {
 					chatViewH = 1
 				}
@@ -5467,6 +5495,9 @@ func (m *Model) cmdScratch(msg string, global bool) tea.Cmd {
 			m.scratchOpen = true
 			m.reloadScratchLines()
 			m.scratchScrollToBottom()
+			if m.chatMode {
+				m.chatScroll = m.chatTotalLines()
+			}
 		}
 		return nil
 	}

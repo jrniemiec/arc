@@ -1854,7 +1854,7 @@ func (m Model) renderStatusLine() string {
 		return fg(t.Accent, truncate(" "+m.navFilter, m.width))
 	}
 	if m.statusMsg != "" {
-		if m.statusErr {
+		if m.statusErr || strings.HasPrefix(m.statusMsg, "✗") {
 			return fgBold(t.StatusError, truncate(" "+m.statusMsg, m.width))
 		}
 		return fg(t.StatusText, truncate(" "+m.statusMsg, m.width))
