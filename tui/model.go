@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	agentpkg "github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/chat"
 	chatengine "github.com/jrniemiec/arc/chat/engine"
 	"github.com/jrniemiec/arc/config"
@@ -131,6 +133,48 @@ func (n navSubTab) String() string {
 		return "Collections"
 	case navSubTabArticles:
 		return "Articles"
+	default:
+		return "?"
+	}
+}
+
+// agentDetailRowKind identifies the type of a row in the agent run detail view.
+type agentDetailRowKind int
+
+const (
+	agentRowHeader    agentDetailRowKind = iota // non-interactive header line
+	agentRowFeed                                // collapsible feed header
+	agentRowArticle                             // article title under an expanded feed
+)
+
+// agentDetailRow is one display row in the agent run detail content pane.
+type agentDetailRow struct {
+	kind      agentDetailRowKind
+	feedIdx   int    // for agentRowFeed and agentRowArticle
+	verdict   string // for agentRowArticle: "ingest" | "maybe" | "skip"
+	title     string // for agentRowArticle
+	feedName  string // for agentRowFeed
+	feedStats string // for agentRowFeed: pre-formatted counts
+}
+
+// agentSubTab identifies the active sub-tab inside the Agent nav pane.
+type agentSubTab int
+
+const (
+	agentSubTabRuns      agentSubTab = iota
+	agentSubTabDecisions agentSubTab = iota
+	agentSubTabFeeds     agentSubTab = iota
+	agentSubTabCount
+)
+
+func (a agentSubTab) String() string {
+	switch a {
+	case agentSubTabRuns:
+		return "Runs"
+	case agentSubTabDecisions:
+		return "Decisions"
+	case agentSubTabFeeds:
+		return "Feeds"
 	default:
 		return "?"
 	}
@@ -284,6 +328,23 @@ type Model struct {
 	navWidthOverride int  // 0 = use proportional; >0 = user-set width
 	dragging         bool // true while dragging the divider
 	dragCol          int  // terminal column of the divider at drag start
+
+	// Agent nav — sub-tab
+	agentSubTab agentSubTab
+
+	// Agent nav — Runs sub-tab
+	agentRuns       []agentpkg.RunRecord
+	agentRunsCursor int
+	agentRunsScroll int
+	agentRunsLoaded bool
+	agentRunsErr    string
+
+	// Agent content — run detail
+	agentRunDecisions   agentpkg.DecisionsFile // decisions for selected run (may be empty)
+	agentRunDecisionsID string                 // run ID that was loaded
+	agentFeedExpanded   map[int]bool           // feed index → expanded
+	agentContentCursor  int                    // highlighted row in run detail
+	agentContentScroll  int                    // scroll offset in run detail
 
 	// Library nav — sub-tab
 	navSubTab navSubTab
@@ -626,6 +687,17 @@ type workspacesLoadedMsg struct {
 	err   string
 }
 
+type agentRunsLoadedMsg struct {
+	runs []agentpkg.RunRecord
+	err  string
+}
+
+type agentDecisionsLoadedMsg struct {
+	runID string
+	df    agentpkg.DecisionsFile
+	err   string
+}
+
 type collectionArticlesLoadedMsg struct {
 	slug   string
 	items  []navItem
@@ -789,6 +861,86 @@ func loadNav(svc *service.Service) tea.Cmd {
 			}
 		}
 		return navLoadedMsg{items: items}
+	}
+}
+
+// buildAgentDetailRows builds the flat row list for the selected run detail view.
+// Returns nil if no run is selected.
+func (m Model) buildAgentDetailRows() []agentDetailRow {
+	if m.agentRunsCursor < 0 || m.agentRunsCursor >= len(m.agentRuns) {
+		return nil
+	}
+	rec := m.agentRuns[m.agentRunsCursor]
+
+	// Build a lookup: feed URL → []ItemDecision from decisions file.
+	itemsByFeed := make(map[string][]agentpkg.ItemDecision)
+	for _, f := range m.agentRunDecisions.Feeds {
+		// Match by feed name (decisions file uses name not URL as key).
+		itemsByFeed[f.Name] = f.Items
+	}
+
+	var rows []agentDetailRow
+	// Non-interactive header rows (summary stats) — not navigable.
+	rows = append(rows, agentDetailRow{kind: agentRowHeader})
+
+	for i, f := range rec.Feeds {
+		name := f.Name
+		if name == "" {
+			name = f.URL
+		}
+		stats := fmt.Sprintf("new:%-3d  in:%-3d  maybe:%-3d  skip:%-3d", f.New, f.Ingest, f.Maybe, f.Skip)
+		if f.CostUSD > 0 {
+			stats += fmt.Sprintf("  $%.3f", f.CostUSD)
+		}
+		rows = append(rows, agentDetailRow{
+			kind:      agentRowFeed,
+			feedIdx:   i,
+			feedName:  name,
+			feedStats: stats,
+		})
+
+		if m.agentFeedExpanded[i] {
+			items := itemsByFeed[name]
+			for _, item := range items {
+				t := item.Title
+				if t == "" {
+					t = item.URL
+				}
+				rows = append(rows, agentDetailRow{
+					kind:    agentRowArticle,
+					feedIdx: i,
+					verdict: item.Verdict,
+					title:   t,
+				})
+			}
+		}
+	}
+	return rows
+}
+
+func loadAgentDecisions(agentPath, runID string) tea.Cmd {
+	return func() tea.Msg {
+		path := filepath.Join(agentPath, "decisions-"+runID+".json")
+		df, err := agentpkg.LoadDecisionsFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// No decisions file for this run — return empty, not an error.
+				return agentDecisionsLoadedMsg{runID: runID}
+			}
+			return agentDecisionsLoadedMsg{runID: runID, err: err.Error()}
+		}
+		return agentDecisionsLoadedMsg{runID: runID, df: df}
+	}
+}
+
+func loadAgentRuns(agentPath string) tea.Cmd {
+	return func() tea.Msg {
+		runsPath := filepath.Join(agentPath, "runs.jsonl")
+		recs, err := agentpkg.LoadRuns(runsPath)
+		if err != nil {
+			return agentRunsLoadedMsg{err: err.Error()}
+		}
+		return agentRunsLoadedMsg{runs: recs}
 	}
 }
 
@@ -1368,6 +1520,7 @@ func (m Model) Init() tea.Cmd {
 			cmds = append(cmds, loadCollectionsTree(m.svc))
 		}
 	}
+	cmds = append(cmds, loadAgentRuns(m.cfg.AgentPath))
 	return tea.Batch(cmds...)
 }
 

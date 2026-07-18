@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -395,7 +396,8 @@ func (m Model) renderNavPane(height int) []string {
 
 	var lines []string
 
-	if m.activeTab == tabLibrary {
+	switch m.activeTab {
+	case tabLibrary:
 		// Sub-tab bar + blank separator, then list content.
 		lines = append(lines, m.renderNavSubTabBar())
 		lines = append(lines, "")
@@ -407,12 +409,22 @@ func (m Model) renderNavPane(height int) []string {
 		case navSubTabWorkspaces:
 			lines = append(lines, m.renderNavWorkspaces(height-2)...)
 		}
-	} else {
-		// Non-Library tabs keep a single label header + content.
+	case tabAgent:
+		// Sub-tab bar + blank separator, then per-sub-tab list.
+		lines = append(lines, m.renderAgentNavSubTabBar())
+		lines = append(lines, "")
+		switch m.agentSubTab {
+		case agentSubTabRuns:
+			lines = append(lines, m.renderNavAgentRuns(height-2)...)
+		case agentSubTabDecisions:
+			lines = append(lines, fg(t.NavDimmed, "  (no decisions)"))
+		case agentSubTabFeeds:
+			lines = append(lines, fg(t.NavDimmed, "  (no feeds)"))
+		}
+	default:
+		// Other tabs keep a single label header.
 		var headerLabel string
 		switch m.activeTab {
-		case tabAgent:
-			headerLabel = "Agents"
 		case tabStats:
 			headerLabel = "Overview"
 		default:
@@ -423,10 +435,7 @@ func (m Model) renderNavPane(height int) []string {
 		} else {
 			lines = append(lines, fg(t.NavDimmed, headerLabel))
 		}
-		switch m.activeTab {
-		case tabAgent:
-			lines = append(lines, fg(t.NavDimmed, "(coming soon)"))
-		case tabStats:
+		if m.activeTab == tabStats {
 			lines = append(lines, fg(t.NavDimmed, "(stats)"))
 		}
 	}
@@ -1047,6 +1056,8 @@ func (m Model) renderContentPane(height, width int) []string {
 		switch m.activeTab {
 		case tabLibrary:
 			lines = m.renderContentLibrary(contentH, width)
+		case tabAgent:
+			lines = m.renderContentAgent(contentH, width)
 		case tabStats:
 			lines = m.renderContentStats(contentH, width)
 		default:
@@ -1514,6 +1525,282 @@ func (m Model) renderContentWorkspace(height, width int) []string {
 	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
 	lines = append(lines, fg(t.ContentDimmed, "arc workspace chat "+ws.name))
 	lines = append(lines, fg(t.Dimmed, strings.Repeat("─", width)))
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
+// renderAgentNavSubTabBar renders the Runs / Decisions / Feeds sub-tab row for the Agent nav pane.
+func (m Model) renderAgentNavSubTabBar() string {
+	t := ActiveTheme
+	w := m.navWidth()
+	var parts []string
+	visibleWidth := 0
+	for i := agentSubTab(0); i < agentSubTabCount; i++ {
+		label := i.String()
+		text := " " + label + " "
+		if i == m.agentSubTab {
+			text = "[" + label + "]"
+		}
+		textWidth := len([]rune(text))
+		if visibleWidth+textWidth > w {
+			break
+		}
+		if i == m.agentSubTab {
+			parts = append(parts, fgBold(t.TabActive, text))
+		} else {
+			parts = append(parts, fg(t.TabInactive, text))
+		}
+		visibleWidth += textWidth
+		if int(i) < int(agentSubTabCount)-1 {
+			sep := "  "
+			if visibleWidth+len(sep) > w {
+				break
+			}
+			parts = append(parts, fg(t.Dimmed, sep))
+			visibleWidth += len(sep)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// agentNavSubTabHitTest returns the agentSubTab at column x, or -1 if none.
+func agentNavSubTabHitTest(x int) agentSubTab {
+	col := 0
+	for i := agentSubTab(0); i < agentSubTabCount; i++ {
+		label := i.String()
+		width := len(label) + 2
+		if x >= col && x < col+width {
+			return i
+		}
+		col += width
+		if int(i) < int(agentSubTabCount)-1 {
+			col += 2
+		}
+	}
+	return -1
+}
+
+// renderNavAgentRuns renders the runs list in the Agent nav pane.
+func (m Model) renderNavAgentRuns(maxLines int) []string {
+	t := ActiveTheme
+	if !m.agentRunsLoaded {
+		return []string{fg(t.NavDimmed, "  loading…")}
+	}
+	if m.agentRunsErr != "" {
+		return []string{fg(t.StatusError, "  "+m.agentRunsErr)}
+	}
+	if len(m.agentRuns) == 0 {
+		return []string{
+			fg(t.NavDimmed, "  No runs yet."),
+			fg(t.NavDimmed, "  Run /agent run to start."),
+		}
+	}
+
+	var lines []string
+	for i := m.agentRunsScroll; i < len(m.agentRuns) && len(lines) < maxLines; i++ {
+		rec := m.agentRuns[i]
+		selected := i == m.agentRunsCursor
+
+		date := rec.StartedAt.Local().Format("01/02 15:04")
+		ingested := fmt.Sprintf("+%d", rec.TotalIngest)
+		cost := ""
+		if rec.TotalCostUSD > 0 {
+			cost = fmt.Sprintf("  $%.2f", rec.TotalCostUSD)
+		}
+		label := fmt.Sprintf("  %s  %s%s", date, ingested, cost)
+
+		if selected && m.focus == paneNav {
+			lines = append(lines, fgBold(t.Accent, label))
+		} else if selected {
+			lines = append(lines, fg(t.Accent, label))
+		} else {
+			lines = append(lines, fg(t.NavText, label))
+		}
+	}
+	return lines
+}
+
+// renderContentAgent renders the Agent tab content pane.
+func (m Model) renderContentAgent(height, width int) []string {
+	t := ActiveTheme
+	var lines []string
+
+	switch m.agentSubTab {
+	case agentSubTabRuns:
+		if !m.agentRunsLoaded {
+			lines = append(lines, fg(t.ContentDimmed, "Loading…"))
+		} else if m.agentRunsErr != "" {
+			lines = append(lines, fg(t.StatusError, m.agentRunsErr))
+		} else if len(m.agentRuns) == 0 {
+			lines = append(lines, fgBold(t.ContentTitle, "Agent Runs"))
+			lines = append(lines, "")
+			lines = append(lines, fg(t.ContentDimmed, "  No runs recorded yet."))
+			lines = append(lines, "")
+			lines = append(lines, fg(t.ContentDimmed, "  Run /agent run to start a feed scan."))
+		} else if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
+			return m.renderAgentRunDetail(height, width)
+		}
+	case agentSubTabDecisions:
+		lines = append(lines, fgBold(t.ContentTitle, "Decisions"))
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  No pending decisions."))
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  Run /agent run --dry-run to generate a decisions file."))
+	case agentSubTabFeeds:
+		lines = append(lines, fgBold(t.ContentTitle, "Feeds"))
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  No feeds configured."))
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  Use /agent feed add <url> to add a feed."))
+	}
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
+// renderAgentRunDetail renders the run detail content pane using the flat row model.
+func (m Model) renderAgentRunDetail(height, width int) []string {
+	t := ActiveTheme
+	rec := m.agentRuns[m.agentRunsCursor]
+
+	runType := rec.RunType
+	if runType == "" {
+		runType = "daily"
+	}
+	duration := rec.FinishedAt.Sub(rec.StartedAt).Round(time.Second)
+
+	// Build the fixed header block (always visible at top, not scrolled).
+	statRow := func(label, val string) string {
+		return fg(t.ContentDimmed, fmt.Sprintf("  %-12s", label)) + fg(t.ContentText, val)
+	}
+	header := []string{
+		fgBold(t.ContentTitle, fmt.Sprintf("%s  [%s]  %s", rec.RunID, runType, duration)),
+		"",
+		statRow("Started", rec.StartedAt.Local().Format("2006-01-02 15:04:05")),
+		statRow("Feeds", fmt.Sprintf("%d", len(rec.Feeds))),
+		statRow("Ingested", fmt.Sprintf("%d", rec.TotalIngest)),
+		statRow("Maybe", fmt.Sprintf("%d", rec.TotalMaybe)),
+		statRow("Skipped", fmt.Sprintf("%d", rec.TotalSkip)),
+	}
+	if rec.TotalCostUSD > 0 {
+		header = append(header, statRow("Cost", formatUSD(rec.TotalCostUSD)))
+	}
+	if rec.Error != "" {
+		header = append(header, "", fg(t.StatusError, "  Error: "+rec.Error))
+	}
+	header = append(header, "", fg(t.ContentDimmed, "  Feeds  (Space to expand)"))
+
+	// Build the navigable row list.
+	detailRows := m.buildAgentDetailRows()
+
+	// Compute which navIdx the cursor is on (for highlighting).
+	// navIdx maps agentContentCursor → detailRows index.
+	var navIdx []int
+	for i, r := range detailRows {
+		if r.kind == agentRowFeed || r.kind == agentRowArticle {
+			navIdx = append(navIdx, i)
+		}
+	}
+
+	// Render navigable rows into display lines, tracking which line each navIdx maps to.
+	type rowLine struct {
+		navPos int // index into navIdx, or -1
+		text   string
+	}
+	var rowLines []rowLine
+
+	navPos := 0
+	for i, r := range detailRows {
+		if r.kind == agentRowHeader {
+			continue // header handled above
+		}
+		isNav := false
+		curNavPos := -1
+		for _, ni := range navIdx {
+			if ni == i {
+				isNav = true
+				curNavPos = navPos
+				navPos++
+				break
+			}
+		}
+
+		selected := isNav && curNavPos == m.agentContentCursor && m.focus == paneContent
+
+		switch r.kind {
+		case agentRowFeed:
+			expanded := m.agentFeedExpanded[r.feedIdx]
+			arrow := "▶"
+			if expanded {
+				arrow = "▼"
+			}
+			feedErr := ""
+			if r.feedIdx < len(rec.Feeds) && rec.Feeds[r.feedIdx].Error != "" {
+				feedErr = "  ✗"
+			}
+			text := fmt.Sprintf("  %s %s%s", arrow, r.feedName, feedErr)
+			statsText := "    " + r.feedStats
+			if selected {
+				rowLines = append(rowLines, rowLine{curNavPos, fgBold(t.Accent, text)})
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
+			} else {
+				rowLines = append(rowLines, rowLine{curNavPos, fg(t.ContentText, text)})
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
+			}
+		case agentRowArticle:
+			icon := "–"
+			col := t.ContentDimmed
+			switch r.verdict {
+			case "ingest":
+				icon = "✓"
+				col = t.Accent
+			case "maybe":
+				icon = "?"
+				col = t.Favorite
+			}
+			text := fmt.Sprintf("    %s %s", icon, r.title)
+			if selected {
+				rowLines = append(rowLines, rowLine{curNavPos, fgBold(col, text)})
+			} else {
+				rowLines = append(rowLines, rowLine{curNavPos, fg(col, text)})
+			}
+		}
+	}
+
+	// Scroll rowLines so cursor is visible.
+	contentH := height - len(header)
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	// Find scroll offset: ensure cursor row is in view.
+	// agentContentScroll refers to the navIdx position; translate to rowLine index.
+	scrollStart := 0
+	if m.agentContentCursor > 0 {
+		// Find first rowLine whose navPos >= agentContentScroll.
+		for i, rl := range rowLines {
+			if rl.navPos >= m.agentContentScroll {
+				scrollStart = i
+				break
+			}
+		}
+	}
+
+	visibleRows := rowLines
+	if scrollStart < len(rowLines) {
+		visibleRows = rowLines[scrollStart:]
+	}
+
+	var lines []string
+	lines = append(lines, header...)
+	for i := 0; i < contentH && i < len(visibleRows); i++ {
+		lines = append(lines, visibleRows[i].text)
+	}
 
 	for len(lines) < height {
 		lines = append(lines, "")

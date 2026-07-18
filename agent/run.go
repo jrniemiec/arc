@@ -97,6 +97,30 @@ func LoadDecisionsFile(path string) (DecisionsFile, error) {
 	return df, nil
 }
 
+// LoadRuns reads all RunRecords from the JSONL file at path, most recent last.
+// Returns an empty slice (not an error) if the file does not exist.
+func LoadRuns(path string) ([]RunRecord, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open runs file: %w", err)
+	}
+	defer f.Close()
+
+	var recs []RunRecord
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var rec RunRecord
+		if err := dec.Decode(&rec); err != nil {
+			break // stop on first malformed record
+		}
+		recs = append(recs, rec)
+	}
+	return recs, nil
+}
+
 // NewRunID returns a fresh run ID for the current time.
 func NewRunID() string {
 	return "agent-" + time.Now().UTC().Format("20060102-150405")

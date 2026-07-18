@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	agentpkg "github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/service"
 	storefs "github.com/jrniemiec/arc/store/fs"
@@ -267,13 +268,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.workspacesLoaded = true
 		// Auto-load history for first workspace if on Workspaces sub-tab.
-		if m.navSubTab == navSubTabWorkspaces {
+		if m.activeTab == tabLibrary && m.navSubTab == navSubTabWorkspaces {
 			cmds = append(cmds, m.triggerWorkspaceChatLoad())
 		}
 		// If inside a workspace (chat mode), refresh article count.
 		if m.chatMode && m.chatWorkspace != "" {
 			cmds = append(cmds, m.loadChatHistoryCmd(m.chatWorkspace, false))
 		}
+
+	case agentDecisionsLoadedMsg:
+		if msg.runID == m.agentRunDecisionsID {
+			if msg.err == "" {
+				m.agentRunDecisions = msg.df
+			}
+		}
+
+	case agentRunsLoadedMsg:
+		if msg.err != "" {
+			m.agentRunsErr = msg.err
+		} else {
+			// Reverse so most recent is first.
+			recs := msg.runs
+			for i, j := 0, len(recs)-1; i < j; i, j = i+1, j-1 {
+				recs[i], recs[j] = recs[j], recs[i]
+			}
+			m.agentRuns = recs
+			m.agentRunsErr = ""
+		}
+		m.agentRunsLoaded = true
+		// Auto-load decisions for the first (most recent) run.
+		cmds = append(cmds, m.triggerAgentRunDetail())
 
 	case statsLoadedMsg:
 		if msg.err == "" {
@@ -729,6 +753,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				batch = append(batch, loadWorkspaces(m.svc))
 			}
 			batch = append(batch, m.triggerContentLoad())
+		case tabAgent:
+			m.agentRunsLoaded = false
+			batch = append(batch, loadAgentRuns(m.cfg.AgentPath))
 		case tabStats:
 			m.statsLoaded = false
 			batch = append(batch, loadStats(m.svc))
@@ -836,8 +863,14 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.ContentTabNext):
 		return m.navRight()
 	case key.Matches(msg, keys.NavUp):
+		if m.activeTab == tabAgent {
+			return m.agentNavCursorUp()
+		}
 		return m.navCursorUp()
 	case key.Matches(msg, keys.NavDown):
+		if m.activeTab == tabAgent {
+			return m.agentNavCursorDown()
+		}
 		return m.navCursorDown()
 	case key.Matches(msg, keys.PageUp):
 		return m.navPageUp()
@@ -1008,20 +1041,36 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 
 // navLeft handles ← in the nav pane — cycles sub-tabs.
 func (m *Model) navLeft() tea.Cmd {
-	if m.activeTab != tabLibrary {
+	switch m.activeTab {
+	case tabLibrary:
+		return m.switchNavSubTab((m.navSubTab - 1 + navSubTabCount) % navSubTabCount)
+	case tabAgent:
+		m.agentSubTab = (m.agentSubTab - 1 + agentSubTabCount) % agentSubTabCount
+		return nil
+	default:
+		if m.chatMode {
+			m.exitChatMode()
+		}
 		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
 		return nil
 	}
-	return m.switchNavSubTab((m.navSubTab - 1 + navSubTabCount) % navSubTabCount)
 }
 
 // navRight handles → in the nav pane — cycles sub-tabs.
 func (m *Model) navRight() tea.Cmd {
-	if m.activeTab != tabLibrary {
+	switch m.activeTab {
+	case tabLibrary:
+		return m.switchNavSubTab((m.navSubTab + 1) % navSubTabCount)
+	case tabAgent:
+		m.agentSubTab = (m.agentSubTab + 1) % agentSubTabCount
+		return nil
+	default:
+		if m.chatMode {
+			m.exitChatMode()
+		}
 		m.activeTab = (m.activeTab + 1) % tabCount
 		return nil
 	}
-	return m.switchNavSubTab((m.navSubTab + 1) % navSubTabCount)
 }
 
 // navCursorUp moves the cursor up in the active sub-tab.
@@ -1096,6 +1145,125 @@ func (m *Model) navCursorDown() tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// agentNavCursorUp moves the cursor up in the active Agent sub-tab.
+func (m *Model) agentNavCursorUp() tea.Cmd {
+	switch m.agentSubTab {
+	case agentSubTabRuns:
+		if m.agentRunsCursor > 0 {
+			m.agentRunsCursor--
+			m.clampAgentRunsScroll()
+			return m.triggerAgentRunDetail()
+		}
+	}
+	return nil
+}
+
+// agentNavCursorDown moves the cursor down in the active Agent sub-tab.
+func (m *Model) agentNavCursorDown() tea.Cmd {
+	switch m.agentSubTab {
+	case agentSubTabRuns:
+		if m.agentRunsCursor < len(m.agentRuns)-1 {
+			m.agentRunsCursor++
+			m.clampAgentRunsScroll()
+			return m.triggerAgentRunDetail()
+		}
+	}
+	return nil
+}
+
+// triggerAgentRunDetail loads the decisions file for the currently selected run
+// if it hasn't been loaded yet.
+func (m *Model) triggerAgentRunDetail() tea.Cmd {
+	if m.agentRunsCursor < 0 || m.agentRunsCursor >= len(m.agentRuns) {
+		return nil
+	}
+	runID := m.agentRuns[m.agentRunsCursor].RunID
+	if runID == m.agentRunDecisionsID {
+		return nil // already loaded
+	}
+	m.agentRunDecisionsID = runID
+	m.agentRunDecisions = agentpkg.DecisionsFile{}
+	m.agentFeedExpanded = nil
+	m.agentContentCursor = 0
+	m.agentContentScroll = 0
+	return loadAgentDecisions(m.cfg.AgentPath, runID)
+}
+
+// clampAgentRunsScroll keeps agentRunsScroll within bounds so the cursor is visible.
+// handleAgentContentKey handles key events in the Agent tab content pane.
+func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
+	if m.agentSubTab != agentSubTabRuns {
+		return nil
+	}
+	rows := m.buildAgentDetailRows()
+	// Find navigable rows (feed headers and article rows).
+	var navIdx []int
+	for i, r := range rows {
+		if r.kind == agentRowFeed || r.kind == agentRowArticle {
+			navIdx = append(navIdx, i)
+		}
+	}
+	total := len(navIdx)
+	if total == 0 {
+		return nil
+	}
+
+	viewH := m.contentViewHeight()
+
+	switch {
+	case key.Matches(msg, keys.NavUp):
+		if m.agentContentCursor > 0 {
+			m.agentContentCursor--
+			m.clampAgentContentScroll(viewH)
+		}
+	case key.Matches(msg, keys.NavDown):
+		if m.agentContentCursor < total-1 {
+			m.agentContentCursor++
+			m.clampAgentContentScroll(viewH)
+		}
+	case msg.Type == tea.KeyRunes && msg.String() == "g", key.Matches(msg, keys.Home):
+		m.agentContentCursor = 0
+		m.agentContentScroll = 0
+	case msg.Type == tea.KeyRunes && msg.String() == "G", key.Matches(msg, keys.End):
+		m.agentContentCursor = total - 1
+		m.clampAgentContentScroll(viewH)
+	case key.Matches(msg, keys.Expand), msg.Type == tea.KeyEnter:
+		// Toggle expand on the feed header at cursor.
+		if m.agentContentCursor < len(navIdx) {
+			row := rows[navIdx[m.agentContentCursor]]
+			if row.kind == agentRowFeed {
+				if m.agentFeedExpanded == nil {
+					m.agentFeedExpanded = make(map[int]bool)
+				}
+				m.agentFeedExpanded[row.feedIdx] = !m.agentFeedExpanded[row.feedIdx]
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Model) clampAgentContentScroll(viewH int) {
+	if m.agentContentCursor < m.agentContentScroll {
+		m.agentContentScroll = m.agentContentCursor
+	}
+	if m.agentContentCursor >= m.agentContentScroll+viewH {
+		m.agentContentScroll = m.agentContentCursor - viewH + 1
+	}
+}
+
+func (m *Model) clampAgentRunsScroll() {
+	h := m.navPaneHeight() - 2 // subtract sub-tab bar + blank line
+	if h < 1 {
+		h = 1
+	}
+	if m.agentRunsCursor < m.agentRunsScroll {
+		m.agentRunsScroll = m.agentRunsCursor
+	}
+	if m.agentRunsCursor >= m.agentRunsScroll+h {
+		m.agentRunsScroll = m.agentRunsCursor - h + 1
+	}
 }
 
 // navPageUp scrolls the nav pane up by one page.
@@ -1831,6 +1999,9 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	if m.chatMode {
 		return m.handleChatContentKey(msg)
+	}
+	if m.activeTab == tabAgent {
+		return m.handleAgentContentKey(msg)
 	}
 	total := len(m.contentLines)
 	viewH := m.contentViewHeight()
@@ -5305,6 +5476,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click on tab bar (row 0).
 			if msg.Y == 0 {
 				if t := tabBarHitTest(msg.X); t >= 0 {
+					if m.chatMode && t != tabLibrary {
+						m.exitChatMode()
+					}
 					m.activeTab = t
 					m.focus = paneTabBar
 				}
@@ -5312,10 +5486,18 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			// Click on nav sub-tab bar (first row of main area = topBarHeight).
 			subTabRow := topBarHeight
-			if msg.Y == subTabRow && msg.X < m.dividerCol() && m.activeTab == tabLibrary {
-				if sub := navSubTabHitTest(msg.X); sub >= 0 {
-					m.focus = paneNav
-					return m.switchNavSubTab(sub)
+			if msg.Y == subTabRow && msg.X < m.dividerCol() {
+				switch m.activeTab {
+				case tabLibrary:
+					if sub := navSubTabHitTest(msg.X); sub >= 0 {
+						m.focus = paneNav
+						return m.switchNavSubTab(sub)
+					}
+				case tabAgent:
+					if sub := agentNavSubTabHitTest(msg.X); sub >= 0 {
+						m.focus = paneNav
+						m.agentSubTab = sub
+					}
 				}
 				return nil
 			}
