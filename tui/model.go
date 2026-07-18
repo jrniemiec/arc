@@ -153,6 +153,7 @@ type agentDetailRow struct {
 	feedIdx   int    // for agentRowFeed and agentRowArticle
 	verdict   string // for agentRowArticle: "ingest" | "maybe" | "skip"
 	title     string // for agentRowArticle
+	url       string // for agentRowArticle: source URL (for browser open)
 	feedName  string // for agentRowFeed
 	feedStats string // for agentRowFeed: pre-formatted counts
 }
@@ -550,6 +551,7 @@ var globalCommands = []cmdCompletion{
 	{"/config-edit", "", "open config file in $EDITOR"},
 	{"/stats", "", "show library stats"},
 	{"/models", "", "list available LLM profiles"},
+	{"/ingest", "<url>", "add a new article"},
 	{"/log", "", "open/close debug log tail"},
 }
 
@@ -911,6 +913,7 @@ func (m Model) buildAgentDetailRows() []agentDetailRow {
 					feedIdx: i,
 					verdict: item.Verdict,
 					title:   t,
+					url:     item.URL,
 				})
 			}
 		}

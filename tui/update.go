@@ -1240,6 +1240,14 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 				m.agentFeedExpanded[row.feedIdx] = !m.agentFeedExpanded[row.feedIdx]
 			}
 		}
+	case key.Matches(msg, keys.Open):
+		// Open article URL in browser.
+		if m.agentContentCursor < len(navIdx) {
+			row := rows[navIdx[m.agentContentCursor]]
+			if row.kind == agentRowArticle && row.url != "" {
+				return openInChrome(row.url)
+			}
+		}
 	}
 	return nil
 }
