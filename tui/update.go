@@ -856,6 +856,9 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.MarkUnread):
 		return m.cmdMarkUnread()
 	case key.Matches(msg, keys.ToggleFav):
+		if m.navSubTab == navSubTabWorkspaces {
+			return m.cmdTogglePin()
+		}
 		return m.cmdToggleFavorite()
 	case key.Matches(msg, keys.Delete):
 		switch m.navSubTab {
@@ -3306,7 +3309,7 @@ func (m *Model) applyNavFilter(mode, query string) {
 	n := len(filtered)
 	if n == 0 {
 		if mode == "favorite" {
-			m.statusMsg = "no favorites yet — press f to mark an article"
+			m.statusMsg = "no favorites yet — press f or * to mark an article"
 		} else {
 			m.statusMsg = fmt.Sprintf("no results for %q", query)
 		}
@@ -3406,6 +3409,46 @@ func (m *Model) cmdToggleFavorite() tea.Cmd {
 			_ = svc.UnmarkFavorite(context.Background(), id)
 		}
 		return nil
+	}
+}
+
+// cmdTogglePin toggles the pinned flag on the currently selected workspace.
+func (m *Model) cmdTogglePin() tea.Cmd {
+	row := m.selectedWsRow()
+	if row == nil || row.kind != wsRowWorkspace {
+		m.statusMsg = "✗ select a workspace to pin"
+		return nil
+	}
+	wsIdx := row.wsIdx
+	if wsIdx < 0 || wsIdx >= len(m.workspaceItems) {
+		return nil
+	}
+	nowPinned := !m.workspaceItems[wsIdx].pinned
+	name := m.workspaceItems[wsIdx].name
+	m.workspaceItems[wsIdx].pinned = nowPinned
+	// Keep workspaceItemsAll in sync.
+	for i, wi := range m.workspaceItemsAll {
+		if wi.name == name {
+			m.workspaceItemsAll[i].pinned = nowPinned
+			break
+		}
+	}
+	if nowPinned {
+		m.statusMsg = "★ workspace pinned"
+	} else {
+		m.statusMsg = "✓ workspace unpinned"
+	}
+	if m.svc == nil {
+		return nil
+	}
+	svc := m.svc
+	return func() tea.Msg {
+		if nowPinned {
+			_ = svc.PinWorkspace(context.Background(), name)
+		} else {
+			_ = svc.UnpinWorkspace(context.Background(), name)
+		}
+		return cmdDoneMsg{reloadWorkspaces: true}
 	}
 }
 
@@ -4933,7 +4976,7 @@ var helpGroups = []struct {
 		{"h / ←", "", "previous content tab"},
 		{"r", "", "mark article as read"},
 		{"u", "", "mark article as unread"},
-		{"f", "", "toggle favorite"},
+		{"f/*", "", "toggle favorite"},
 		{"o", "", "open source URL in browser"},
 		{"v", "", "view article in external terminal"},
 		{"D", "", "delete current item"},

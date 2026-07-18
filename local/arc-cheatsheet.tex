@@ -35,6 +35,124 @@
 {\large\bfseries Arc Cheat Sheet}\\
 {\small\textit{Personal Knowledge Engine}}
 
+\section{TUI — Launch \& Panes}
+
+\begin{lstlisting}
+arc                   # launch TUI (no subcommand)
+
+# Pane focus
+Tab           Nav <-> Content toggle
+Shift+Tab     always jump to Nav pane
+Esc           jump to Command input
+Alt+1         Nav pane
+Alt+2         Content pane
+Alt+3         Tab bar (Library / Agent / Stats)
+
+# Split sub-panes
+Ctrl+X        toggle global AskX pane
+Ctrl+O        toggle Preview pane
+Ctrl+L        toggle Scratch pane
+\end{lstlisting}
+
+\section{TUI — Keys}
+
+\begin{lstlisting}
+# Universal
+j/k or Up/Down    move up/down
+PgDn/Ctrl+D       page down
+PgUp/Ctrl+U       page up
+g/Home            go to top
+G/End             go to bottom
+Enter             select / expand / collapse
+Space             expand / collapse
+q / Ctrl+C        quit
+?                 show key bindings help
+/                 open command input
+
+# Nav pane (articles/collections/workspaces)
+r                 mark article read
+u                 mark article unread
+f                 toggle favorite
+o                 open source URL in browser
+v                 view article in terminal
+D                 delete current item
+U                 unlink from workspace
+a                 move to attic
+b                 restore from attic
+Ctrl+R            refresh
+
+# Content pane (article view)
+h/Left or l/Right prev/next tab (Flash/Summary/Body/Cards)
+s                 speak current tab (TTS)
+[ ]               TTS slower / faster
+
+# Content pane (workspace chat)
+j/k               prev/next message box
+s                 speak selected box
+v                 expand/collapse box
+#                 comment/uncomment box
+x                 delete box
+
+# Command input
+Up/Down           recall command history
+Ctrl+G            correct spelling/grammar
+\end{lstlisting}
+
+\section{TUI — Global Commands}
+
+\begin{lstlisting}
+/search <query>        full-text search
+/article ingest <url>  add a new article
+/stats                 library stats + cost
+/models                list LLM profiles
+/config                show resolved config
+/config-edit           open config in $EDITOR
+/scratch [msg]         workspace-local scratch
+/Scratch [msg]         global scratch
+/AskX <prompt>         global LLM query
+/tags                  list all tags
+/log                   open/close debug log tail
+/help [group]          key/command help
+\end{lstlisting}
+
+\section{TUI — Chat Commands}
+
+\begin{lstlisting}
+# Active in workspace chat context:
+/mode                  show grounding mode
+/mode corpus-only      corpus only (no web)
+/mode corpus-first     prefer corpus (default)
+/mode open             unrestricted
+
+/clear                 clear conversation history
+/reload                rebuild corpus
+/stats                 session token + cost
+/system                show system prompt
+/meta                  workspace details
+/save [file]           save session to outcomes/
+/new <name>            create workspace
+/delete [name]         delete workspace
+/rename <name>         rename workspace
+/describe <text>       set workspace description
+/populate [--hint ""] [--edit] [--dry-run]
+/remove [--article slug] [--all-articles] ...
+
+/resource-list
+/resource-add <path|url> [--into <dir>] \
+  [--as <name>] [--comment "..."]
+/resource-view <name>
+/resource-edit <name>
+/resource-new <name>
+/resource-remove <name>
+/resource-save [filename]
+
+/scratch [msg]         workspace scratch
+/askX <prompt>         workspace LLM query
+/AskX <prompt>         global LLM query
+/models                list profiles
+/help                  list chat commands
+\end{lstlisting}
+
 \section{Ingest}
 
 \begin{lstlisting}
@@ -126,11 +244,6 @@ arc search "golang concurrency" -n 20
 arc reprocess <slug> \
   --no-summary --no-flashcards --no-embed
 
-# Reprocess missing flash across run
-arc list --agent-run <run-id> --slugs | \
-  xargs -I{} arc reprocess {} \
-  --no-summary --no-flashcards --no-embed
-
 # Reprocess missing only (skip existing)
 arc reprocess <slug> --missing
 
@@ -141,76 +254,55 @@ arc reindex
 \section{Collections}
 
 \begin{lstlisting}
-# List all collections
+# List / create / delete
 arc collections list
-
-# Create collection
 arc collections create ml
+arc collections delete ml
 
-# Add article to collection
+# Add / remove article
 arc collections add <slug> ml
-
-# Remove from collection
 arc collections remove <slug> ml
 
 # Show articles in collection
 arc collections show ml
 
-# Show collections for an article
-arc collections show <slug>
-
-# Set description
+# Set description / rename
 arc collections describe ml "ML papers"
-
-# Rename
 arc collections rename ml machine-learning
 
-# Delete (--purge removes articles too)
-arc collections delete ml
-
-# Read flashes across collection
+# Read flashes / summaries across collection
 arc collections read ml
-
-# Read summaries
 arc collections read ml --summary
 
 # AI-suggest collections
 arc collections suggest
 arc collections suggest --apply
-
-# Search within collections
-arc collections read ml --search "transformers"
 \end{lstlisting}
+
+\columnbreak
 
 \section{Workspaces}
 
 \begin{lstlisting}
-# Create workspace
+# Create / list / show / delete
 arc workspace new <name> "description"
-
-# List workspaces
 arc workspace list
-
-# Show workspace detail
 arc workspace show <name>
+arc workspace delete <name>
 
-# Add articles / collections
+# Add content
 arc workspace add <name> --article <slug>
 arc workspace add <name> --collection <slug>
 
-# Add resource file or URL
+# Resources
 arc workspace resource add <name> <file>
 arc workspace resource add <name> <url>
 
-# Set system prompt
+# System prompt
 arc workspace system set <name> "You are..."
-
-# Archive / delete
-arc workspace archive <name>
-arc workspace delete <name>
 \end{lstlisting}
 
-\section{Workspace Chat}
+\section{Workspace Chat (CLI)}
 
 \begin{lstlisting}
 # Start interactive chat REPL
@@ -219,52 +311,28 @@ arc workspace chat <name>
 # Chat with specific profile
 arc workspace chat <name> --profile opus
 
-# Chat with strategy override
-arc workspace chat <name> \
-  --strategy token-budget \
-  --context-limit 8000
-
 # Clear history before starting
 arc workspace chat <name> --clear
-
-# In-session slash commands:
-#   /clear    clear conversation history
-#   /history  show turn count + token usage
-#   /stats    session token + cost summary
-#   /system   show system prompt
-#   /save [file]  save transcript to outcomes/
-#   /help     list commands
-#   /exit     quit
 \end{lstlisting}
 
 \section{Chat Config}
 
 \begin{lstlisting}
-# Show config with descriptions
+# Show config
 arc workspace chat-config <name>
 
 # Set fields
 arc workspace chat-config <name> \
   --profile sonnet
 arc workspace chat-config <name> \
-  --strategy token-budget \
-  --context-limit 8000
-arc workspace chat-config <name> \
   --max-output-tokens 2048
 arc workspace chat-config <name> \
   --max-user-messages 20
-arc workspace chat-config <name> \
-  --summarizer-profile haiku \
-  --verbatim-ratio 0.3
 
-# Global template (copied on workspace new):
-#   ~/.arc/config.json  "chat" section
-
-# Per-workspace live config:
+# Global template:  ~/.arc/config.json "chat"
+# Per-workspace:
 #   ~/.arc/workspaces/<name>/chat/chat.json
 \end{lstlisting}
-
-\columnbreak
 
 \section{Agent}
 
@@ -292,15 +360,8 @@ arc agent stats
 
 # Print digest for last run
 arc agent digest
-
-# Digest for specific run
 arc agent digest --run <run-id>
-
-# TTS-friendly digest (no URLs/unicode)
 arc agent digest --tts
-
-# Include full summaries
-arc agent digest --summary
 \end{lstlisting}
 
 \section{Decisions File Workflow}
@@ -308,7 +369,6 @@ arc agent digest --summary
 \begin{lstlisting}
 # 1. Edit decisions file:
 #    change action:"-" to action:"+"
-#    on items to promote (status:"pending")
 vi ~/.arc/agent/decisions-<run-id>.json
 
 # 2. Process overrides
@@ -327,7 +387,6 @@ arc-digest
 # Send digest email for run(s)
 arc-digest-email
 arc-digest-email <run-id>
-arc-digest-email <daily-id> <rerun-id>
 
 # Run decisions + ingest overrides
 arc-digest-rerun [run-id]
@@ -339,32 +398,13 @@ arc-digest && arc-digest-email
 \section{Other Commands}
 
 \begin{lstlisting}
-# Open source URL in browser
-arc open <slug>
-
-# Delete article
-arc delete <slug>
-
-# Delete by run
-arc delete --agent-run <run-id>
-
-# Dry run delete
-arc delete <slug> --dry-run
-
-# Show stats
-arc stats
-
-# List LLM profiles + pricing
-arc profiles
-
-# Print resolved config
-arc config
-
-# Start MCP server
-arc mcp
-
-# Initialize arc
-arc init
+arc open <slug>          # open URL in browser
+arc delete <slug>        # delete article
+arc stats                # show library stats
+arc profiles             # list LLM profiles + pricing
+arc config               # print resolved config
+arc mcp                  # start MCP server
+arc init                 # initialise arc
 \end{lstlisting}
 
 \section{Key Paths}
@@ -376,13 +416,12 @@ arc init
   chat/chat.json               #   chat config
   chat/history.json            #   conversation history
   system.txt                   #   system prompt
-  articles/                    #   article symlinks
   resources/                   #   uploaded files
   outcomes/                    #   saved transcripts
 ~/.arc/agent/runs.jsonl        # run history
 ~/.arc/agent/decisions-*       # decisions files
 ~/.arc/config.json             # main config
-~/.arc/agent/config.json       # agent config
+~/.arc/events.jsonl            # LLM cost events
 \end{lstlisting}
 
 \section{Global Flags}
@@ -390,7 +429,7 @@ arc init
 \begin{lstlisting}
 --config <file>       config file path
 --data-root <dir>     arc data root
---articles-root <dir> articles directory
+--log-level debug     verbose logging
 --json                JSON output
 \end{lstlisting}
 
@@ -401,7 +440,6 @@ ARC_ANTHROPIC_API_KEY  Anthropic API key
 ARC_RECIPIENT          digest email recipient
 ARC_FROM               digest email sender
 ARC                    arc binary path
-ARC_AGENT_DIR          agent directory
 \end{lstlisting}
 
 \end{multicols}

@@ -188,6 +188,8 @@ type workspaceItem struct {
 	atticArticles   []string // slugs
 	atticCollections []string // slugs
 
+	pinned bool
+
 	// expand state
 	expanded             bool
 	expandedCols         map[string]bool // collection slug → expanded
@@ -838,6 +840,7 @@ func loadWorkspaces(svc *service.Service) tea.Cmd {
 				outcomes:             w.OutcomeNames,
 				atticArticles:        w.AtticArticles,
 				atticCollections:     w.AtticCollectionSlugs,
+				pinned:               w.PinnedAt != nil,
 				expandedCols:         make(map[string]bool),
 				expandedResourceDirs: make(map[string]bool),
 			}

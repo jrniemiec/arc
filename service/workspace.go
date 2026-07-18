@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/ingest/pipeline"
@@ -23,7 +25,7 @@ func (s *Service) CreateWorkspace(ctx context.Context, name, description string)
 	return nil
 }
 
-// ListWorkspaces returns all workspaces with counts.
+// ListWorkspaces returns all workspaces with counts, pinned workspaces first.
 func (s *Service) ListWorkspaces(ctx context.Context, includeArchived bool) ([]WorkspaceInfo, error) {
 	metas, err := fs.ListWorkspaces(s.cfg.DataRoot)
 	if err != nil {
@@ -40,7 +42,28 @@ func (s *Service) ListWorkspaces(ctx context.Context, includeArchived bool) ([]W
 		}
 		out = append(out, info)
 	}
+	// Sort: pinned (by pin time desc) first, then unpinned (alphabetical).
+	sort.SliceStable(out, func(i, j int) bool {
+		pi, pj := out[i].PinnedAt, out[j].PinnedAt
+		if (pi == nil) != (pj == nil) {
+			return pi != nil
+		}
+		if pi != nil {
+			return pi.After(*pj)
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
+}
+
+// PinWorkspace marks a workspace as pinned.
+func (s *Service) PinWorkspace(ctx context.Context, name string) error {
+	return fs.PinWorkspace(s.cfg.DataRoot, name, time.Now().UTC())
+}
+
+// UnpinWorkspace removes the pin from a workspace.
+func (s *Service) UnpinWorkspace(ctx context.Context, name string) error {
+	return fs.UnpinWorkspace(s.cfg.DataRoot, name)
 }
 
 // GetWorkspace returns info for a single workspace.
@@ -96,6 +119,7 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 		OutcomeNames:         outcomes,
 		AtticArticles:        atticArticles,
 		AtticCollectionSlugs: atticCols,
+		PinnedAt:             m.PinnedAt,
 	}, nil
 }
 

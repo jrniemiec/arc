@@ -119,8 +119,8 @@ var keys = keyMap{
 		key.WithHelp("u", "mark unread"),
 	),
 	ToggleFav: key.NewBinding(
-		key.WithKeys("f"),
-		key.WithHelp("f", "toggle favorite"),
+		key.WithKeys("f", "*"),
+		key.WithHelp("f/*", "toggle favorite"),
 	),
 	Delete: key.NewBinding(
 		key.WithKeys("D"),

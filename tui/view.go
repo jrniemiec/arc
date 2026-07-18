@@ -758,11 +758,18 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			if atticCount > 0 {
 				counts = fmt.Sprintf(" (%da %dc %dr %d⌂)", ws.articleCount, ws.collectionCount, ws.resourceCount, atticCount)
 			}
-			label = truncate(arrow+ws.name+counts+flags, w-1)
 			if selected {
-				label = reverse(label)
+				pin := ""
+				if ws.pinned {
+					pin = "★ "
+				}
+				label = reverse(truncate(arrow+pin+ws.name+counts+flags, w-1))
+			} else if ws.pinned {
+				label = fgBold(t.NavGroup, truncate(arrow, w-1)) +
+					fgBold(t.Pinned, "★ ") +
+					fgBold(t.NavGroup, truncate(ws.name+counts+flags, w-1))
 			} else {
-				label = fgBold(t.NavGroup, label)
+				label = fgBold(t.NavGroup, truncate(arrow+ws.name+counts+flags, w-1))
 			}
 
 		case wsRowScratch:

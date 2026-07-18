@@ -17,10 +17,11 @@ import (
 
 // WorkspaceMeta is the on-disk representation of a workspace's meta.json.
 type WorkspaceMeta struct {
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	Status      string    `json:"status"` // "active" | "archived"
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	Status      string     `json:"status"` // "active" | "archived"
+	PinnedAt    *time.Time `json:"pinned_at,omitempty"`
 }
 
 // ResourceEntry describes one file or directory in a workspace's resources/ directory.
@@ -267,6 +268,26 @@ func WriteWorkspaceMeta(dataRoot string, m WorkspaceMeta) error {
 		return fmt.Errorf("marshal workspace meta: %w", err)
 	}
 	return os.WriteFile(path, data, 0644)
+}
+
+// PinWorkspace sets PinnedAt on a workspace's meta.json.
+func PinWorkspace(dataRoot, name string, t time.Time) error {
+	m, err := ReadWorkspaceMeta(dataRoot, name)
+	if err != nil {
+		return err
+	}
+	m.PinnedAt = &t
+	return WriteWorkspaceMeta(dataRoot, m)
+}
+
+// UnpinWorkspace clears PinnedAt on a workspace's meta.json.
+func UnpinWorkspace(dataRoot, name string) error {
+	m, err := ReadWorkspaceMeta(dataRoot, name)
+	if err != nil {
+		return err
+	}
+	m.PinnedAt = nil
+	return WriteWorkspaceMeta(dataRoot, m)
 }
 
 // ListWorkspaces walks the workspaces root and returns metadata for all workspaces.

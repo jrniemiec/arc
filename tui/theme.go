@@ -51,6 +51,9 @@ type Theme struct {
 	// Favorite star
 	Favorite lipgloss.Color
 
+	// Pinned workspace star
+	Pinned lipgloss.Color
+
 	// Status
 	StatusError lipgloss.Color // error messages in status bar
 
@@ -92,6 +95,7 @@ var Nord = Theme{
 	BoxBorder:  "#88C0D0", // nord8
 	Dimmed:     "#8890A0", // mid-gray (was #4C566A nord3)
 	Favorite:   "#F5A623", // amber
+	Pinned:     "#C79BFF", // purple
 
 	StatusError: "#BF616A", // nord11 — red
 
@@ -130,6 +134,7 @@ var ClaudeCode = Theme{
 	BoxBorder:  "#6598FF",
 	Dimmed:     "#8890A0", // mid-gray (was #505050)
 	Favorite:   "#F5A623", // amber
+	Pinned:     "#C79BFF", // purple
 
 	StatusError: "#E06C75", // red
 
@@ -168,6 +173,7 @@ var Light = Theme{
 	BoxBorder:  "#1A7AB0",
 	Dimmed:     "#9A9A9A",
 	Favorite:   "#B8860B", // dark goldenrod for light bg
+	Pinned:     "#5A2D9A", // purple for light bg
 
 	StatusError: "#CC0000", // red for light bg
 

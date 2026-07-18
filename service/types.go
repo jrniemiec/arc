@@ -210,6 +210,7 @@ type WorkspaceInfo struct {
 	OutcomeNames         []string // outcome file basenames
 	AtticArticles        []string // attic article slugs
 	AtticCollectionSlugs []string // attic collection slugs
+	PinnedAt             *time.Time
 }
 
 // CollectionInfo describes a collection with article count.
