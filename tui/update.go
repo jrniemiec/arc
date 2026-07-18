@@ -5121,6 +5121,29 @@ func removeNavItem(items []navItem, id string) []navItem {
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	divCol := m.dividerCol()
 
+	// Resource overlay captures all mouse events: wheel scrolls, clicks are swallowed.
+	if m.focus == paneResource {
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			delta := 1
+			if msg.Button == tea.MouseButtonWheelUp {
+				delta = -1
+			}
+			viewH := m.height - 4
+			if viewH < 1 {
+				viewH = 1
+			}
+			m.resourceCursor += delta
+			if m.resourceCursor < 0 {
+				m.resourceCursor = 0
+			}
+			if m.resourceCursor >= len(m.resourceLines) {
+				m.resourceCursor = len(m.resourceLines) - 1
+			}
+			m.scrollResourceToCursor(viewH)
+		}
+		return nil
+	}
+
 	// Mouse wheel scrolling.
 	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 		delta := 1
