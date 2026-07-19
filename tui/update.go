@@ -1192,7 +1192,7 @@ func (m *Model) navCursorDown() tea.Cmd {
 // agentNavCursorUp moves the cursor up in the active Agent sub-tab.
 func (m *Model) agentNavCursorUp() tea.Cmd {
 	switch m.agentSubTab {
-	case agentSubTabRuns:
+	case agentSubTabRuns, agentSubTabDecisions:
 		if m.agentRunsCursor > 0 {
 			m.agentRunsCursor--
 			m.clampAgentRunsScroll()
@@ -1205,7 +1205,7 @@ func (m *Model) agentNavCursorUp() tea.Cmd {
 // agentNavCursorDown moves the cursor down in the active Agent sub-tab.
 func (m *Model) agentNavCursorDown() tea.Cmd {
 	switch m.agentSubTab {
-	case agentSubTabRuns:
+	case agentSubTabRuns, agentSubTabDecisions:
 		if m.agentRunsCursor < len(m.agentRuns)-1 {
 			m.agentRunsCursor++
 			m.clampAgentRunsScroll()
@@ -1236,10 +1236,16 @@ func (m *Model) triggerAgentRunDetail() tea.Cmd {
 // clampAgentRunsScroll keeps agentRunsScroll within bounds so the cursor is visible.
 // handleAgentContentKey handles key events in the Agent tab content pane.
 func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
-	if m.agentSubTab != agentSubTabRuns {
+	var rows []agentDetailRow
+	switch m.agentSubTab {
+	case agentSubTabRuns:
+		rows = m.buildAgentDetailRows()
+	case agentSubTabDecisions:
+		rows = m.buildAgentDecisionRows()
+	default:
 		return nil
 	}
-	rows := m.buildAgentDetailRows()
+
 	// Find navigable rows (feed headers and article rows).
 	var navIdx []int
 	for i, r := range rows {
@@ -1258,19 +1264,19 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.NavUp):
 		if m.agentContentCursor > 0 {
 			m.agentContentCursor--
-			m.clampAgentContentScroll(viewH)
+			m.clampAgentContentScroll(viewH, rows, navIdx)
 		}
 	case key.Matches(msg, keys.NavDown):
 		if m.agentContentCursor < total-1 {
 			m.agentContentCursor++
-			m.clampAgentContentScroll(viewH)
+			m.clampAgentContentScroll(viewH, rows, navIdx)
 		}
 	case msg.Type == tea.KeyRunes && msg.String() == "g", key.Matches(msg, keys.Home):
 		m.agentContentCursor = 0
 		m.agentContentScroll = 0
 	case msg.Type == tea.KeyRunes && msg.String() == "G", key.Matches(msg, keys.End):
 		m.agentContentCursor = total - 1
-		m.clampAgentContentScroll(viewH)
+		m.clampAgentContentScroll(viewH, rows, navIdx)
 	case key.Matches(msg, keys.Expand), msg.Type == tea.KeyEnter:
 		// Toggle expand on the feed header at cursor.
 		if m.agentContentCursor < len(navIdx) {
@@ -1290,16 +1296,80 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 				return openInChrome(row.url)
 			}
 		}
+	case msg.Type == tea.KeyRunes && msg.String() == "a":
+		// Approve: set action "+" on selected article (Decisions sub-tab only).
+		if m.agentSubTab == agentSubTabDecisions && m.agentContentCursor < len(navIdx) {
+			row := rows[navIdx[m.agentContentCursor]]
+			if row.kind == agentRowArticle && row.status != "done" {
+				m.agentRunDecisions.Feeds[row.itemFeedIdx].Items[row.itemIdx].Action = "+"
+				m.statusMsg = "✓ approved"
+				m.saveAgentDecisions()
+			}
+		}
+	case msg.Type == tea.KeyRunes && msg.String() == "s":
+		// Skip: set action "-" on selected article (Decisions sub-tab only).
+		if m.agentSubTab == agentSubTabDecisions && m.agentContentCursor < len(navIdx) {
+			row := rows[navIdx[m.agentContentCursor]]
+			if row.kind == agentRowArticle && row.status != "done" {
+				m.agentRunDecisions.Feeds[row.itemFeedIdx].Items[row.itemIdx].Action = "-"
+				m.statusMsg = "– skipped"
+				m.saveAgentDecisions()
+			}
+		}
 	}
 	return nil
 }
 
-func (m *Model) clampAgentContentScroll(viewH int) {
+// saveAgentDecisions writes the in-memory decisions file back to disk.
+func (m *Model) saveAgentDecisions() {
+	if m.agentRunDecisionsID == "" {
+		return
+	}
+	path := filepath.Join(m.cfg.AgentPath, "decisions-"+m.agentRunDecisionsID+".json")
+	if err := agentpkg.WriteDecisionsFile(path, m.agentRunDecisions); err != nil {
+		m.setStatusError("✗ save decisions: " + err.Error())
+	}
+}
+
+func (m *Model) clampAgentContentScroll(viewH int, rows []agentDetailRow, navIdx []int) {
+	// Build display line height for each nav position.
+	// Feed rows: 2 lines (header + stats). Article rows: 2 if reason present, else 1.
+	lineH := make([]int, len(navIdx))
+	for pos, ri := range navIdx {
+		r := rows[ri]
+		switch r.kind {
+		case agentRowFeed:
+			lineH[pos] = 2
+		case agentRowArticle:
+			if r.reason != "" {
+				lineH[pos] = 2
+			} else {
+				lineH[pos] = 1
+			}
+		default:
+			lineH[pos] = 1
+		}
+	}
+
+	// Scroll up: cursor moved above scroll window.
 	if m.agentContentCursor < m.agentContentScroll {
 		m.agentContentScroll = m.agentContentCursor
+		return
 	}
-	if m.agentContentCursor >= m.agentContentScroll+viewH {
-		m.agentContentScroll = m.agentContentCursor - viewH + 1
+
+	// Scroll down: count display lines from scroll to cursor; if cursor is off-screen, advance scroll.
+	lines := 0
+	for pos := m.agentContentScroll; pos < len(navIdx); pos++ {
+		if pos == m.agentContentCursor {
+			break // cursor is visible if we haven't exceeded viewH yet
+		}
+		lines += lineH[pos]
+		if lines >= viewH {
+			// cursor is off-screen; advance scroll by one and retry
+			m.agentContentScroll++
+			m.clampAgentContentScroll(viewH, rows, navIdx)
+			return
+		}
 	}
 }
 

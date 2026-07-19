@@ -153,10 +153,16 @@ type agentDetailRow struct {
 	kind      agentDetailRowKind
 	feedIdx   int    // for agentRowFeed and agentRowArticle
 	verdict   string // for agentRowArticle: "ingest" | "maybe" | "skip"
+	action    string // for agentRowArticle (decisions): "+" | "-" | ""
+	status    string // for agentRowArticle (decisions): "done" | "pending" | ""
+	reason    string // for agentRowArticle (decisions): LLM reason
 	title     string // for agentRowArticle
 	url       string // for agentRowArticle: source URL (for browser open)
 	feedName  string // for agentRowFeed
 	feedStats string // for agentRowFeed: pre-formatted counts
+	// indices into m.agentRunDecisions for mutations (Decisions sub-tab only)
+	itemFeedIdx int // index into agentRunDecisions.Feeds
+	itemIdx     int // index into that feed's Items slice
 }
 
 // agentSubTab identifies the active sub-tab inside the Agent nav pane.
@@ -916,6 +922,65 @@ func (m Model) buildAgentDetailRows() []agentDetailRow {
 					verdict: item.Verdict,
 					title:   t,
 					url:     item.URL,
+				})
+			}
+		}
+	}
+	return rows
+}
+
+// buildAgentDecisionRows builds the flat row list for the Decisions sub-tab content pane.
+// Uses m.agentRunDecisions directly; shows all items grouped by feed.
+func (m Model) buildAgentDecisionRows() []agentDetailRow {
+	if len(m.agentRunDecisions.Feeds) == 0 {
+		return nil
+	}
+
+	// Build feed stats lookup from selected run record for display.
+	type fstats struct{ new, ingest, maybe, skip int; cost float64 }
+	statsMap := make(map[string]fstats)
+	if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
+		for _, f := range m.agentRuns[m.agentRunsCursor].Feeds {
+			statsMap[f.Name] = fstats{f.New, f.Ingest, f.Maybe, f.Skip, f.CostUSD}
+		}
+	}
+
+	var rows []agentDetailRow
+	rows = append(rows, agentDetailRow{kind: agentRowHeader})
+
+	for fi, df := range m.agentRunDecisions.Feeds {
+		if len(df.Items) == 0 {
+			continue
+		}
+		s := statsMap[df.Name]
+		stats := fmt.Sprintf("new:%-3d  in:%-3d  maybe:%-3d  skip:%-3d", s.new, s.ingest, s.maybe, s.skip)
+		if s.cost > 0 {
+			stats += fmt.Sprintf("  $%.3f", s.cost)
+		}
+		rows = append(rows, agentDetailRow{
+			kind:      agentRowFeed,
+			feedIdx:   fi,
+			feedName:  df.Name,
+			feedStats: stats,
+		})
+		if m.agentFeedExpanded[fi] {
+			for ii, item := range df.Items {
+				t := strings.ReplaceAll(item.Title, "\n", " ")
+				t = strings.ReplaceAll(t, "\r", "")
+				if t == "" {
+					t = item.URL
+				}
+				rows = append(rows, agentDetailRow{
+					kind:        agentRowArticle,
+					feedIdx:     fi,
+					verdict:     item.Verdict,
+					action:      item.Action,
+					status:      item.Status,
+					reason:      item.Reason,
+					title:       t,
+					url:         item.URL,
+					itemFeedIdx: fi,
+					itemIdx:     ii,
 				})
 			}
 		}

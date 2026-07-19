@@ -418,10 +418,8 @@ func (m Model) renderNavPane(height int) []string {
 		lines = append(lines, m.renderAgentNavSubTabBar())
 		lines = append(lines, "")
 		switch m.agentSubTab {
-		case agentSubTabRuns:
+		case agentSubTabRuns, agentSubTabDecisions:
 			lines = append(lines, m.renderNavAgentRuns(height-2)...)
-		case agentSubTabDecisions:
-			lines = append(lines, fg(t.NavDimmed, "  (no decisions)"))
 		case agentSubTabFeeds:
 			lines = append(lines, fg(t.NavDimmed, "  (no feeds)"))
 		}
@@ -1338,22 +1336,36 @@ func (m Model) renderContentLibrary(height, width int) []string {
 				visual++
 			}
 		}
-		// Scroll indicator when content extends beyond current view.
-		if m.contentScroll > 0 || m.contentScroll+viewH < len(m.contentLines) {
-			pct := 0
-			maxScroll := len(m.contentLines) - 1
-			if maxScroll > 0 {
-				pct = m.contentLineCursor * 100 / maxScroll
-			}
-			indicator := fmt.Sprintf(" line %d/%d (%d%%)", m.contentLineCursor+1, len(m.contentLines), pct)
-			lines = append(lines, fg(t.ContentDimmed, indicator))
-		}
 	}
 
+	// Pad to full height first.
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
-	return lines[:height]
+	lines = lines[:height]
+
+	// Scroll indicator — bottom-right corner, overlaid on the last line.
+	if len(m.contentLines) > 0 && (m.contentScroll > 0 || m.contentScroll+viewH < len(m.contentLines)) {
+		pct := 0
+		maxScroll := len(m.contentLines) - 1
+		if maxScroll > 0 {
+			pct = m.contentLineCursor * 100 / maxScroll
+		}
+		indicator := fmt.Sprintf("line %d/%d (%d%%) ", m.contentLineCursor+1, len(m.contentLines), pct)
+		contentW := width
+		lastIdx := height - 1
+		base := lines[lastIdx]
+		baseVisible := lipgloss.Width(base)
+		indW := len([]rune(indicator))
+		if indW <= contentW {
+			pad := contentW - baseVisible - indW
+			if pad < 0 {
+				pad = 0
+			}
+			lines[lastIdx] = base + strings.Repeat(" ", pad) + fg(t.ContentDimmed, indicator)
+		}
+	}
+	return lines
 }
 
 // renderContentTabs renders the [Flash] [Summary] [Body] [Cards] tab strip
@@ -1656,11 +1668,12 @@ func (m Model) renderContentAgent(height, width int) []string {
 			return m.renderAgentRunDetail(height, width)
 		}
 	case agentSubTabDecisions:
+		if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
+			return m.renderAgentDecisionsContent(height, width)
+		}
 		lines = append(lines, fgBold(t.ContentTitle, "Decisions"))
 		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "  No pending decisions."))
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "  Run /agent run --dry-run to generate a decisions file."))
+		lines = append(lines, fg(t.ContentDimmed, "  No run selected."))
 	case agentSubTabFeeds:
 		lines = append(lines, fgBold(t.ContentTitle, "Feeds"))
 		lines = append(lines, "")
@@ -1765,21 +1778,26 @@ func (m Model) renderAgentRunDetail(height, width int) []string {
 				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
 			}
 		case agentRowArticle:
-			icon := "–"
-			col := t.ContentDimmed
+			icon := "✗"
+			iconCol := t.StatusError
 			switch r.verdict {
 			case "ingest":
 				icon = "✓"
-				col = t.Accent
+				iconCol = t.Accent
 			case "maybe":
 				icon = "?"
-				col = t.Favorite
+				iconCol = t.Favorite
 			}
-			text := fmt.Sprintf("    %s %s", icon, r.title)
+			iconPart := fg(iconCol, "    "+icon+" ")
+			titlePart := fg(t.ContentText, r.title)
 			if selected {
-				rowLines = append(rowLines, rowLine{curNavPos, fgBold(col, text)})
-			} else {
-				rowLines = append(rowLines, rowLine{curNavPos, fg(col, text)})
+				iconPart = fgBold(iconCol, "    "+icon+" ")
+				titlePart = fgBold(t.ContentText, r.title)
+			}
+			rowLines = append(rowLines, rowLine{curNavPos, iconPart + titlePart})
+			if r.reason != "" {
+				reason := strings.ReplaceAll(r.reason, "\n", " ")
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, "      "+reason)})
 			}
 		}
 	}
@@ -1814,6 +1832,152 @@ func (m Model) renderAgentRunDetail(height, width int) []string {
 		lines = append(lines, visibleRows[i].text)
 	}
 
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
+// renderAgentDecisionsContent renders the Decisions sub-tab content pane.
+// Shows items from the selected run's decisions file grouped by foldable feed sections.
+// Article rows show action state: ✓ done, + approved, – skipped, ? pending maybe.
+func (m Model) renderAgentDecisionsContent(height, width int) []string {
+	t := ActiveTheme
+	rec := m.agentRuns[m.agentRunsCursor]
+
+	// Count pending items (skip/maybe not yet approved).
+	pendingCount := 0
+	approvedCount := 0
+	for _, df := range m.agentRunDecisions.Feeds {
+		for _, item := range df.Items {
+			if item.Status == "done" {
+				continue
+			}
+			if item.Action == "+" {
+				approvedCount++
+			} else if item.Verdict == "skip" || item.Verdict == "maybe" {
+				pendingCount++
+			}
+		}
+	}
+
+	statRow := func(label, val string) string {
+		return fg(t.ContentDimmed, fmt.Sprintf("  %-12s", label)) + fg(t.ContentText, val)
+	}
+	header := []string{
+		fgBold(t.ContentTitle, fmt.Sprintf("%s  [%s]", rec.RunID, rec.RunType)),
+		"",
+		statRow("Started", rec.StartedAt.Local().Format("2006-01-02 15:04:05")),
+		statRow("Pending", fmt.Sprintf("%d", pendingCount)),
+		statRow("Approved", fmt.Sprintf("%d", approvedCount)),
+		"",
+		fg(t.ContentDimmed, "  Feeds  (Space to expand · a=approve · s=skip)"),
+	}
+
+	detailRows := m.buildAgentDecisionRows()
+
+	var navIdx []int
+	for i, r := range detailRows {
+		if r.kind == agentRowFeed || r.kind == agentRowArticle {
+			navIdx = append(navIdx, i)
+		}
+	}
+
+	type rowLine struct {
+		navPos int
+		text   string
+	}
+	var rowLines []rowLine
+
+	navPos := 0
+	for i, r := range detailRows {
+		if r.kind == agentRowHeader {
+			continue
+		}
+		isNav := false
+		curNavPos := -1
+		for _, ni := range navIdx {
+			if ni == i {
+				isNav = true
+				curNavPos = navPos
+				navPos++
+				break
+			}
+		}
+		selected := isNav && curNavPos == m.agentContentCursor && m.focus == paneContent
+
+		switch r.kind {
+		case agentRowFeed:
+			expanded := m.agentFeedExpanded[r.feedIdx]
+			arrow := "▶"
+			if expanded {
+				arrow = "▼"
+			}
+			text := fmt.Sprintf("  %s %s", arrow, r.feedName)
+			statsText := "    " + r.feedStats
+			if selected {
+				rowLines = append(rowLines, rowLine{curNavPos, fgBold(t.Accent, text)})
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
+			} else {
+				rowLines = append(rowLines, rowLine{curNavPos, fg(t.ContentText, text)})
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
+			}
+		case agentRowArticle:
+			var icon string
+			var iconCol lipgloss.Color
+			switch {
+			case r.status == "done":
+				icon = "✓"
+				iconCol = t.Accent
+			case r.action == "+":
+				icon = "+"
+				iconCol = t.Accent
+			case r.verdict == "maybe" && r.action == "":
+				icon = "?"
+				iconCol = t.Favorite
+			default:
+				icon = "✗"
+				iconCol = t.StatusError
+			}
+			iconPart := fg(iconCol, "    "+icon+" ")
+			titlePart := fg(t.ContentText, r.title)
+			if selected {
+				iconPart = fgBold(iconCol, "    "+icon+" ")
+				titlePart = fgBold(t.ContentText, r.title)
+			}
+			rowLines = append(rowLines, rowLine{curNavPos, iconPart + titlePart})
+			if r.reason != "" {
+				reason := strings.ReplaceAll(r.reason, "\n", " ")
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, "      "+reason)})
+			}
+		}
+	}
+
+	contentH := height - len(header)
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	scrollStart := 0
+	if m.agentContentCursor > 0 {
+		for i, rl := range rowLines {
+			if rl.navPos >= m.agentContentScroll {
+				scrollStart = i
+				break
+			}
+		}
+	}
+
+	visibleRows := rowLines
+	if scrollStart < len(rowLines) {
+		visibleRows = rowLines[scrollStart:]
+	}
+
+	var lines []string
+	lines = append(lines, header...)
+	for i := 0; i < contentH && i < len(visibleRows); i++ {
+		lines = append(lines, visibleRows[i].text)
+	}
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
@@ -2287,15 +2451,9 @@ func (m Model) renderResourceOverlay() string {
 
 	var out []string
 
-	// Top bar: "arc │ resource: <name>   line N / M"
+	// Top bar: "arc │ resource: <name>"
 	left := fgBold(t.TopBarText, "arc") + fg(t.Dimmed, " │ ") + fg(t.TopBarText, "resource: "+m.resourceName)
-	total := len(m.resourceLines)
-	right := fg(t.Dimmed, fmt.Sprintf("line %d / %d", m.resourceCursor+1, total))
-	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
-	if gap < 1 {
-		gap = 1
-	}
-	out = append(out, " "+left+strings.Repeat(" ", gap)+right+" ")
+	out = append(out, " "+left)
 	out = append(out, fg(t.BoxBorder, strings.Repeat("─", w)))
 
 	// Scrollable content.
@@ -2315,6 +2473,25 @@ func (m Model) renderResourceOverlay() string {
 	// Pad remaining content lines.
 	for len(out) < h-2 {
 		out = append(out, "")
+	}
+
+	// Position indicator — bottom-right corner of content area.
+	total := len(m.resourceLines)
+	if total > 0 {
+		pct := 0
+		if total > 1 {
+			pct = m.resourceCursor * 100 / (total - 1)
+		}
+		indicator := fmt.Sprintf("line %d/%d (%d%%) ", m.resourceCursor+1, total, pct)
+		lastIdx := len(out) - 1
+		base := out[lastIdx]
+		baseW := lipgloss.Width(base)
+		indW := len([]rune(indicator))
+		pad := w - baseW - indW
+		if pad < 0 {
+			pad = 0
+		}
+		out[lastIdx] = base + strings.Repeat(" ", pad) + fg(t.ContentDimmed, indicator)
 	}
 
 	// Hint bar: separator + status/hints line.
