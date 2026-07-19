@@ -11,12 +11,15 @@ const stateFile = "tui_state.json"
 
 // tuiState holds UI state that persists between TUI invocations.
 type tuiState struct {
-	ActiveTab  string `json:"active_tab,omitempty"`
-	SubTab     string `json:"sub_tab,omitempty"`
-	Workspace  string `json:"workspace,omitempty"`
-	Article    string `json:"article,omitempty"`
-	Collection string `json:"collection,omitempty"`
-	WsFocus    string `json:"ws_focus,omitempty"` // solo-mode workspace name
+	ActiveTab          string `json:"active_tab,omitempty"`
+	SubTab             string `json:"sub_tab,omitempty"`
+	AgentSubTab        string `json:"agent_sub_tab,omitempty"`
+	AgentRunID         string `json:"agent_run_id,omitempty"`
+	AgentContentCursor int    `json:"agent_content_cursor,omitempty"`
+	Workspace          string `json:"workspace,omitempty"`
+	Article            string `json:"article,omitempty"`
+	Collection         string `json:"collection,omitempty"`
+	WsFocus            string `json:"ws_focus,omitempty"` // solo-mode workspace name
 }
 
 func statePath(dataRoot string) string {
@@ -98,5 +101,23 @@ func subTabToString(t navSubTab) string {
 		return "articles"
 	default:
 		return "articles"
+	}
+}
+
+func agentSubTabFromString(s string) agentSubTab {
+	switch s {
+	case "decisions":
+		return agentSubTabDecisions
+	default:
+		return agentSubTabRuns
+	}
+}
+
+func agentSubTabToString(t agentSubTab) string {
+	switch t {
+	case agentSubTabDecisions:
+		return "decisions"
+	default:
+		return "runs"
 	}
 }

@@ -1384,8 +1384,10 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 
 	sendFn := func(tea.Msg) {} // placeholder, overwritten by SetProgramSend
 	m := Model{
-		activeTab:       tabFromString(restored.ActiveTab),
-		navSubTab:       subTabFromString(restored.SubTab),
+		activeTab:          tabFromString(restored.ActiveTab),
+		navSubTab:          subTabFromString(restored.SubTab),
+		agentSubTab:        agentSubTabFromString(restored.AgentSubTab),
+		agentContentCursor: restored.AgentContentCursor,
 		focus:           paneNav,
 		themeMode:       themeMode,
 		cursorVisible:   true,
@@ -1421,9 +1423,14 @@ func (m Model) SaveHistory() {
 // SaveState persists UI selection state to disk. Call after p.Run() exits.
 func (m Model) SaveState() {
 	s := tuiState{
-		ActiveTab: tabToString(m.activeTab),
-		SubTab:    subTabToString(m.navSubTab),
-		WsFocus:   m.wsFocusName,
+		ActiveTab:          tabToString(m.activeTab),
+		SubTab:             subTabToString(m.navSubTab),
+		AgentSubTab:        agentSubTabToString(m.agentSubTab),
+		AgentContentCursor: m.agentContentCursor,
+		WsFocus:            m.wsFocusName,
+	}
+	if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
+		s.AgentRunID = m.agentRuns[m.agentRunsCursor].RunID
 	}
 // Store currently selected workspace name.
 	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {

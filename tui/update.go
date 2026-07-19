@@ -296,7 +296,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.agentRunsErr = ""
 		}
 		m.agentRunsLoaded = true
-		// Auto-load decisions for the first (most recent) run.
+		// Restore previously selected run by ID.
+		if id := m.restoredState.AgentRunID; id != "" {
+			for i, r := range m.agentRuns {
+				if r.RunID == id {
+					m.agentRunsCursor = i
+					break
+				}
+			}
+			m.restoredState.AgentRunID = ""
+		}
+		// Auto-load decisions for the selected run.
 		cmds = append(cmds, m.triggerAgentRunDetail())
 
 	case statsLoadedMsg:
@@ -905,6 +915,10 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Expand):
 		return m.navToggleExpand()
 	case key.Matches(msg, keys.Select):
+		if m.activeTab == tabAgent {
+			m.setFocusPane(paneContent)
+			return nil
+		}
 		return m.navSelect()
 	case key.Matches(msg, keys.MarkRead):
 		return m.cmdMarkRead()
@@ -1296,13 +1310,21 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 				return openInChrome(row.url)
 			}
 		}
+	case key.Matches(msg, keys.Select), msg.Type == tea.KeyRunes && msg.String() == "v":
+		// View ingested article in the Library viewer (only if status == "done").
+		if m.agentContentCursor < len(navIdx) {
+			row := rows[navIdx[m.agentContentCursor]]
+			if row.kind == agentRowArticle && row.status == "done" && row.url != "" {
+				return m.navigateToArticleByURL(row.url)
+			}
+		}
 	case msg.Type == tea.KeyRunes && msg.String() == "a":
-		// Approve: set action "+" on selected article (Decisions sub-tab only).
+		// Ingest: set action "+" on selected article (Decisions sub-tab only).
 		if m.agentSubTab == agentSubTabDecisions && m.agentContentCursor < len(navIdx) {
 			row := rows[navIdx[m.agentContentCursor]]
 			if row.kind == agentRowArticle && row.status != "done" {
 				m.agentRunDecisions.Feeds[row.itemFeedIdx].Items[row.itemIdx].Action = "+"
-				m.statusMsg = "✓ approved"
+				m.statusMsg = "✓ queued for ingest"
 				m.saveAgentDecisions()
 			}
 		}
@@ -2754,6 +2776,30 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 	m.contentLines = nil
 	m.contentLineCursor = 0
 	return loadContent(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+}
+
+// navigateToArticleByURL switches to the Library/Articles view and selects the article
+// matching url. Returns a content-load command if found, nil otherwise.
+func (m *Model) navigateToArticleByURL(url string) tea.Cmd {
+	// Find article in the unfiltered nav list.
+	idx := -1
+	for i, item := range m.navItemsAll {
+		if item.url == url {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.statusMsg = "article not found in library"
+		return nil
+	}
+	m.activeTab = tabLibrary
+	m.navSubTab = navSubTabArticles
+	m.navItems = m.navItemsAll
+	m.navCursor = idx
+	m.navScroll = 0
+	m.setFocusPane(paneNav)
+	return m.triggerContentLoad()
 }
 
 // openCurrentURL opens the source URL of the current nav item in a new Chrome window.

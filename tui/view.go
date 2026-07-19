@@ -1840,21 +1840,21 @@ func (m Model) renderAgentRunDetail(height, width int) []string {
 
 // renderAgentDecisionsContent renders the Decisions sub-tab content pane.
 // Shows items from the selected run's decisions file grouped by foldable feed sections.
-// Article rows show action state: ✓ done, + approved, – skipped, ? pending maybe.
+// Article rows show action state: ✓ done, + ingest, – skipped, ? pending maybe.
 func (m Model) renderAgentDecisionsContent(height, width int) []string {
 	t := ActiveTheme
 	rec := m.agentRuns[m.agentRunsCursor]
 
-	// Count pending items (skip/maybe not yet approved).
+	// Count pending items (skip/maybe not yet queued for ingestion).
 	pendingCount := 0
-	approvedCount := 0
+	ingestCount := 0
 	for _, df := range m.agentRunDecisions.Feeds {
 		for _, item := range df.Items {
 			if item.Status == "done" {
 				continue
 			}
 			if item.Action == "+" {
-				approvedCount++
+				ingestCount++
 			} else if item.Verdict == "skip" || item.Verdict == "maybe" {
 				pendingCount++
 			}
@@ -1869,9 +1869,9 @@ func (m Model) renderAgentDecisionsContent(height, width int) []string {
 		"",
 		statRow("Started", rec.StartedAt.Local().Format("2006-01-02 15:04:05")),
 		statRow("Pending", fmt.Sprintf("%d", pendingCount)),
-		statRow("Approved", fmt.Sprintf("%d", approvedCount)),
+		statRow("Ingest", fmt.Sprintf("%d", ingestCount)),
 		"",
-		fg(t.ContentDimmed, "  Feeds  (Space to expand · a=approve · s=skip)"),
+		fg(t.ContentDimmed, "  Feeds  (Space to expand · a=ingest · s=skip)"),
 	}
 
 	detailRows := m.buildAgentDecisionRows()
@@ -1931,7 +1931,7 @@ func (m Model) renderAgentDecisionsContent(height, width int) []string {
 				iconCol = t.Accent
 			case r.action == "+":
 				icon = "+"
-				iconCol = t.Accent
+				iconCol = t.NavMark
 			case r.verdict == "maybe" && r.action == "":
 				icon = "?"
 				iconCol = t.Favorite
