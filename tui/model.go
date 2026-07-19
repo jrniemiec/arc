@@ -80,12 +80,13 @@ func (t tab) String() string {
 type focusPane int
 
 const (
-	paneTabBar  focusPane = iota // top tab bar (Library/Agent/Stats)
-	paneNav                      // left navigator
-	paneContent                  // right content pane
-	paneCommand                  // command input line
-	paneStatus                   // status/output area (shell results, etc.)
-	paneResource                 // full-screen resource file overlay
+	paneTabBar    focusPane = iota // top tab bar (Library/Agent/Stats)
+	paneNav                        // left navigator
+	paneContent                    // right content pane
+	paneCommand                    // command input line
+	paneStatus                     // status/output area (shell results, etc.)
+	paneResource                   // full-screen resource file overlay
+	paneNavSubTab                  // nav sub-tab bar (Workspaces/Collections/Articles or Runs/Decisions/Feeds)
 )
 
 

@@ -811,6 +811,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleStatusKey(msg)
 	case paneResource:
 		return m.handleResourceKey(msg)
+	case paneNavSubTab:
+		return m.handleNavSubTabKey(msg)
 	}
 
 	return nil
@@ -851,7 +853,23 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.activeTab = (m.activeTab + 1) % tabCount
 	case key.Matches(msg, keys.NavDown), key.Matches(msg, keys.Select):
-		m.focus = paneNav
+		m.focus = paneNavSubTab
+	}
+	return nil
+}
+
+// handleNavSubTabKey handles keys when the nav sub-tab bar has focus.
+// ↑ goes to the top tab bar; ↓/Enter drops into the nav list; ←/→ switch sub-tabs.
+func (m *Model) handleNavSubTabKey(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case key.Matches(msg, keys.NavUp):
+		m.setFocusPane(paneTabBar)
+	case key.Matches(msg, keys.NavDown), key.Matches(msg, keys.Select):
+		m.setFocusPane(paneNav)
+	case key.Matches(msg, keys.ContentTabPrev):
+		return m.navLeft()
+	case key.Matches(msg, keys.ContentTabNext):
+		return m.navRight()
 	}
 	return nil
 }
@@ -864,7 +882,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		return m.navRight()
 	case key.Matches(msg, keys.NavUp):
 		if m.navAtTop() {
-			m.setFocusPane(paneTabBar)
+			m.setFocusPane(paneNavSubTab)
 			return nil
 		}
 		if m.activeTab == tabAgent {

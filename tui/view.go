@@ -597,7 +597,11 @@ func (m Model) renderNavSubTabBar() string {
 			break
 		}
 		if i == m.navSubTab {
-			parts = append(parts, fgBold(t.TabActive, text))
+			if m.focus == paneNavSubTab {
+				parts = append(parts, fgBold(t.Accent, text))
+			} else {
+				parts = append(parts, fgBold(t.TabActive, text))
+			}
 		} else {
 			parts = append(parts, fg(t.TabInactive, text))
 		}
@@ -1553,7 +1557,11 @@ func (m Model) renderAgentNavSubTabBar() string {
 			break
 		}
 		if i == m.agentSubTab {
-			parts = append(parts, fgBold(t.TabActive, text))
+			if m.focus == paneNavSubTab {
+				parts = append(parts, fgBold(t.Accent, text))
+			} else {
+				parts = append(parts, fgBold(t.TabActive, text))
+			}
 		} else {
 			parts = append(parts, fg(t.TabInactive, text))
 		}
