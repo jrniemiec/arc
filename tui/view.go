@@ -233,10 +233,15 @@ func (m Model) View() string {
 	}
 
 	// Fixed rows: top bar (2) + split sep (1) + detail lines (N) + cmd (N) + status sep (1) + completions (N) + status bar (1) = 5+inputH+N
+	// During ingest, 3 extra log lines are added above the spinner status line.
 	compLines := m.renderCompletionLines()
 	editDetailLines := m.reviewDetailLines()
 	inputH := m.inputVisualHeight()
-	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines)
+	ingestLogRows := 0
+	if m.ingestRunning {
+		ingestLogRows = 3
+	}
+	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines) + ingestLogRows
 	mainHeight := m.height - fixedRows
 	if mainHeight < 1 {
 		mainHeight = 1
@@ -253,6 +258,16 @@ func (m Model) View() string {
 	botLines = append(botLines, m.renderStatusSep())
 	botLines = append(botLines, compLines...)
 	botLines = append(botLines, m.renderStatusLine())
+	if m.ingestRunning {
+		for i := 0; i < 3; i++ {
+			logIdx := len(m.ingestLog) - 3 + i
+			if logIdx >= 0 && logIdx < len(m.ingestLog) {
+				botLines = append(botLines, fg(ActiveTheme.ContentDimmed, "  "+m.ingestLog[logIdx]))
+			} else {
+				botLines = append(botLines, "")
+			}
+		}
+	}
 
 	// Assemble exactly m.height lines — clamp/pad each section defensively.
 	out := make([]string, 0, m.height)

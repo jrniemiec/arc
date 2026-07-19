@@ -341,6 +341,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusUpdateMsg:
 		if m.ingestRunning {
+			if m.ingestLabel != "" {
+				m.ingestLog = append(m.ingestLog, m.ingestLabel)
+				if len(m.ingestLog) > 3 {
+					m.ingestLog = m.ingestLog[len(m.ingestLog)-3:]
+				}
+			}
 			m.ingestLabel = msg.text
 		} else {
 			m.statusMsg = msg.text
@@ -351,6 +357,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.populateLabel = ""
 		m.ingestRunning = false
 		m.ingestLabel = ""
+		m.ingestLog = nil
 		if msg.err != "" {
 			m.setStatusError("✗ " + msg.err)
 		} else {
