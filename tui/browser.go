@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -26,7 +27,12 @@ tell application "Google Chrome"
 end tell
 `, escapeAppleScript(url))
 
-		out, err := exec.Command("osascript", "-e", script).Output()
+		cmd := exec.Command("osascript", "-e", script)
+		// Detach from arc's controlling terminal so that osascript's Apple Events
+		// connection to Chrome does not corrupt the terminal's raw mode when Chrome
+		// closes its window.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		out, err := cmd.Output()
 		if err != nil {
 			return chromeOpenedMsg{err: err}
 		}
@@ -52,7 +58,9 @@ tell application "Google Chrome"
   end repeat
 end tell
 `, windowID)
-	_ = exec.Command("osascript", "-e", script).Run()
+	cmd := exec.Command("osascript", "-e", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	_ = cmd.Run()
 }
 
 // escapeAppleScript escapes a string for safe inclusion in an AppleScript string literal.

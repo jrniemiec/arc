@@ -705,6 +705,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.removeReviewing = false
 			m.statusMsg = "remove review cancelled"
 		}
+		// If input is already empty and not in chat mode, move focus to nav.
+		if m.input.Value() == "" && !m.chatMode && m.focus == paneCommand {
+			m.setFocusPane(paneNav)
+			return nil
+		}
 		m.input.SetValue("")
 		m.input.CursorEnd()
 		m.pastedBlob = ""
