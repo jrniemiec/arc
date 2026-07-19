@@ -2363,6 +2363,11 @@ func (m Model) renderStatusLine() string {
 	if m.populateRunning && !m.selectionMode {
 		return renderWaveIndicator(m.spinnerFrame, m.populateLabel, t.StreamingText, t.Dimmed)
 	}
+	if m.ingestRunning && !m.selectionMode {
+		frames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+		spin := frames[m.spinnerFrame%len(frames)]
+		return fg(t.StreamingText, " "+spin+" "+m.ingestLabel)
+	}
 	if m.askxStreaming && !m.selectionMode {
 		label := "askX streaming · " + m.askxResolvedProfile
 		return renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)

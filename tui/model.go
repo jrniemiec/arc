@@ -489,6 +489,8 @@ type Model struct {
 	askxCollapsed     map[int]bool       // set of collapsed box indices
 	populateRunning bool   // true while workspace populate LLM is in flight
 	populateLabel   string // label shown in wave indicator during populate
+	ingestRunning   bool   // true while an article ingest is in flight
+	ingestLabel     string // label shown in wave indicator during ingest
 
 	// Populate edit mode — sequential review of suggestions in input pane
 	populateEditing  bool                       // true while reviewing suggestions one-by-one
@@ -777,6 +779,9 @@ type ttsDoneMsg struct {
 	err error
 	gen int
 }
+
+// statusUpdateMsg carries a live progress string from an async operation.
+type statusUpdateMsg struct{ text string }
 
 type cmdDoneMsg struct {
 	statusMsg          string

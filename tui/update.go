@@ -339,9 +339,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetValue("")
 		m.input.CursorEnd()
 
+	case statusUpdateMsg:
+		if m.ingestRunning {
+			m.ingestLabel = msg.text
+		} else {
+			m.statusMsg = msg.text
+		}
+
 	case cmdDoneMsg:
 		m.populateRunning = false
 		m.populateLabel = ""
+		m.ingestRunning = false
+		m.ingestLabel = ""
 		if msg.err != "" {
 			m.setStatusError("✗ " + msg.err)
 		} else {
@@ -4368,14 +4377,17 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 		return nil
 	}
 	svc := m.svc
-	cfg := m.cfg
-	m.statusMsg = "⠸ ingesting " + url + "…"
+	send := *m.programSend
+	m.ingestRunning = true
+	m.ingestLabel = "fetching…"
+	m.statusMsg = ""
 	return func() tea.Msg {
 		req := service.IngestRequest{
-			URL:      url,
-			Progress: func(msg string) {},
+			URL: url,
+			Progress: func(step string) {
+				send(statusUpdateMsg{text: step})
+			},
 		}
-		_ = cfg
 		result, err := svc.Ingest(context.Background(), req)
 		if err != nil {
 			return cmdDoneMsg{err: err.Error()}
