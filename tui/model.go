@@ -491,6 +491,12 @@ type Model struct {
 	ingestLog       []string // rolling log of last 4 completed steps
 	statusSuccess   bool     // true = render statusMsg in accent color
 
+	// Agent run state
+	agentRunning      bool                // true while an agent run is in flight
+	agentRunCancelFn  context.CancelFunc  // cancels the in-flight agent run
+	agentConfirmLines []string            // multi-line confirmation block shown above input
+	agentConfirmAction func() tea.Cmd     // action to execute on Enter
+
 	// Populate edit mode — sequential review of suggestions in input pane
 	populateEditing  bool                       // true while reviewing suggestions one-by-one
 	populateEditItems []populateEditItem         // all items to review (collections first, then articles)
@@ -561,6 +567,8 @@ var globalCommands = []cmdCompletion{
 	{"/models", "", "list available LLM profiles"},
 	{"/ingest", "<url>", "add a new article"},
 	{"/log", "", "open/close debug log tail"},
+	{"/agent-run", "[--dry-run] [--focus \"...\"]", "start a fresh agent feed scan"},
+	{"/agent-rerun", "[--dry-run]", "re-run decisions for the selected agent run"},
 }
 
 // articleCommands are available when the Articles sub-tab is active.
@@ -706,6 +714,14 @@ type agentDecisionsLoadedMsg struct {
 	runID string
 	df    agentpkg.DecisionsFile
 	err   string
+}
+
+// agentRunDoneMsg signals completion of a fresh or decisions agent run.
+type agentRunDoneMsg struct {
+	rec      agentpkg.RunRecord
+	err      string
+	isRerun  bool   // true = decisions run; reload current decisions file
+	newRunID string // for fresh runs: auto-select this run after reload
 }
 
 type collectionArticlesLoadedMsg struct {

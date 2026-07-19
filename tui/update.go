@@ -276,6 +276,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadChatHistoryCmd(m.chatWorkspace, false))
 		}
 
+	case agentRunDoneMsg:
+		m.agentRunning = false
+		m.ingestLabel = ""
+		m.ingestLog = nil
+		if m.agentRunCancelFn != nil {
+			m.agentRunCancelFn()
+			m.agentRunCancelFn = nil
+		}
+		if msg.err != "" {
+			m.setStatusError("✗ agent: " + msg.err)
+		} else if msg.isRerun {
+			n := msg.rec.TotalIngest
+			m.statusMsg = fmt.Sprintf("✓ rerun complete — %d ingested", n)
+			m.statusSuccess = true
+			// Reload the decisions file so done items are trimmed.
+			cmds = append(cmds, loadAgentDecisions(m.cfg.AgentPath, m.agentRunDecisionsID))
+		} else {
+			n := msg.rec.TotalIngest
+			m.statusMsg = fmt.Sprintf("✓ agent run complete — %d ingested", n)
+			m.statusSuccess = true
+		}
+		// Reload runs list; auto-select new run after load.
+		if msg.newRunID != "" {
+			m.restoredState.AgentRunID = msg.newRunID
+		}
+		cmds = append(cmds, loadAgentRuns(m.cfg.AgentPath))
+		return m, tea.Batch(cmds...)
+
 	case agentDecisionsLoadedMsg:
 		if msg.runID == m.agentRunDecisionsID {
 			if msg.err == "" {
@@ -340,7 +368,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.CursorEnd()
 
 	case statusUpdateMsg:
-		if m.ingestRunning {
+		if m.ingestRunning || m.agentRunning {
 			if m.ingestLabel != "" {
 				m.ingestLog = append(m.ingestLog, m.ingestLabel)
 				if len(m.ingestLog) > 3 {
@@ -716,6 +744,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.statusLines = nil
 		m.pendingConfirm = nil
 		m.pendingConfirmMsg = ""
+		m.agentConfirmAction = nil
+		m.agentConfirmLines = nil
 		if m.populateEditing {
 			m.populateEditing = false
 			m.statusMsg = "populate edit cancelled"
@@ -2545,6 +2575,19 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			val = strings.TrimSpace(m.pastedBlob)
 			m.pastedBlob = ""
 		}
+		// Agent confirmation flow (multi-line block above input).
+		if m.agentConfirmAction != nil {
+			if val == "yes" {
+				fn := m.agentConfirmAction
+				m.agentConfirmAction = nil
+				m.agentConfirmLines = nil
+				return fn()
+			}
+			m.agentConfirmAction = nil
+			m.agentConfirmLines = nil
+			m.statusMsg = "cancelled"
+			return nil
+		}
 		// Confirmation flow
 		if m.pendingConfirm != nil {
 			if val == "yes" {
@@ -3058,6 +3101,9 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			{cmd: "collection", arg: "<slug>", desc: "remove collection from selected workspace"},
 		}
 
+	case "/agent-rerun":
+		return nil
+
 	case "/help":
 		// Second level: "/help article " → return command entries for that group.
 		trimmed := strings.TrimSpace(strings.ToLower(arg))
@@ -3190,6 +3236,10 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.dispatchQualified(navSubTabCollections, arg)
 	case "/workspace":
 		return m.dispatchQualified(navSubTabWorkspaces, arg)
+	case "/agent-run":
+		return m.cmdAgentRun(arg)
+	case "/agent-rerun":
+		return m.cmdAgentRerun(arg)
 	}
 
 	// ── Context-sensitive commands ──────────────────────────────────────────
@@ -4439,6 +4489,230 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 	}
 }
 
+// ── Agent commands ───────────────────────────────────────────────────────────
+
+// cmdAgentRun prepares a fresh agent feed-scan confirmation block.
+// arg may contain --dry-run and/or --focus "...".
+func (m *Model) cmdAgentRun(arg string) tea.Cmd {
+	if m.agentRunning {
+		m.statusMsg = "✗ agent run already in progress"
+		return nil
+	}
+	dryRun, focus := parseAgentRunFlags(arg)
+
+	agentCfgPath := filepath.Join(m.cfg.AgentPath, "config.json")
+	agentCfg, err := agentpkg.LoadAgentConfig(agentCfgPath)
+	if err != nil {
+		m.statusMsg = "✗ could not load agent config: " + err.Error()
+		return nil
+	}
+	activeFeeds := 0
+	for _, f := range agentCfg.Feeds {
+		if !f.Disabled {
+			activeFeeds++
+		}
+	}
+	if activeFeeds == 0 {
+		m.statusMsg = "✗ no feeds configured — add feeds to ~/.arc/agent/config.json"
+		return nil
+	}
+
+	focusStr := "(none)"
+	if focus != "" {
+		focusStr = focus
+	} else if agentCfg.Focus != "" {
+		focusStr = agentCfg.Focus
+	}
+	dryStr := "no"
+	if dryRun {
+		dryStr = "yes"
+	}
+	filterProfile := agentCfg.FilterProfileName()
+	summaryProfile := agentCfg.SummaryProfileName()
+
+	m.agentConfirmLines = []string{
+		"  Agent run — poll all feeds",
+		"",
+		fmt.Sprintf("  %-12s %d active", "Feeds", activeFeeds),
+		fmt.Sprintf("  %-12s %s", "Filter", filterProfile),
+		fmt.Sprintf("  %-12s %s", "Ingest", summaryProfile),
+		fmt.Sprintf("  %-12s %s", "Focus", focusStr),
+		fmt.Sprintf("  %-12s %s", "Dry-run", dryStr),
+		"",
+		"  yes to confirm   Esc to cancel",
+	}
+	m.agentConfirmAction = func() tea.Cmd {
+		return m.execAgentRun(agentCfg, dryRun, focus)
+	}
+	m.focus = paneCommand
+	m.input.SetValue("")
+	return nil
+}
+
+// cmdAgentRerun prepares a decisions-rerun confirmation block for the selected run.
+func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
+	if m.agentRunning {
+		m.statusMsg = "✗ agent run already in progress"
+		return nil
+	}
+	dryRun, _ := parseAgentRunFlags(arg)
+	// Reject any non-flag tokens.
+	for _, tok := range strings.Fields(arg) {
+		if tok != "--dry-run" {
+			m.statusMsg = "✗ unknown argument: " + tok + "  usage: /agent-rerun [--dry-run]"
+			return nil
+		}
+	}
+	if m.agentRunsCursor < 0 || m.agentRunsCursor >= len(m.agentRuns) {
+		m.statusMsg = "✗ no run selected — select a run in the Agent nav pane"
+		return nil
+	}
+	if len(m.agentRunDecisions.Feeds) == 0 {
+		m.statusMsg = "✗ no decisions file for this run"
+		return nil
+	}
+	// Count queued items.
+	queued := 0
+	for _, df := range m.agentRunDecisions.Feeds {
+		for _, item := range df.Items {
+			if item.Action == "+" && item.Status != "done" {
+				queued++
+			}
+		}
+	}
+	if queued == 0 {
+		m.statusMsg = "✗ no items queued — use a/s keys to mark items for ingest"
+		return nil
+	}
+
+	rec := m.agentRuns[m.agentRunsCursor]
+	dryStr := "no"
+	if dryRun {
+		dryStr = "yes"
+	}
+	decisionsPath := filepath.Join(m.cfg.AgentPath, "decisions-"+rec.RunID+".json")
+
+	m.agentConfirmLines = []string{
+		fmt.Sprintf("  Agent rerun — decisions from %s", rec.RunID),
+		"",
+		fmt.Sprintf("  %-12s %d items marked for ingest", "Queued", queued),
+		fmt.Sprintf("  %-12s %s", "Run date", rec.StartedAt.Local().Format("2006-01-02 15:04")),
+		fmt.Sprintf("  %-12s %s", "Dry-run", dryStr),
+		"",
+		"  yes to confirm   Esc to cancel",
+	}
+	runID := rec.RunID
+	m.agentConfirmAction = func() tea.Cmd {
+		return m.execAgentRerun(decisionsPath, runID, dryRun)
+	}
+	m.focus = paneCommand
+	m.input.SetValue("")
+	return nil
+}
+
+// execAgentRun launches a fresh feed scan in a goroutine.
+func (m *Model) execAgentRun(agentCfg agentpkg.AgentConfig, dryRun bool, focus string) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	send := *m.programSend
+	cfg := m.cfg
+	db := m.svc.Library().DB()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.agentRunning = true
+	m.agentRunCancelFn = cancel
+	m.ingestLabel = "starting…"
+	m.ingestLog = nil
+
+	return func() tea.Msg {
+		opts := agentpkg.RunOptions{
+			ArcConfig:    cfg,
+			AgentCfg:     agentCfg,
+			DB:           db,
+			FeedStateDir: filepath.Join(cfg.AgentPath, "state"),
+			RunsPath:     filepath.Join(cfg.AgentPath, "runs.jsonl"),
+			DecisionsDir: cfg.AgentPath,
+			DryRun:       dryRun,
+			Focus:        focus,
+			Status: func(slot int, msg string) {
+				if slot == 0 {
+					send(statusUpdateMsg{text: msg})
+				}
+			},
+		}
+		rec, err := agentpkg.RunFeeds(ctx, opts)
+		if err != nil {
+			return agentRunDoneMsg{err: err.Error()}
+		}
+		return agentRunDoneMsg{rec: rec, newRunID: rec.RunID}
+	}
+}
+
+// execAgentRerun launches a decisions run in a goroutine.
+func (m *Model) execAgentRerun(decisionsPath, runID string, dryRun bool) tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	send := *m.programSend
+	cfg := m.cfg
+	db := m.svc.Library().DB()
+
+	agentCfgPath := filepath.Join(cfg.AgentPath, "config.json")
+	agentCfg, err := agentpkg.LoadAgentConfig(agentCfgPath)
+	if err != nil {
+		m.statusMsg = "✗ could not load agent config: " + err.Error()
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.agentRunning = true
+	m.agentRunCancelFn = cancel
+	m.ingestLabel = "starting…"
+	m.ingestLog = nil
+
+	return func() tea.Msg {
+		opts := agentpkg.RunOptions{
+			ArcConfig: cfg,
+			AgentCfg:  agentCfg,
+			DB:        db,
+			RunsPath:  filepath.Join(cfg.AgentPath, "runs.jsonl"),
+			DryRun:    dryRun,
+			Status: func(slot int, msg string) {
+				if slot == 0 {
+					send(statusUpdateMsg{text: msg})
+				}
+			},
+		}
+		rec, err := agentpkg.RunDecisions(ctx, opts, decisionsPath)
+		if err != nil {
+			return agentRunDoneMsg{err: err.Error(), isRerun: true}
+		}
+		return agentRunDoneMsg{rec: rec, isRerun: true}
+	}
+}
+
+// parseAgentRunFlags parses --dry-run and --focus "..." from a command arg string.
+func parseAgentRunFlags(arg string) (dryRun bool, focus string) {
+	parts := strings.Fields(arg)
+	for i := 0; i < len(parts); i++ {
+		switch parts[i] {
+		case "--dry-run":
+			dryRun = true
+		case "--focus":
+			if i+1 < len(parts) {
+				i++
+				focus = strings.Join(parts[i:], " ")
+				focus = strings.Trim(focus, "\"")
+				break
+			}
+		}
+	}
+	return
+}
+
 // ── Collection commands ──────────────────────────────────────────────────────
 
 // cmdDeleteCollection deletes the selected collection after confirmation.
@@ -5381,6 +5655,10 @@ var helpGroups = []struct {
 		{"↑ / ↓", "", "recall command history (in command pane)"},
 		{"?", "", "show key bindings"},
 		{"q / ctrl+c", "", "quit"},
+	}},
+	{"agent", []cmdCompletion{
+		{"/agent-run", "[--dry-run] [--focus \"...\"]", "fresh feed scan — poll all feeds, filter, ingest"},
+		{"/agent-rerun", "[--dry-run]", "process decisions for the selected run (mark items with a/s first)"},
 	}},
 	{"system", []cmdCompletion{
 		{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},

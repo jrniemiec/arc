@@ -233,15 +233,17 @@ func (m Model) View() string {
 	}
 
 	// Fixed rows: top bar (2) + split sep (1) + detail lines (N) + cmd (N) + status sep (1) + completions (N) + status bar (1) = 5+inputH+N
-	// During ingest, 3 extra log lines are added above the spinner status line.
+	// During ingest/agent run, 3 extra log lines are added above the spinner status line.
+	// During agent confirm, agentConfirmLines are shown above the input line.
 	compLines := m.renderCompletionLines()
 	editDetailLines := m.reviewDetailLines()
 	inputH := m.inputVisualHeight()
 	ingestLogRows := 0
-	if m.ingestRunning {
+	if m.ingestRunning || m.agentRunning {
 		ingestLogRows = 3
 	}
-	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines) + ingestLogRows
+	agentConfirmRows := len(m.agentConfirmLines)
+	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines) + ingestLogRows + agentConfirmRows
 	mainHeight := m.height - fixedRows
 	if mainHeight < 1 {
 		mainHeight = 1
@@ -251,14 +253,20 @@ func (m Model) View() string {
 	topLines := []string{m.renderTabBar(), m.renderSplitSep(m.width, true)}
 	mainLines := strings.Split(m.renderMainArea(mainHeight), "\n")
 	cmdInput := m.renderCommandInput()
-	botLines := make([]string, 0, 4+len(editDetailLines)+inputH+len(compLines))
+	botLines := make([]string, 0, 4+len(editDetailLines)+inputH+len(compLines)+agentConfirmRows)
 	botLines = append(botLines, m.renderSplitSep(m.width, false))
 	botLines = append(botLines, editDetailLines...)
+	if agentConfirmRows > 0 {
+		t := ActiveTheme
+		for _, line := range m.agentConfirmLines {
+			botLines = append(botLines, fg(t.ContentText, line))
+		}
+	}
 	botLines = append(botLines, strings.Split(cmdInput, "\n")...)
 	botLines = append(botLines, m.renderStatusSep())
 	botLines = append(botLines, compLines...)
 	botLines = append(botLines, m.renderStatusLine())
-	if m.ingestRunning {
+	if m.ingestRunning || m.agentRunning {
 		for i := 0; i < 3; i++ {
 			logIdx := len(m.ingestLog) - 3 + i
 			if logIdx >= 0 && logIdx < len(m.ingestLog) {
@@ -2240,7 +2248,7 @@ func (m Model) renderStatusLine() string {
 	if m.populateRunning && !m.selectionMode {
 		return renderWaveIndicator(m.spinnerFrame, m.populateLabel, t.StreamingText, t.Dimmed)
 	}
-	if m.ingestRunning && !m.selectionMode {
+	if (m.ingestRunning || m.agentRunning) && !m.selectionMode {
 		frames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 		spin := frames[m.spinnerFrame%len(frames)]
 		return fg(t.StreamingText, " "+spin+" "+m.ingestLabel)
