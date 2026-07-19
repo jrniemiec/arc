@@ -905,7 +905,8 @@ func (m Model) buildAgentDetailRows() []agentDetailRow {
 		if m.agentFeedExpanded[i] {
 			items := itemsByFeed[name]
 			for _, item := range items {
-				t := item.Title
+				t := strings.ReplaceAll(item.Title, "\n", " ")
+				t = strings.ReplaceAll(t, "\r", "")
 				if t == "" {
 					t = item.URL
 				}
