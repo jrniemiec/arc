@@ -106,8 +106,8 @@ func subTabToString(t navSubTab) string {
 
 func agentSubTabFromString(s string) agentSubTab {
 	switch s {
-	case "decisions":
-		return agentSubTabDecisions
+	case "feeds":
+		return agentSubTabFeeds
 	default:
 		return agentSubTabRuns
 	}
@@ -115,8 +115,8 @@ func agentSubTabFromString(s string) agentSubTab {
 
 func agentSubTabToString(t agentSubTab) string {
 	switch t {
-	case agentSubTabDecisions:
-		return "decisions"
+	case agentSubTabFeeds:
+		return "feeds"
 	default:
 		return "runs"
 	}

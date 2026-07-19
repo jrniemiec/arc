@@ -1010,11 +1010,11 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 					return m.openScratchOverlay(row.wsIdx)
 				}
 				if row.kind == wsRowResource || row.kind == wsRowOutcome {
-					return m.viewWsFileInTerminal()
+					return m.viewWsFileInOverlay()
 				}
 			}
 		}
-		return m.cmdViewArticle()
+		return m.openArticleOverlay(m.selectedNavItem())
 	case msg.String() == "U":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
@@ -1230,7 +1230,7 @@ func (m *Model) navCursorDown() tea.Cmd {
 // agentNavCursorUp moves the cursor up in the active Agent sub-tab.
 func (m *Model) agentNavCursorUp() tea.Cmd {
 	switch m.agentSubTab {
-	case agentSubTabRuns, agentSubTabDecisions:
+	case agentSubTabRuns:
 		if m.agentRunsCursor > 0 {
 			m.agentRunsCursor--
 			m.clampAgentRunsScroll()
@@ -1243,7 +1243,7 @@ func (m *Model) agentNavCursorUp() tea.Cmd {
 // agentNavCursorDown moves the cursor down in the active Agent sub-tab.
 func (m *Model) agentNavCursorDown() tea.Cmd {
 	switch m.agentSubTab {
-	case agentSubTabRuns, agentSubTabDecisions:
+	case agentSubTabRuns:
 		if m.agentRunsCursor < len(m.agentRuns)-1 {
 			m.agentRunsCursor++
 			m.clampAgentRunsScroll()
@@ -1277,8 +1277,6 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 	var rows []agentDetailRow
 	switch m.agentSubTab {
 	case agentSubTabRuns:
-		rows = m.buildAgentDetailRows()
-	case agentSubTabDecisions:
 		rows = m.buildAgentDecisionRows()
 	default:
 		return nil
@@ -1343,8 +1341,8 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 	case msg.Type == tea.KeyRunes && msg.String() == "a":
-		// Ingest: set action "+" on selected article (Decisions sub-tab only).
-		if m.agentSubTab == agentSubTabDecisions && m.agentContentCursor < len(navIdx) {
+		// Ingest: set action "+" on selected article.
+		if m.agentContentCursor < len(navIdx) {
 			row := rows[navIdx[m.agentContentCursor]]
 			if row.kind == agentRowArticle && row.status != "done" {
 				m.agentRunDecisions.Feeds[row.itemFeedIdx].Items[row.itemIdx].Action = "+"
@@ -1353,8 +1351,8 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 	case msg.Type == tea.KeyRunes && msg.String() == "s":
-		// Skip: set action "-" on selected article (Decisions sub-tab only).
-		if m.agentSubTab == agentSubTabDecisions && m.agentContentCursor < len(navIdx) {
+		// Skip: set action "-" on selected article.
+		if m.agentContentCursor < len(navIdx) {
 			row := rows[navIdx[m.agentContentCursor]]
 			if row.kind == agentRowArticle && row.status != "done" {
 				m.agentRunDecisions.Feeds[row.itemFeedIdx].Items[row.itemIdx].Action = "-"
@@ -2009,6 +2007,30 @@ func readURLStub(path string) string {
 }
 
 // viewWsFileInTerminal opens the selected resource/outcome in an external terminal window.
+// viewWsFileInOverlay reads the selected workspace resource/outcome and opens it
+// in the in-TUI resource overlay. Falls back to external terminal for binary files.
+func (m *Model) viewWsFileInOverlay() tea.Cmd {
+	row := m.selectedWsRow()
+	if row == nil {
+		return nil
+	}
+	path := m.wsFilePathForRow(row)
+	if path == "" {
+		return nil
+	}
+	name := row.resourceName
+	if row.kind == wsRowOutcome {
+		name = row.outcomeName
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		m.setStatusError(fmt.Sprintf("view: %v", err))
+		return nil
+	}
+	m.openResourceOverlay(name, string(data))
+	return nil
+}
+
 func (m *Model) viewWsFileInTerminal() tea.Cmd {
 	row := m.selectedWsRow()
 	if row == nil {

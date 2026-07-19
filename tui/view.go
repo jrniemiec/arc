@@ -438,7 +438,7 @@ func (m Model) renderNavPane(height int) []string {
 		lines = append(lines, m.renderAgentNavSubTabBar())
 		lines = append(lines, "")
 		switch m.agentSubTab {
-		case agentSubTabRuns, agentSubTabDecisions:
+		case agentSubTabRuns:
 			lines = append(lines, m.renderNavAgentRuns(height-2)...)
 		case agentSubTabFeeds:
 			lines = append(lines, fg(t.NavDimmed, "  (no feeds)"))
@@ -1690,15 +1690,8 @@ func (m Model) renderContentAgent(height, width int) []string {
 			lines = append(lines, "")
 			lines = append(lines, fg(t.ContentDimmed, "  Run /agent run to start a feed scan."))
 		} else if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
-			return m.renderAgentRunDetail(height, width)
+			return m.renderAgentRunContent(height, width)
 		}
-	case agentSubTabDecisions:
-		if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
-			return m.renderAgentDecisionsContent(height, width)
-		}
-		lines = append(lines, fgBold(t.ContentTitle, "Decisions"))
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "  No run selected."))
 	case agentSubTabFeeds:
 		lines = append(lines, fgBold(t.ContentTitle, "Feeds"))
 		lines = append(lines, "")
@@ -1713,8 +1706,10 @@ func (m Model) renderContentAgent(height, width int) []string {
 	return lines[:height]
 }
 
-// renderAgentRunDetail renders the run detail content pane using the flat row model.
-func (m Model) renderAgentRunDetail(height, width int) []string {
+// renderAgentRunContent renders the merged run + decisions content pane.
+// Shows run audit stats in the header, then the decisions feed list below.
+// Article rows show action state: ✓ done, + ingest, ✗ skipped, ? maybe.
+func (m Model) renderAgentRunContent(height, width int) []string {
 	t := ActiveTheme
 	rec := m.agentRuns[m.agentRunsCursor]
 
@@ -1724,153 +1719,7 @@ func (m Model) renderAgentRunDetail(height, width int) []string {
 	}
 	duration := rec.FinishedAt.Sub(rec.StartedAt).Round(time.Second)
 
-	// Build the fixed header block (always visible at top, not scrolled).
-	statRow := func(label, val string) string {
-		return fg(t.ContentDimmed, fmt.Sprintf("  %-12s", label)) + fg(t.ContentText, val)
-	}
-	header := []string{
-		fgBold(t.ContentTitle, fmt.Sprintf("%s  [%s]  %s", rec.RunID, runType, duration)),
-		"",
-		statRow("Started", rec.StartedAt.Local().Format("2006-01-02 15:04:05")),
-		statRow("Feeds", fmt.Sprintf("%d", len(rec.Feeds))),
-		statRow("Ingested", fmt.Sprintf("%d", rec.TotalIngest)),
-		statRow("Maybe", fmt.Sprintf("%d", rec.TotalMaybe)),
-		statRow("Skipped", fmt.Sprintf("%d", rec.TotalSkip)),
-	}
-	if rec.TotalCostUSD > 0 {
-		header = append(header, statRow("Cost", formatUSD(rec.TotalCostUSD)))
-	}
-	if rec.Error != "" {
-		header = append(header, "", fg(t.StatusError, "  Error: "+rec.Error))
-	}
-	header = append(header, "", fg(t.ContentDimmed, "  Feeds  (Space to expand)"))
-
-	// Build the navigable row list.
-	detailRows := m.buildAgentDetailRows()
-
-	// Compute which navIdx the cursor is on (for highlighting).
-	// navIdx maps agentContentCursor → detailRows index.
-	var navIdx []int
-	for i, r := range detailRows {
-		if r.kind == agentRowFeed || r.kind == agentRowArticle {
-			navIdx = append(navIdx, i)
-		}
-	}
-
-	// Render navigable rows into display lines, tracking which line each navIdx maps to.
-	type rowLine struct {
-		navPos int // index into navIdx, or -1
-		text   string
-	}
-	var rowLines []rowLine
-
-	navPos := 0
-	for i, r := range detailRows {
-		if r.kind == agentRowHeader {
-			continue // header handled above
-		}
-		isNav := false
-		curNavPos := -1
-		for _, ni := range navIdx {
-			if ni == i {
-				isNav = true
-				curNavPos = navPos
-				navPos++
-				break
-			}
-		}
-
-		selected := isNav && curNavPos == m.agentContentCursor && m.focus == paneContent
-
-		switch r.kind {
-		case agentRowFeed:
-			expanded := m.agentFeedExpanded[r.feedIdx]
-			arrow := "▶"
-			if expanded {
-				arrow = "▼"
-			}
-			feedErr := ""
-			if r.feedIdx < len(rec.Feeds) && rec.Feeds[r.feedIdx].Error != "" {
-				feedErr = "  ✗"
-			}
-			text := fmt.Sprintf("  %s %s%s", arrow, r.feedName, feedErr)
-			statsText := "    " + r.feedStats
-			if selected {
-				rowLines = append(rowLines, rowLine{curNavPos, fgBold(t.Accent, text)})
-				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
-			} else {
-				rowLines = append(rowLines, rowLine{curNavPos, fg(t.ContentText, text)})
-				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
-			}
-		case agentRowArticle:
-			icon := "✗"
-			iconCol := t.StatusError
-			switch r.verdict {
-			case "ingest":
-				icon = "✓"
-				iconCol = t.Accent
-			case "maybe":
-				icon = "?"
-				iconCol = t.Favorite
-			}
-			iconPart := fg(iconCol, "    "+icon+" ")
-			titlePart := fg(t.ContentText, r.title)
-			if selected {
-				iconPart = fgBold(iconCol, "    "+icon+" ")
-				titlePart = fgBold(t.ContentText, r.title)
-			}
-			rowLines = append(rowLines, rowLine{curNavPos, iconPart + titlePart})
-			if r.reason != "" {
-				reason := strings.ReplaceAll(r.reason, "\n", " ")
-				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, "      "+reason)})
-			}
-		}
-	}
-
-	// Scroll rowLines so cursor is visible.
-	contentH := height - len(header)
-	if contentH < 1 {
-		contentH = 1
-	}
-
-	// Find scroll offset: ensure cursor row is in view.
-	// agentContentScroll refers to the navIdx position; translate to rowLine index.
-	scrollStart := 0
-	if m.agentContentCursor > 0 {
-		// Find first rowLine whose navPos >= agentContentScroll.
-		for i, rl := range rowLines {
-			if rl.navPos >= m.agentContentScroll {
-				scrollStart = i
-				break
-			}
-		}
-	}
-
-	visibleRows := rowLines
-	if scrollStart < len(rowLines) {
-		visibleRows = rowLines[scrollStart:]
-	}
-
-	var lines []string
-	lines = append(lines, header...)
-	for i := 0; i < contentH && i < len(visibleRows); i++ {
-		lines = append(lines, visibleRows[i].text)
-	}
-
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return lines[:height]
-}
-
-// renderAgentDecisionsContent renders the Decisions sub-tab content pane.
-// Shows items from the selected run's decisions file grouped by foldable feed sections.
-// Article rows show action state: ✓ done, + ingest, – skipped, ? pending maybe.
-func (m Model) renderAgentDecisionsContent(height, width int) []string {
-	t := ActiveTheme
-	rec := m.agentRuns[m.agentRunsCursor]
-
-	// Count pending items (skip/maybe not yet queued for ingestion).
+	// Count pending/queued items from the decisions file.
 	pendingCount := 0
 	ingestCount := 0
 	for _, df := range m.agentRunDecisions.Feeds {
@@ -1890,14 +1739,23 @@ func (m Model) renderAgentDecisionsContent(height, width int) []string {
 		return fg(t.ContentDimmed, fmt.Sprintf("  %-12s", label)) + fg(t.ContentText, val)
 	}
 	header := []string{
-		fgBold(t.ContentTitle, fmt.Sprintf("%s  [%s]", rec.RunID, rec.RunType)),
+		fgBold(t.ContentTitle, fmt.Sprintf("%s  [%s]  %s", rec.RunID, runType, duration)),
 		"",
 		statRow("Started", rec.StartedAt.Local().Format("2006-01-02 15:04:05")),
-		statRow("Pending", fmt.Sprintf("%d", pendingCount)),
-		statRow("Ingest", fmt.Sprintf("%d", ingestCount)),
-		"",
-		fg(t.ContentDimmed, "  Feeds  (Space to expand · a=ingest · s=skip)"),
+		statRow("Ingested", fmt.Sprintf("%d", rec.TotalIngest)),
+		statRow("Maybe", fmt.Sprintf("%d", rec.TotalMaybe)),
+		statRow("Skipped", fmt.Sprintf("%d", rec.TotalSkip)),
 	}
+	if rec.TotalCostUSD > 0 {
+		header = append(header, statRow("Cost", formatUSD(rec.TotalCostUSD)))
+	}
+	if ingestCount > 0 || pendingCount > 0 {
+		header = append(header, statRow("Queued", fmt.Sprintf("%d", ingestCount)))
+	}
+	if rec.Error != "" {
+		header = append(header, "", fg(t.StatusError, "  Error: "+rec.Error))
+	}
+	header = append(header, "", fg(t.ContentDimmed, "  Feed Decisions  (Space to expand · a=ingest · s=skip)"))
 
 	detailRows := m.buildAgentDecisionRows()
 
@@ -1938,7 +1796,11 @@ func (m Model) renderAgentDecisionsContent(height, width int) []string {
 			if expanded {
 				arrow = "▼"
 			}
-			text := fmt.Sprintf("  %s %s", arrow, r.feedName)
+			feedErr := ""
+			if r.feedIdx < len(rec.Feeds) && rec.Feeds[r.feedIdx].Error != "" {
+				feedErr = "  ✗"
+			}
+			text := fmt.Sprintf("  %s %s%s", arrow, r.feedName, feedErr)
 			statsText := "    " + r.feedStats
 			if selected {
 				rowLines = append(rowLines, rowLine{curNavPos, fgBold(t.Accent, text)})

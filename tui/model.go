@@ -169,9 +169,8 @@ type agentDetailRow struct {
 type agentSubTab int
 
 const (
-	agentSubTabRuns      agentSubTab = iota
-	agentSubTabDecisions agentSubTab = iota
-	agentSubTabFeeds     agentSubTab = iota
+	agentSubTabRuns  agentSubTab = iota
+	agentSubTabFeeds agentSubTab = iota
 	agentSubTabCount
 )
 
@@ -179,8 +178,6 @@ func (a agentSubTab) String() string {
 	switch a {
 	case agentSubTabRuns:
 		return "Runs"
-	case agentSubTabDecisions:
-		return "Decisions"
 	case agentSubTabFeeds:
 		return "Feeds"
 	default:
@@ -878,62 +875,6 @@ func loadNav(svc *service.Service) tea.Cmd {
 		}
 		return navLoadedMsg{items: items}
 	}
-}
-
-// buildAgentDetailRows builds the flat row list for the selected run detail view.
-// Returns nil if no run is selected.
-func (m Model) buildAgentDetailRows() []agentDetailRow {
-	if m.agentRunsCursor < 0 || m.agentRunsCursor >= len(m.agentRuns) {
-		return nil
-	}
-	rec := m.agentRuns[m.agentRunsCursor]
-
-	// Build a lookup: feed URL → []ItemDecision from decisions file.
-	itemsByFeed := make(map[string][]agentpkg.ItemDecision)
-	for _, f := range m.agentRunDecisions.Feeds {
-		// Match by feed name (decisions file uses name not URL as key).
-		itemsByFeed[f.Name] = f.Items
-	}
-
-	var rows []agentDetailRow
-	// Non-interactive header rows (summary stats) — not navigable.
-	rows = append(rows, agentDetailRow{kind: agentRowHeader})
-
-	for i, f := range rec.Feeds {
-		name := f.Name
-		if name == "" {
-			name = f.URL
-		}
-		stats := fmt.Sprintf("new:%-3d  in:%-3d  maybe:%-3d  skip:%-3d", f.New, f.Ingest, f.Maybe, f.Skip)
-		if f.CostUSD > 0 {
-			stats += fmt.Sprintf("  $%.3f", f.CostUSD)
-		}
-		rows = append(rows, agentDetailRow{
-			kind:      agentRowFeed,
-			feedIdx:   i,
-			feedName:  name,
-			feedStats: stats,
-		})
-
-		if m.agentFeedExpanded[i] {
-			items := itemsByFeed[name]
-			for _, item := range items {
-				t := strings.ReplaceAll(item.Title, "\n", " ")
-				t = strings.ReplaceAll(t, "\r", "")
-				if t == "" {
-					t = item.URL
-				}
-				rows = append(rows, agentDetailRow{
-					kind:    agentRowArticle,
-					feedIdx: i,
-					verdict: item.Verdict,
-					title:   t,
-					url:     item.URL,
-				})
-			}
-		}
-	}
-	return rows
 }
 
 // buildAgentDecisionRows builds the flat row list for the Decisions sub-tab content pane.
