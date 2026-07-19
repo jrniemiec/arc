@@ -1636,10 +1636,8 @@ func (m Model) renderNavAgentRuns(maxLines int) []string {
 		}
 		label := fmt.Sprintf("  %s  %s%s", date, ingested, cost)
 
-		if selected && m.focus == paneNav {
-			lines = append(lines, fgBold(t.Accent, label))
-		} else if selected {
-			lines = append(lines, fg(t.Accent, label))
+		if selected {
+			lines = append(lines, reverse(label))
 		} else {
 			lines = append(lines, fg(t.NavText, label))
 		}
