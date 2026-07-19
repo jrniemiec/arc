@@ -358,6 +358,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ingestRunning = false
 		m.ingestLabel = ""
 		m.ingestLog = nil
+		if msg.err == "" && strings.HasPrefix(msg.statusMsg, "✓") {
+			m.statusSuccess = true
+		}
 		if msg.err != "" {
 			m.setStatusError("✗ " + msg.err)
 		} else {
@@ -2608,6 +2611,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		m.updateCompletions()
 		m.statusMsg = ""
 		m.statusErr = false
+		m.statusSuccess = false
 		return cmd
 	}
 	return nil
@@ -4389,6 +4393,7 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 	m.ingestLabel = "fetching…"
 	m.statusMsg = ""
 	return func() tea.Msg {
+		start := time.Now()
 		req := service.IngestRequest{
 			URL: url,
 			Progress: func(step string) {
@@ -4399,8 +4404,14 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 		if err != nil {
 			return cmdDoneMsg{err: err.Error()}
 		}
+		elapsed := time.Since(start).Round(time.Second)
+		cost := result.Cost.TotalUSD
+		msg := fmt.Sprintf("✓ %s  %s", result.Slug, elapsed)
+		if cost > 0 {
+			msg += fmt.Sprintf("  $%.4f", cost)
+		}
 		return cmdDoneMsg{
-			statusMsg: fmt.Sprintf("✓ ingested %s", result.Slug),
+			statusMsg: msg,
 			reloadNav: true,
 		}
 	}

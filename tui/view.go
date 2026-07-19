@@ -2408,6 +2408,9 @@ func (m Model) renderStatusLine() string {
 		if m.statusErr || strings.HasPrefix(m.statusMsg, "✗") {
 			return fgBold(t.StatusError, truncate(" "+m.statusMsg, m.width))
 		}
+		if m.statusSuccess {
+			return fgBold(t.NavMark, truncate(" "+m.statusMsg, m.width))
+		}
 		return fg(t.StatusText, truncate(" "+m.statusMsg, m.width))
 	}
 	// Idle: show context stats for the active tab/sub-tab.

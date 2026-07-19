@@ -492,6 +492,7 @@ type Model struct {
 	ingestRunning   bool     // true while an article ingest is in flight
 	ingestLabel     string   // current step label shown in spinner line
 	ingestLog       []string // rolling log of last 4 completed steps
+	statusSuccess   bool     // true = render statusMsg in accent color
 
 	// Populate edit mode — sequential review of suggestions in input pane
 	populateEditing  bool                       // true while reviewing suggestions one-by-one
