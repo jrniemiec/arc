@@ -863,6 +863,10 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.ContentTabNext):
 		return m.navRight()
 	case key.Matches(msg, keys.NavUp):
+		if m.navAtTop() {
+			m.setFocusPane(paneTabBar)
+			return nil
+		}
 		if m.activeTab == tabAgent {
 			return m.agentNavCursorUp()
 		}
@@ -1071,6 +1075,26 @@ func (m *Model) navRight() tea.Cmd {
 		m.activeTab = (m.activeTab + 1) % tabCount
 		return nil
 	}
+}
+
+// navAtTop returns true when the nav cursor is already at the first item,
+// so pressing UP should transfer focus to the tab bar instead.
+func (m *Model) navAtTop() bool {
+	if m.activeTab == tabAgent {
+		return m.agentRunsCursor == 0
+	}
+	switch m.navSubTab {
+	case navSubTabArticles:
+		return m.navCursor == 0
+	case navSubTabCollections:
+		return m.navRowCursor == 0
+	case navSubTabWorkspaces:
+		if m.wsSearchActive() {
+			return m.navCursor == 0
+		}
+		return m.wsCursor == 0
+	}
+	return false
 }
 
 // navCursorUp moves the cursor up in the active sub-tab.

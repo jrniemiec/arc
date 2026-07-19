@@ -279,7 +279,11 @@ func (m Model) renderTabBar() string {
 	for i := tab(0); i < tabCount; i++ {
 		label := i.String()
 		if i == m.activeTab {
-			parts = append(parts, fgBold(t.TabActive, "["+label+"]"))
+			if m.focus == paneTabBar {
+				parts = append(parts, fgBold(t.Accent, "["+label+"]"))
+			} else {
+				parts = append(parts, fgBold(t.TabActive, "["+label+"]"))
+			}
 		} else {
 			parts = append(parts, fg(t.TabInactive, " "+label+" "))
 		}
