@@ -399,6 +399,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "feed saved"
 		}
 
+	case agentFeedRunDecisionsLoadedMsg:
+		if m.agentFeedRunDecisions == nil {
+			m.agentFeedRunDecisions = make(map[string]agentpkg.DecisionsFile)
+		}
+		if msg.err == "" {
+			m.agentFeedRunDecisions[msg.fileID] = msg.df
+		}
+
 	case statsLoadedMsg:
 		if msg.err == "" {
 			m.stats = msg.stats
@@ -1369,6 +1377,7 @@ func (m *Model) agentNavCursorUp() tea.Cmd {
 		if m.agentFeedsCursor > 0 {
 			m.agentFeedsCursor--
 			m.clampAgentFeedsScroll()
+			m.resetFeedDetailState()
 		}
 	}
 	return nil
@@ -1387,6 +1396,7 @@ func (m *Model) agentNavCursorDown() tea.Cmd {
 		if m.agentFeedsCursor < len(m.agentFeeds)-1 {
 			m.agentFeedsCursor++
 			m.clampAgentFeedsScroll()
+			m.resetFeedDetailState()
 		}
 	}
 	return nil
@@ -1449,6 +1459,11 @@ func (m *Model) triggerAgentRunDetail() tea.Cmd {
 // clampAgentRunsScroll keeps agentRunsScroll within bounds so the cursor is visible.
 // handleAgentContentKey handles key events in the Agent tab content pane.
 func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
+	// Feed run history content pane.
+	if m.agentSubTab == agentSubTabFeeds {
+		return m.handleFeedDetailKey(msg)
+	}
+
 	var rows []agentDetailRow
 	switch m.agentSubTab {
 	case agentSubTabRuns:
@@ -1539,6 +1554,87 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// handleFeedDetailKey handles key events in the feed run history content pane.
+func (m *Model) handleFeedDetailKey(msg tea.KeyMsg) tea.Cmd {
+	rows := m.buildFeedDetailRows()
+	matched := m.matchedRunsForFeed()
+
+	var navIdx []int
+	for i, r := range rows {
+		if r.kind == feedDetailRowRun || r.kind == feedDetailRowArticle {
+			navIdx = append(navIdx, i)
+		}
+	}
+	total := len(navIdx)
+	if total == 0 {
+		return nil
+	}
+
+	// Approximate viewH: total content height minus card lines.
+	// Card height is variable; use a reasonable estimate for clamping.
+	viewH := m.contentViewHeight() - 10
+	if viewH < 4 {
+		viewH = 4
+	}
+
+	switch {
+	case key.Matches(msg, keys.NavUp):
+		if m.agentFeedDetailCursor > 0 {
+			m.agentFeedDetailCursor--
+			m.clampAgentFeedDetailScroll(viewH, rows, navIdx)
+		}
+	case key.Matches(msg, keys.NavDown):
+		if m.agentFeedDetailCursor < total-1 {
+			m.agentFeedDetailCursor++
+			m.clampAgentFeedDetailScroll(viewH, rows, navIdx)
+		}
+	case msg.Type == tea.KeyRunes && msg.String() == "g", key.Matches(msg, keys.Home):
+		m.agentFeedDetailCursor = 0
+		m.agentFeedDetailScroll = 0
+	case msg.Type == tea.KeyRunes && msg.String() == "G", key.Matches(msg, keys.End):
+		m.agentFeedDetailCursor = total - 1
+		m.clampAgentFeedDetailScroll(viewH, rows, navIdx)
+	case key.Matches(msg, keys.Expand), msg.Type == tea.KeyEnter:
+		if m.agentFeedDetailCursor < len(navIdx) {
+			row := rows[navIdx[m.agentFeedDetailCursor]]
+			if row.kind == feedDetailRowRun {
+				if m.agentFeedRunExpanded == nil {
+					m.agentFeedRunExpanded = make(map[int]bool)
+				}
+				nowExpanded := !m.agentFeedRunExpanded[row.runIdx]
+				m.agentFeedRunExpanded[row.runIdx] = nowExpanded
+				// Load decisions on first expand.
+				if nowExpanded {
+					if m.agentFeedRunDecisions == nil {
+						m.agentFeedRunDecisions = make(map[string]agentpkg.DecisionsFile)
+					}
+					if _, alreadyLoaded := m.agentFeedRunDecisions[row.fileID]; !alreadyLoaded {
+						if row.runIdx < len(matched) {
+							_ = matched // already have fileID from row
+						}
+						return loadAgentFeedRunDecisions(m.cfg.AgentPath, row.fileID)
+					}
+				}
+			}
+		}
+	case key.Matches(msg, keys.Open):
+		if m.agentFeedDetailCursor < len(navIdx) {
+			row := rows[navIdx[m.agentFeedDetailCursor]]
+			if row.kind == feedDetailRowArticle && row.url != "" {
+				return openInChrome(row.url)
+			}
+		}
+	case key.Matches(msg, keys.Select), msg.Type == tea.KeyRunes && msg.String() == "v":
+		if m.agentFeedDetailCursor < len(navIdx) {
+			row := rows[navIdx[m.agentFeedDetailCursor]]
+			if row.kind == feedDetailRowArticle && (row.status == "done" || row.verdict == "ingest") && row.url != "" {
+				return m.navigateToArticleByURL(row.url)
+			}
+		}
+	}
+	return nil
+}
+
 // saveAgentDecisions writes the in-memory decisions file back to disk.
 func (m *Model) saveAgentDecisions() {
 	if m.agentRunDecisionsID == "" {
@@ -1615,6 +1711,48 @@ func (m *Model) clampAgentFeedsScroll() {
 	}
 	if m.agentFeedsCursor >= m.agentFeedsScroll+h {
 		m.agentFeedsScroll = m.agentFeedsCursor - h + 1
+	}
+}
+
+func (m *Model) resetFeedDetailState() {
+	m.agentFeedDetailCursor = 0
+	m.agentFeedDetailScroll = 0
+	m.agentFeedRunExpanded = nil
+}
+
+func (m *Model) clampAgentFeedDetailScroll(viewH int, rows []feedDetailRow, navIdx []int) {
+	// Compute display line height for each nav position.
+	lineH := make([]int, len(navIdx))
+	for pos, ri := range navIdx {
+		r := rows[ri]
+		switch r.kind {
+		case feedDetailRowRun:
+			lineH[pos] = 2 // arrow + name line + stats line
+		case feedDetailRowArticle:
+			if r.reason != "" {
+				lineH[pos] = 2
+			} else {
+				lineH[pos] = 1
+			}
+		}
+	}
+	// Scroll up: cursor above scroll → set scroll to cursor.
+	if m.agentFeedDetailCursor < m.agentFeedDetailScroll {
+		m.agentFeedDetailScroll = m.agentFeedDetailCursor
+		return
+	}
+	// Scroll down: advance scroll until cursor is visible.
+	lines := 0
+	for pos := m.agentFeedDetailScroll; pos < len(navIdx); pos++ {
+		if pos == m.agentFeedDetailCursor {
+			break
+		}
+		lines += lineH[pos]
+		if lines >= viewH {
+			m.agentFeedDetailScroll++
+			m.clampAgentFeedDetailScroll(viewH, rows, navIdx)
+			return
+		}
 	}
 }
 
@@ -4753,6 +4891,16 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 	send := *m.programSend
 	m.ingestRunning = true
 	m.ingestLabel = "fetching…"
+	// Estimate cost from agent run history (avg cost per ingested article).
+	var totalCost float64
+	var totalIngested int
+	for _, r := range m.agentRuns {
+		totalCost += r.TotalCostUSD
+		totalIngested += r.TotalIngest
+	}
+	if totalIngested > 0 {
+		m.ingestLabel = fmt.Sprintf("fetching…  (est. ~$%.3f)", totalCost/float64(totalIngested))
+	}
 	m.statusMsg = ""
 	return func() tea.Msg {
 		start := time.Now()
@@ -4834,6 +4982,26 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 	slog.Debug("/agent-run confirm ready",
 		"active_feeds", activeFeeds, "filter", filterProfile,
 		"ingest", summaryProfile, "focus", focusStr, "dry_run", dryRun)
+	// Estimate cost from recent daily runs (last 5).
+	costStr := "unknown (no prior runs)"
+	var costSamples []float64
+	for _, r := range m.agentRuns {
+		if r.RunType == "" || r.RunType == "daily" {
+			costSamples = append(costSamples, r.TotalCostUSD)
+			if len(costSamples) >= 5 {
+				break
+			}
+		}
+	}
+	if len(costSamples) > 0 {
+		var total float64
+		for _, c := range costSamples {
+			total += c
+		}
+		avg := total / float64(len(costSamples))
+		costStr = fmt.Sprintf("~$%.3f  (avg of last %d runs)", avg, len(costSamples))
+	}
+
 	m.agentConfirmLines = []string{
 		"  Agent run — poll all feeds",
 		"",
@@ -4842,6 +5010,7 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 		fmt.Sprintf("  %-12s %s", "Ingest", summaryProfile),
 		fmt.Sprintf("  %-12s %s", "Focus", focusStr),
 		fmt.Sprintf("  %-12s %s", "Dry-run", dryStr),
+		fmt.Sprintf("  %-12s %s", "Est. cost", costStr),
 		"",
 		"  yes to confirm   Esc to cancel",
 	}

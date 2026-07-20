@@ -139,6 +139,26 @@ func (n navSubTab) String() string {
 	}
 }
 
+// feedDetailRowKind identifies the type of a row in the feed run history pane.
+type feedDetailRowKind int
+
+const (
+	feedDetailRowRun     feedDetailRowKind = iota // collapsible run header
+	feedDetailRowArticle                          // article under an expanded run
+)
+
+// feedDetailRow is one display row in the feed run history content pane.
+type feedDetailRow struct {
+	kind    feedDetailRowKind
+	runIdx  int    // index into matchedRunsForFeed() result
+	fileID  string // decisions file ID to load (= RunID for daily runs)
+	verdict string // "ingest" | "maybe" | "skip"
+	status  string // "done" | ""
+	title   string
+	reason  string
+	url     string
+}
+
 // agentDetailRowKind identifies the type of a row in the agent run detail view.
 type agentDetailRowKind int
 
@@ -352,6 +372,12 @@ type Model struct {
 	agentFeedsLoaded bool
 	agentFeedsErr    string
 	agentFeedsStats  map[string]feedRunStats // keyed by feed URL
+
+	// Agent content — feed run history
+	agentFeedRunExpanded  map[int]bool                       // runIdx → expanded
+	agentFeedRunDecisions map[string]agentpkg.DecisionsFile  // fileID → loaded decisions
+	agentFeedDetailCursor int                                // cursor in feed run history
+	agentFeedDetailScroll int                                // navPos scroll offset
 
 	// Agent content — run detail
 	agentRunDecisions   agentpkg.DecisionsFile // decisions for selected run (may be empty)
@@ -781,6 +807,13 @@ type agentFeedSavedMsg struct {
 	err   string
 }
 
+// agentFeedRunDecisionsLoadedMsg carries a decisions file loaded for the feed run history.
+type agentFeedRunDecisionsLoadedMsg struct {
+	fileID string
+	df     agentpkg.DecisionsFile
+	err    string
+}
+
 type collectionArticlesLoadedMsg struct {
 	slug   string
 	items  []navItem
@@ -1135,6 +1168,98 @@ func deleteAgentFeed(agentPath string, idx int) tea.Cmd {
 		}
 		return agentFeedSavedMsg{feeds: cfg.Feeds}
 	}
+}
+
+func loadAgentFeedRunDecisions(agentPath, fileID string) tea.Cmd {
+	return func() tea.Msg {
+		path := filepath.Join(agentPath, "decisions-"+fileID+".json")
+		df, err := agentpkg.LoadDecisionsFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return agentFeedRunDecisionsLoadedMsg{fileID: fileID}
+			}
+			return agentFeedRunDecisionsLoadedMsg{fileID: fileID, err: err.Error()}
+		}
+		return agentFeedRunDecisionsLoadedMsg{fileID: fileID, df: df}
+	}
+}
+
+// matchedRunsForFeed returns indices into m.agentRuns for daily runs that polled
+// the currently selected feed (matched by URL).
+func (m Model) matchedRunsForFeed() []int {
+	if m.agentFeedsCursor < 0 || m.agentFeedsCursor >= len(m.agentFeeds) {
+		return nil
+	}
+	feedURL := m.agentFeeds[m.agentFeedsCursor].URL
+	var out []int
+	for i, r := range m.agentRuns {
+		if r.RunType != "" && r.RunType != "daily" {
+			continue
+		}
+		for _, f := range r.Feeds {
+			if f.URL == feedURL {
+				out = append(out, i)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// buildFeedDetailRows builds the flat row list for the feed run history content pane.
+func (m Model) buildFeedDetailRows() []feedDetailRow {
+	if m.agentFeedsCursor < 0 || m.agentFeedsCursor >= len(m.agentFeeds) {
+		return nil
+	}
+	feed := m.agentFeeds[m.agentFeedsCursor]
+	matched := m.matchedRunsForFeed()
+
+	var rows []feedDetailRow
+	for ri, runIdx := range matched {
+		rec := m.agentRuns[runIdx]
+		rows = append(rows, feedDetailRow{
+			kind:   feedDetailRowRun,
+			runIdx: ri,
+			fileID: rec.RunID,
+		})
+		if !m.agentFeedRunExpanded[ri] {
+			continue
+		}
+		df, loaded := m.agentFeedRunDecisions[rec.RunID]
+		if !loaded {
+			rows = append(rows, feedDetailRow{kind: feedDetailRowArticle, runIdx: ri, title: "(loading…)"})
+			continue
+		}
+		// Find this feed's record in the decisions file (match by name).
+		var items []agentpkg.ItemDecision
+		for _, dfFeed := range df.Feeds {
+			if dfFeed.Name == feed.Name {
+				items = dfFeed.Items
+				break
+			}
+		}
+		if len(items) == 0 {
+			rows = append(rows, feedDetailRow{kind: feedDetailRowArticle, runIdx: ri, title: "(no items recorded)"})
+			continue
+		}
+		for _, item := range items {
+			title := strings.ReplaceAll(item.Title, "\n", " ")
+			title = strings.ReplaceAll(title, "\r", "")
+			if title == "" {
+				title = item.URL
+			}
+			rows = append(rows, feedDetailRow{
+				kind:    feedDetailRowArticle,
+				runIdx:  ri,
+				verdict: item.Verdict,
+				status:  item.Status,
+				title:   title,
+				reason:  item.Reason,
+				url:     item.URL,
+			})
+		}
+	}
+	return rows
 }
 
 func loadStats(svc *service.Service) tea.Cmd {

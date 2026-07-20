@@ -1729,38 +1729,34 @@ func (m Model) renderNavAgentFeeds(maxLines int) []string {
 	return lines
 }
 
-// renderContentAgentFeeds renders the detail card for the selected feed.
+// renderContentAgentFeeds renders the feed detail card (fixed header) + scrollable run history.
 func (m Model) renderContentAgentFeeds(height, width int) []string {
 	t := ActiveTheme
-	var lines []string
 
 	if !m.agentFeedsLoaded {
-		lines = append(lines, fg(t.ContentDimmed, "Loading…"))
+		lines := []string{fg(t.ContentDimmed, "Loading…")}
 		for len(lines) < height {
 			lines = append(lines, "")
 		}
 		return lines[:height]
 	}
 	if len(m.agentFeeds) == 0 {
-		lines = append(lines, fgBold(t.ContentTitle, "Feeds"))
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "  No feeds configured."))
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "  Press a to add a feed."))
+		lines := []string{
+			fgBold(t.ContentTitle, "Feeds"), "",
+			fg(t.ContentDimmed, "  No feeds configured."), "",
+			fg(t.ContentDimmed, "  Press a to add a feed."),
+		}
 		for len(lines) < height {
 			lines = append(lines, "")
 		}
 		return lines[:height]
 	}
 	if m.agentFeedsCursor < 0 || m.agentFeedsCursor >= len(m.agentFeeds) {
-		for len(lines) < height {
-			lines = append(lines, "")
-		}
-		return lines[:height]
+		lines := make([]string, height)
+		return lines
 	}
 
 	f := m.agentFeeds[m.agentFeedsCursor]
-
 	name := f.Name
 	if name == "" {
 		name = f.URL
@@ -1770,24 +1766,26 @@ func (m Model) renderContentAgentFeeds(height, width int) []string {
 		statusStr = "disabled"
 	}
 
-	lines = append(lines, fgBold(t.ContentTitle, name))
-	lines = append(lines, "")
-	lines = append(lines, fg(t.ContentDimmed, "URL")+"    "+fg(t.NavText, f.URL))
+	// ── Fixed card header ─────────────────────────────────────────────────────
+	header := []string{
+		fgBold(t.ContentTitle, name),
+		"",
+		fg(t.ContentDimmed, "URL")+"    "+fg(t.NavText, f.URL),
+	}
 	if f.Filter != "" {
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "Filter"))
-		lines = append(lines, "  "+fg(t.NavText, truncate(f.Filter, width-4)))
+		header = append(header, "")
+		header = append(header, fg(t.ContentDimmed, "Filter"))
+		header = append(header, "  "+fg(t.NavText, truncate(f.Filter, width-4)))
 	}
 	if len(f.Tags) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "Tags")+"    "+fg(t.NavText, strings.Join(f.Tags, ", ")))
+		header = append(header, "")
+		header = append(header, fg(t.ContentDimmed, "Tags")+"    "+fg(t.NavText, strings.Join(f.Tags, ", ")))
 	}
-	lines = append(lines, "")
-	lines = append(lines, fg(t.ContentDimmed, "Status")+"  "+fg(t.NavText, statusStr))
-
+	header = append(header, "")
+	header = append(header, fg(t.ContentDimmed, "Status")+"  "+fg(t.NavText, statusStr))
 	if s, ok := m.agentFeedsStats[f.URL]; ok && s.runs > 0 {
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "Stats"))
+		header = append(header, "")
+		header = append(header, fg(t.ContentDimmed, "Stats"))
 		ingestRate := 0
 		if s.ingested+s.maybe+s.skip > 0 {
 			ingestRate = s.ingested * 100 / (s.ingested + s.maybe + s.skip)
@@ -1797,15 +1795,137 @@ func (m Model) renderContentAgentFeeds(height, width int) []string {
 		if s.costUSD > 0 {
 			statsLine += fmt.Sprintf("   $%.2f", s.costUSD)
 		}
-		lines = append(lines, fg(t.NavText, statsLine))
+		header = append(header, fg(t.NavText, statsLine))
 		if !s.lastRun.IsZero() {
-			lines = append(lines, fg(t.ContentDimmed, "  last run: ")+fg(t.NavText, s.lastRun.Local().Format("2006-01-02 15:04")))
+			header = append(header, fg(t.ContentDimmed, "  last run: ")+fg(t.NavText, s.lastRun.Local().Format("2006-01-02 15:04")))
+		}
+	}
+	matched := m.matchedRunsForFeed()
+	header = append(header, "")
+	if len(matched) == 0 {
+		header = append(header, fg(t.ContentDimmed, "  No runs yet for this feed."))
+		header = append(header, fg(t.ContentDimmed, "  e=edit  a=add  d=toggle  D=delete"))
+		for len(header) < height {
+			header = append(header, "")
+		}
+		return header[:height]
+	}
+	header = append(header, fg(t.ContentDimmed, fmt.Sprintf("  Run History (%d)  (Space to expand)", len(matched))))
+	header = append(header, fg(t.ContentDimmed, "  e=edit  a=add  d=toggle  D=delete"))
+
+	// ── Scrollable run history ────────────────────────────────────────────────
+	detailRows := m.buildFeedDetailRows()
+
+	var navIdx []int
+	for i, r := range detailRows {
+		if r.kind == feedDetailRowRun || r.kind == feedDetailRowArticle {
+			navIdx = append(navIdx, i)
 		}
 	}
 
-	lines = append(lines, "")
-	lines = append(lines, fg(t.ContentDimmed, "  e=edit  a=add  d=toggle  D=delete"))
+	type rowLine struct {
+		navPos int
+		text   string
+	}
+	var rowLines []rowLine
 
+	navPos := 0
+	for i, r := range detailRows {
+		isNav := false
+		curNavPos := -1
+		for _, ni := range navIdx {
+			if ni == i {
+				isNav = true
+				curNavPos = navPos
+				navPos++
+				break
+			}
+		}
+		selected := isNav && curNavPos == m.agentFeedDetailCursor && m.focus == paneContent
+
+		switch r.kind {
+		case feedDetailRowRun:
+			if r.runIdx < len(matched) {
+				runIdx := matched[r.runIdx]
+				rec := m.agentRuns[runIdx]
+				expanded := m.agentFeedRunExpanded[r.runIdx]
+				arrow := "▶"
+				if expanded {
+					arrow = "▼"
+				}
+				date := rec.StartedAt.Local().Format("01/02 15:04")
+				// Per-feed stats from the run record.
+				var ingest, maybe, skip int
+				for _, rf := range rec.Feeds {
+					if rf.URL == f.URL {
+						ingest = rf.Ingest
+						maybe = rf.Maybe
+						skip = rf.Skip
+						break
+					}
+				}
+				label := fmt.Sprintf("  %s %s   +%d  maybe:%d  skip:%d", arrow, date, ingest, maybe, skip)
+				statsText := fmt.Sprintf("    run %s", rec.RunID)
+				if selected {
+					rowLines = append(rowLines, rowLine{curNavPos,
+						fg("#FFD700", fmt.Sprintf("  %s ", arrow)) + fgBold(t.Accent, date+fmt.Sprintf("   +%d  maybe:%d  skip:%d", ingest, maybe, skip))})
+				} else {
+					rowLines = append(rowLines, rowLine{curNavPos, fg(t.ContentText, label)})
+				}
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
+			}
+		case feedDetailRowArticle:
+			var icon string
+			var iconCol lipgloss.Color
+			switch {
+			case r.status == "done" || r.verdict == "ingest":
+				icon = "✓"
+				iconCol = t.Accent
+			case r.verdict == "maybe":
+				icon = "⁇"
+				iconCol = t.Favorite
+			default:
+				icon = "–"
+				iconCol = t.ContentDimmed
+			}
+			iconPart := fg(iconCol, "    "+icon+" ")
+			titlePart := fg(t.ContentText, r.title)
+			if selected {
+				iconPart = fg("#FFD700", "▌") + fg(iconCol, "   "+icon+" ")
+				titlePart = fgBold(t.ContentText, r.title)
+			}
+			rowLines = append(rowLines, rowLine{curNavPos, iconPart + titlePart})
+			if r.reason != "" {
+				reason := strings.ReplaceAll(r.reason, "\n", " ")
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, "      "+reason)})
+			}
+		}
+	}
+
+	contentH := height - len(header)
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	scrollStart := 0
+	if m.agentFeedDetailScroll > 0 {
+		for i, rl := range rowLines {
+			if rl.navPos >= m.agentFeedDetailScroll {
+				scrollStart = i
+				break
+			}
+		}
+	}
+	visibleRows := rowLines
+	if scrollStart < len(rowLines) {
+		visibleRows = rowLines[scrollStart:]
+	}
+
+	var lines []string
+	lines = append(lines, header...)
+	for i := 0; i < contentH && i < len(visibleRows); i++ {
+		lines = append(lines, visibleRows[i].text)
+	}
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
