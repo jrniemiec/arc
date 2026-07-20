@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1018,15 +1017,11 @@ func loadAgentDecisions(agentPath, runID string) tea.Cmd {
 // loadAgentRunIngested queries the article store for all articles ingested during
 // a specific decisions run (matched by agent_run_id).
 func loadAgentRunIngested(svc *service.Service, runID string) tea.Cmd {
-	slog.Info("loadAgentRunIngested cmd created", "runID", runID)
 	return func() tea.Msg {
-		slog.Info("loadAgentRunIngested executing", "runID", runID)
 		articles, err := svc.List(context.Background(), store.Filter{AgentRunID: runID})
 		if err != nil {
-			slog.Info("loadAgentRunIngested error", "runID", runID, "err", err)
 			return agentRunIngestedLoadedMsg{runID: runID, err: err.Error()}
 		}
-		slog.Info("loadAgentRunIngested done", "runID", runID, "count", len(articles))
 		return agentRunIngestedLoadedMsg{runID: runID, articles: articles}
 	}
 }
