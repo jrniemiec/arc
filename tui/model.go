@@ -524,9 +524,11 @@ type Model struct {
 	askxCollapsed     map[int]bool       // set of collapsed box indices
 	populateRunning bool   // true while workspace populate LLM is in flight
 	populateLabel   string // label shown in wave indicator during populate
-	ingestRunning   bool     // true while an article ingest is in flight
-	ingestLabel     string   // current step label shown in spinner line
-	ingestLog       []string // rolling log of last 4 completed steps
+	ingestRunning      bool               // true while an article ingest is in flight
+	ingestCancelFn     context.CancelFunc // cancels the in-flight ingest
+	ingestLabel        string             // current step label shown in spinner line
+	ingestLog          []string           // rolling log of last 4 completed steps
+	ingestCostEstimate string             // pinned cost estimate line, set after chunking
 	statusSuccess   bool     // true = render statusMsg in accent color
 
 	// Agent run state
@@ -887,6 +889,12 @@ type ttsDoneMsg struct {
 
 // statusUpdateMsg carries a live progress string from an async operation.
 type statusUpdateMsg struct{ text string }
+
+// ingestCostEstimateMsg is sent once after article extraction, before any LLM calls.
+type ingestCostEstimateMsg struct {
+	nChunks int
+	usd     float64
+}
 
 type cmdDoneMsg struct {
 	statusMsg          string

@@ -1515,6 +1515,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 		VectorStore:    s.vec,
 		DryRun:         req.DryRun,
 		Progress:       req.Progress,
+		OnCostEstimate: req.OnCostEstimate,
 	})
 	if err != nil {
 		source := req.URL

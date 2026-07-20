@@ -450,12 +450,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = msg.text
 		}
 
+	case ingestCostEstimateMsg:
+		if msg.usd > 0 {
+			m.ingestCostEstimate = fmt.Sprintf("⚡ est. ~$%.3f  ·  %d chunks", msg.usd, msg.nChunks)
+		} else {
+			m.ingestCostEstimate = fmt.Sprintf("⚡ est. cost unknown  ·  %d chunks", msg.nChunks)
+		}
+
 	case cmdDoneMsg:
 		m.populateRunning = false
 		m.populateLabel = ""
 		m.ingestRunning = false
+		if m.ingestCancelFn != nil {
+			m.ingestCancelFn()
+			m.ingestCancelFn = nil
+		}
 		m.ingestLabel = ""
 		m.ingestLog = nil
+		m.ingestCostEstimate = ""
 		if msg.err == "" && strings.HasPrefix(msg.statusMsg, "✓") {
 			m.statusSuccess = true
 		}
@@ -804,6 +816,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		// Resource overlay: Esc closes and restores previous focus.
 		if m.focus == paneResource {
 			m.closeResourceOverlay()
+			return nil
+		}
+		// Cancel in-flight ingest if running.
+		if m.ingestRunning && m.ingestCancelFn != nil {
+			m.ingestCancelFn()
+			m.ingestCancelFn = nil
+			m.ingestRunning = false
+			m.ingestLabel = ""
+			m.ingestLog = nil
+			m.ingestCostEstimate = ""
+			m.statusMsg = "ingest cancelled"
 			return nil
 		}
 		m.cmdComplete = nil
@@ -4889,6 +4912,8 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 	}
 	svc := m.svc
 	send := *m.programSend
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ingestCancelFn = cancel
 	m.ingestRunning = true
 	m.ingestLabel = "fetching…"
 	m.statusMsg = ""
@@ -4899,8 +4924,11 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 			Progress: func(step string) {
 				send(statusUpdateMsg{text: step})
 			},
+			OnCostEstimate: func(nChunks int, usd float64) {
+				send(ingestCostEstimateMsg{nChunks: nChunks, usd: usd})
+			},
 		}
-		result, err := svc.Ingest(context.Background(), req)
+		result, err := svc.Ingest(ctx, req)
 		if err != nil {
 			return cmdDoneMsg{err: err.Error()}
 		}

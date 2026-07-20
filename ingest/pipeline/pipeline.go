@@ -219,6 +219,11 @@ type Request struct {
 	// Progress is called with a human-readable status message at each pipeline step.
 	// May be nil.
 	Progress func(msg string)
+
+	// OnCostEstimate is called once after extraction and before any LLM calls,
+	// with the number of text chunks and the estimated total USD cost.
+	// Only fires for non-teaser articles with at least one chunk. May be nil.
+	OnCostEstimate func(nChunks int, estimatedUSD float64)
 }
 
 // Result is returned after a successful ingest.
@@ -373,6 +378,15 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 	if req.DryRun {
 		return Result{ExtractionStats: stats, Teaser: isTeaser}, nil
+	}
+
+	// ── Cost estimate (fires before any LLM call) ─────────────────────────
+	if !isTeaser && req.OnCostEstimate != nil {
+		flashcardsEnabled := (cfg.Ingest.Flashcards || req.Flashcards) && !req.NoFlashcards
+		nChunks, usd := estimateIngestCost(extracted.Text, cfg, flashcardsEnabled)
+		if nChunks > 0 {
+			req.OnCostEstimate(nChunks, usd)
+		}
 	}
 
 	// ── 2. Resolve profiles and styles ───────────────────────────────────
@@ -867,6 +881,76 @@ func truncateWords(text string, maxWords int) string {
 		return text
 	}
 	return strings.Join(words[:maxWords], " ")
+}
+
+// estimateIngestCost computes an approximate USD cost for ingesting text.
+// It chunks the text (pure computation), then estimates token costs for the
+// map-reduce summary, flash, optional flashcards, and embed steps.
+// Returns (0, 0) if pricing is unavailable for the configured profiles.
+func estimateIngestCost(text string, cfg config.Config, flashcardsEnabled bool) (nChunks int, usd float64) {
+	chunkTokens := cfg.Ingest.ChunkTokens
+	if chunkTokens <= 0 {
+		chunkTokens = 900
+	}
+
+	doc := brieftypes.Document{
+		ID:   "estimate",
+		Text: text,
+	}
+	chunks, err := briefchunk.ChunkDocument(doc, chunkTokens)
+	if err != nil || len(chunks) == 0 {
+		return 0, 0
+	}
+	nChunks = len(chunks)
+
+	// Per-chunk map output estimate: brief produces a partial summary per chunk.
+	// Use a conservative 400 tokens as a typical chunk summary length.
+	const perChunkOutputEst = 400
+
+	// Summary map phase
+	summaryProf, err := lookupProfile(cfg, cfg.Ingest.SummaryProfile)
+	if err == nil {
+		for _, ch := range chunks {
+			inTok := briefchunk.ApproxTokens(ch.Text) + 200 // +200 system prompt overhead
+			usd += cfg.CalcCost(summaryProf.Model, inTok, perChunkOutputEst)
+		}
+		// Summary reduce phase
+		reduceInTok := nChunks*perChunkOutputEst + 200
+		reduceOutTok := cfg.Ingest.SummaryMaxTokens
+		if reduceOutTok <= 0 {
+			reduceOutTok = 2048
+		}
+		usd += cfg.CalcCost(summaryProf.Model, reduceInTok, reduceOutTok)
+
+		// Flash (input ≈ reduce output)
+		if flashProf, err := lookupProfile(cfg, cfg.Ingest.FlashProfile); err == nil {
+			flashOut := cfg.Ingest.FlashMaxTokens
+			if flashOut <= 0 {
+				flashOut = 256
+			}
+			usd += cfg.CalcCost(flashProf.Model, reduceOutTok+200, flashOut)
+		}
+
+		// Flashcards (optional)
+		if flashcardsEnabled {
+			if fcProf, err := lookupProfile(cfg, cfg.Ingest.FlashcardProfile); err == nil {
+				fcOut := cfg.Ingest.FlashcardMaxTokens
+				if fcOut <= 0 {
+					fcOut = 2048
+				}
+				usd += cfg.CalcCost(fcProf.Model, reduceOutTok+200, fcOut)
+			}
+		}
+
+		// Embed (the summary text, ≈ reduceOutTok tokens)
+		if cfg.Ingest.EmbedProfile != "" {
+			if embedProf, err := lookupProfile(cfg, cfg.Ingest.EmbedProfile); err == nil && embedProf.Info.Pricing != nil {
+				usd += float64(reduceOutTok) * embedProf.Info.Pricing.Input / 1_000_000
+			}
+		}
+	}
+
+	return nChunks, usd
 }
 
 // lookupProfile resolves a profile name from config. Returns an error if not found.

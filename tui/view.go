@@ -246,6 +246,9 @@ func (m Model) View() string {
 	ingestLogRows := 0
 	if m.ingestRunning || m.agentRunning {
 		ingestLogRows = 3
+		if m.ingestCostEstimate != "" {
+			ingestLogRows++ // one extra pinned row for cost estimate
+		}
 	}
 	agentConfirmRows := len(m.agentConfirmLines)
 	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines) + ingestLogRows + agentConfirmRows
@@ -272,6 +275,9 @@ func (m Model) View() string {
 	botLines = append(botLines, compLines...)
 	botLines = append(botLines, m.renderStatusLine())
 	if m.ingestRunning || m.agentRunning {
+		if m.ingestCostEstimate != "" {
+			botLines = append(botLines, fg(ActiveTheme.Accent, "  "+m.ingestCostEstimate))
+		}
 		for i := 0; i < 3; i++ {
 			logIdx := len(m.ingestLog) - 3 + i
 			if logIdx >= 0 && logIdx < len(m.ingestLog) {

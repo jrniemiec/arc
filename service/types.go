@@ -99,6 +99,10 @@ type IngestRequest struct {
 
 	// Progress is called with a human-readable status at each pipeline step.
 	Progress func(msg string)
+
+	// OnCostEstimate is called once after article extraction and before any LLM
+	// calls, with the number of chunks and the estimated total cost in USD.
+	OnCostEstimate func(nChunks int, usd float64)
 }
 
 // IngestResult is returned after a successful ingest.
