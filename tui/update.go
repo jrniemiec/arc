@@ -3978,6 +3978,7 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 		return nil
 	}
 	item := *sel
+	returnFocus := m.focus
 	m.askConfirm(fmt.Sprintf("delete %q? (yes/N)", item.title), func() tea.Cmd {
 		id := item.id
 		svc := m.svc
@@ -3990,7 +3991,7 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 		m.statusMsg = "✓ deleted"
 		m.pendingConfirm = nil
 		m.pendingConfirmMsg = ""
-		m.focus = paneNav
+		m.focus = returnFocus
 		contentCmd := m.triggerContentLoad()
 		if svc == nil {
 			return contentCmd

@@ -706,11 +706,14 @@ func (s *Service) ReadBody(a store.Article) (string, error) {
 	return s.lib.ReadBody(a)
 }
 
-// DeleteArticle removes an article from the filesystem, SQLite, and collection symlinks.
+// DeleteArticle removes an article from the filesystem, SQLite, collection symlinks, and vector index.
 func (s *Service) DeleteArticle(ctx context.Context, id string) error {
 	a, err := s.lib.Get(ctx, id)
 	if err != nil {
 		return fmt.Errorf("get article: %w", err)
+	}
+	if s.vec != nil {
+		_ = s.vec.Delete(ctx, id)
 	}
 	return s.lib.DeleteArticle(ctx, a)
 }
