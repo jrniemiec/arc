@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -346,7 +347,10 @@ type Model struct {
 
 	// Agent content — run detail
 	agentRunDecisions   agentpkg.DecisionsFile // decisions for selected run (may be empty)
-	agentRunDecisionsID string                 // run ID that was loaded
+	agentRunDecisionsID string                 // decisions FILE ID loaded (= SourceRunID for decisions runs)
+	agentRunIngested    []store.Article        // articles ingested during selected decisions run (from DB)
+	agentRunIngestedID  string                 // run ID whose ingested articles are loaded
+	agentRunIngestedErr string                 // error from last loadAgentRunIngested (empty = ok)
 	agentFeedExpanded   map[int]bool           // feed index → expanded
 	agentContentCursor  int                    // highlighted row in run detail
 	agentContentScroll  int                    // scroll offset in run detail
@@ -716,6 +720,14 @@ type agentDecisionsLoadedMsg struct {
 	err   string
 }
 
+// agentRunIngestedLoadedMsg carries articles ingested by a specific decisions run.
+type agentRunIngestedLoadedMsg struct {
+	runID    string
+	articles []store.Article
+	err      string
+}
+
+
 // agentRunDoneMsg signals completion of a fresh or decisions agent run.
 type agentRunDoneMsg struct {
 	rec      agentpkg.RunRecord
@@ -964,6 +976,23 @@ func loadAgentDecisions(agentPath, runID string) tea.Cmd {
 			return agentDecisionsLoadedMsg{runID: runID, err: err.Error()}
 		}
 		return agentDecisionsLoadedMsg{runID: runID, df: df}
+	}
+}
+
+
+// loadAgentRunIngested queries the article store for all articles ingested during
+// a specific decisions run (matched by agent_run_id).
+func loadAgentRunIngested(svc *service.Service, runID string) tea.Cmd {
+	slog.Info("loadAgentRunIngested cmd created", "runID", runID)
+	return func() tea.Msg {
+		slog.Info("loadAgentRunIngested executing", "runID", runID)
+		articles, err := svc.List(context.Background(), store.Filter{AgentRunID: runID})
+		if err != nil {
+			slog.Info("loadAgentRunIngested error", "runID", runID, "err", err)
+			return agentRunIngestedLoadedMsg{runID: runID, err: err.Error()}
+		}
+		slog.Info("loadAgentRunIngested done", "runID", runID, "count", len(articles))
+		return agentRunIngestedLoadedMsg{runID: runID, articles: articles}
 	}
 }
 

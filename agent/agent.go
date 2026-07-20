@@ -539,12 +539,13 @@ func RunDecisions(ctx context.Context, opts RunOptions, decisionsPath string) (R
 	runID := NewRunID()
 	startedAt := time.Now().UTC()
 	rec := RunRecord{
-		RunID:     runID,
-		RunType:   "decisions",
-		StartedAt: startedAt,
+		RunID:       runID,
+		RunType:     "decisions",
+		SourceRunID: df.RunID,
+		StartedAt:   startedAt,
 	}
 
-	slog.Info("decisions run started", "run_id", runID, "source", decisionsPath)
+	slog.Info("decisions run started", "run_id", runID, "source", decisionsPath, "source_run_id", df.RunID)
 
 	for _, dfr := range df.Feeds {
 		fr := FeedRecord{Name: dfr.Name}

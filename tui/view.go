@@ -1091,7 +1091,7 @@ func (m Model) renderContentPane(height, width int) []string {
 	}
 
 	var lines []string
-	if m.chatMode {
+	if m.chatMode && m.activeTab == tabLibrary {
 		lines = m.renderChatPane(contentH, width)
 	} else {
 		switch m.activeTab {
@@ -1746,6 +1746,7 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 	statRow := func(label, val string) string {
 		return fg(t.ContentDimmed, fmt.Sprintf("  %-12s", label)) + fg(t.ContentText, val)
 	}
+
 	header := []string{
 		fgBold(t.ContentTitle, fmt.Sprintf("%s  [%s]  %s", rec.RunID, runType, duration)),
 		"",
@@ -1753,6 +1754,9 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 		statRow("Ingested", fmt.Sprintf("%d", rec.TotalIngest)),
 		statRow("Maybe", fmt.Sprintf("%d", rec.TotalMaybe)),
 		statRow("Skipped", fmt.Sprintf("%d", rec.TotalSkip)),
+	}
+	if rec.SourceRunID != "" {
+		header = append(header, statRow("Source run", rec.SourceRunID))
 	}
 	if rec.TotalCostUSD > 0 {
 		header = append(header, statRow("Cost", formatUSD(rec.TotalCostUSD)))
@@ -1763,6 +1767,35 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 	if rec.Error != "" {
 		header = append(header, "", fg(t.StatusError, "  Error: "+rec.Error))
 	}
+	// For decisions-type runs: show ingested-in-this-run section before feed list.
+	if runType == "decisions" {
+		ingestedLoaded := m.agentRunIngestedID == rec.RunID
+		header = append(header, "", fg(t.ContentTitle, "  Ingested in this rerun"))
+		if !ingestedLoaded {
+			header = append(header, fg(t.ContentDimmed, "  (loading…)"))
+		} else if m.agentRunIngestedErr != "" {
+			header = append(header, fg(t.StatusError, "  error: "+m.agentRunIngestedErr))
+		} else if len(m.agentRunIngested) == 0 {
+			header = append(header, fg(t.ContentDimmed, "  (none)"))
+		} else {
+			for _, a := range m.agentRunIngested {
+				title := a.Title
+				if title == "" {
+					title = a.ID
+				}
+				reason := ""
+				if a.AgentReason != "" {
+					r := a.AgentReason
+					if len([]rune(r)) > 60 {
+						r = string([]rune(r)[:57]) + "..."
+					}
+					reason = "  " + fg(t.ContentDimmed, r)
+				}
+				header = append(header, "  "+fg(t.NavMark, "✓")+" "+fg(t.ContentText, title)+reason)
+			}
+		}
+	}
+
 	header = append(header, "", fg(t.ContentDimmed, "  Feed Decisions  (Space to expand · a=ingest · s=skip)"))
 
 	detailRows := m.buildAgentDecisionRows()
@@ -1878,6 +1911,7 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 	}
 	return lines[:height]
 }
+
 
 func (m Model) renderContentStats(height, width int) []string {
 	t := ActiveTheme

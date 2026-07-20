@@ -277,23 +277,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case agentRunDoneMsg:
+		slog.Debug("agentRunDoneMsg received",
+			"is_rerun", msg.isRerun, "err", msg.err,
+			"new_run_id", msg.newRunID,
+			"ingested", msg.rec.TotalIngest)
 		m.agentRunning = false
+		m.agentRunCancelFn = nil
 		m.ingestLabel = ""
 		m.ingestLog = nil
-		if m.agentRunCancelFn != nil {
-			m.agentRunCancelFn()
-			m.agentRunCancelFn = nil
-		}
 		if msg.err != "" {
+			slog.Error("agentRunDoneMsg error", "err", msg.err)
 			m.setStatusError("✗ agent: " + msg.err)
 		} else if msg.isRerun {
 			n := msg.rec.TotalIngest
+			slog.Info("agentRunDoneMsg rerun success", "ingested", n)
 			m.statusMsg = fmt.Sprintf("✓ rerun complete — %d ingested", n)
 			m.statusSuccess = true
+			// Stay on the original run after reload (not the new decisions-type run).
+			m.restoredState.AgentRunID = m.agentRunDecisionsID
 			// Reload the decisions file so done items are trimmed.
 			cmds = append(cmds, loadAgentDecisions(m.cfg.AgentPath, m.agentRunDecisionsID))
+			// Index newly ingested articles into SQLite (pipeline writes files only).
+			if n > 0 {
+				svc := m.svc
+				cmds = append(cmds, func() tea.Msg {
+					if _, err := svc.Library().Reindex(context.Background(), nil); err != nil {
+						slog.Warn("reindex after decisions rerun failed", "err", err)
+					}
+					return nil
+				})
+			}
 		} else {
 			n := msg.rec.TotalIngest
+			slog.Info("agentRunDoneMsg fresh run success",
+				"run_id", msg.newRunID, "ingested", n)
 			m.statusMsg = fmt.Sprintf("✓ agent run complete — %d ingested", n)
 			m.statusSuccess = true
 		}
@@ -304,10 +321,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, loadAgentRuns(m.cfg.AgentPath))
 		return m, tea.Batch(cmds...)
 
+	case agentRunIngestedLoadedMsg:
+		cursorRunID := ""
+		if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
+			cursorRunID = m.agentRuns[m.agentRunsCursor].RunID
+		}
+		slog.Info("agentRunIngestedLoadedMsg", "msg.runID", msg.runID, "msg.err", msg.err,
+			"cursor", m.agentRunsCursor, "runs", len(m.agentRuns), "cursorRunID", cursorRunID)
+		if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) &&
+			msg.runID == m.agentRuns[m.agentRunsCursor].RunID {
+			m.agentRunIngested = msg.articles
+			m.agentRunIngestedID = msg.runID
+			m.agentRunIngestedErr = msg.err
+			slog.Info("agentRunIngestedLoadedMsg applied", "count", len(msg.articles))
+		} else {
+			slog.Info("agentRunIngestedLoadedMsg SKIPPED condition failed",
+				"msgRunID", msg.runID, "cursorRunID", cursorRunID)
+		}
+
 	case agentDecisionsLoadedMsg:
 		if msg.runID == m.agentRunDecisionsID {
 			if msg.err == "" {
 				m.agentRunDecisions = msg.df
+				// For decisions-type runs, auto-expand feeds that have rerun-ingested
+				// items (status:done, action:"+") so they're immediately visible.
+				if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) &&
+					m.agentRuns[m.agentRunsCursor].RunType == "decisions" {
+					for fi, df := range msg.df.Feeds {
+						for _, item := range df.Items {
+							if item.Status == "done" && item.Action == "+" {
+								if m.agentFeedExpanded == nil {
+									m.agentFeedExpanded = make(map[int]bool)
+								}
+								m.agentFeedExpanded[fi] = true
+								break
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -1284,21 +1335,54 @@ func (m *Model) agentNavCursorDown() tea.Cmd {
 }
 
 // triggerAgentRunDetail loads the decisions file for the currently selected run
-// if it hasn't been loaded yet.
+// if it hasn't been loaded yet. For decisions-type runs, loads the source daily
+// run's decisions file (via SourceRunID) and queries ingested articles by agent_run_id.
 func (m *Model) triggerAgentRunDetail() tea.Cmd {
 	if m.agentRunsCursor < 0 || m.agentRunsCursor >= len(m.agentRuns) {
 		return nil
 	}
-	runID := m.agentRuns[m.agentRunsCursor].RunID
-	if runID == m.agentRunDecisionsID {
-		return nil // already loaded
+	rec := m.agentRuns[m.agentRunsCursor]
+	runID := rec.RunID
+
+	// For decisions-type runs, load the source daily run's decisions file.
+	fileID := runID
+	if rec.RunType == "decisions" {
+		if rec.SourceRunID != "" {
+			fileID = rec.SourceRunID
+		} else {
+			// Legacy run (predates SourceRunID): find the most recent daily run
+			// before this one — that's the run whose decisions file was processed.
+			// m.agentRuns is in reverse-chronological order, so scan forward from cursor.
+			for i := m.agentRunsCursor + 1; i < len(m.agentRuns); i++ {
+				if m.agentRuns[i].RunType == "daily" || m.agentRuns[i].RunType == "" {
+					fileID = m.agentRuns[i].RunID
+					break
+				}
+			}
+		}
 	}
-	m.agentRunDecisionsID = runID
+
+	// Already loaded?
+	if fileID == m.agentRunDecisionsID {
+		return nil
+	}
+
+	slog.Info("triggerAgentRunDetail loading", "runID", runID, "fileID", fileID, "runType", rec.RunType)
+	m.agentRunDecisionsID = fileID
 	m.agentRunDecisions = agentpkg.DecisionsFile{}
+	m.agentRunIngested = nil
+	m.agentRunIngestedID = ""
+	m.agentRunIngestedErr = ""
 	m.agentFeedExpanded = nil
 	m.agentContentCursor = 0
 	m.agentContentScroll = 0
-	return loadAgentDecisions(m.cfg.AgentPath, runID)
+
+	cmds := []tea.Cmd{loadAgentDecisions(m.cfg.AgentPath, fileID)}
+	if rec.RunType == "decisions" {
+		slog.Info("triggerAgentRunDetail: scheduling loadAgentRunIngested", "runID", runID)
+		cmds = append(cmds, loadAgentRunIngested(m.svc, runID))
+	}
+	return tea.Batch(cmds...)
 }
 
 // clampAgentRunsScroll keeps agentRunsScroll within bounds so the cursor is visible.
@@ -2578,13 +2662,24 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		// Agent confirmation flow (multi-line block above input).
 		if m.agentConfirmAction != nil {
 			if val == "yes" {
+				slog.Info("agent run confirmed by user")
 				fn := m.agentConfirmAction
 				m.agentConfirmAction = nil
 				m.agentConfirmLines = nil
+				// Set running state here (in Update) so it's reflected in the returned model.
+				m.agentRunning = true
+				m.ingestLabel = "starting…"
+				m.ingestLog = nil
 				return fn()
 			}
+			slog.Debug("agent run cancelled by user", "val", val)
 			m.agentConfirmAction = nil
 			m.agentConfirmLines = nil
+			// Cancel any pre-created context (created in cmdAgentRun/cmdAgentRerun).
+			if m.agentRunCancelFn != nil {
+				m.agentRunCancelFn()
+				m.agentRunCancelFn = nil
+			}
 			m.statusMsg = "cancelled"
 			return nil
 		}
@@ -4494,7 +4589,9 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 // cmdAgentRun prepares a fresh agent feed-scan confirmation block.
 // arg may contain --dry-run and/or --focus "...".
 func (m *Model) cmdAgentRun(arg string) tea.Cmd {
+	slog.Debug("/agent-run invoked", "arg", arg)
 	if m.agentRunning {
+		slog.Debug("/agent-run rejected: already running")
 		m.statusMsg = "✗ agent run already in progress"
 		return nil
 	}
@@ -4530,6 +4627,18 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 	filterProfile := agentCfg.FilterProfileName()
 	summaryProfile := agentCfg.SummaryProfileName()
 
+	// Create context now so cancel is stored in the model before confirmation.
+	ctx, cancel := context.WithCancel(context.Background())
+	m.agentRunCancelFn = cancel
+
+	// Capture only non-model data for the closure — do NOT capture m.
+	send := *m.programSend
+	cfg := m.cfg
+	svc := m.svc
+
+	slog.Debug("/agent-run confirm ready",
+		"active_feeds", activeFeeds, "filter", filterProfile,
+		"ingest", summaryProfile, "focus", focusStr, "dry_run", dryRun)
 	m.agentConfirmLines = []string{
 		"  Agent run — poll all feeds",
 		"",
@@ -4542,7 +4651,37 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 		"  yes to confirm   Esc to cancel",
 	}
 	m.agentConfirmAction = func() tea.Cmd {
-		return m.execAgentRun(agentCfg, dryRun, focus)
+		return func() tea.Msg {
+			slog.Info("agent run goroutine started",
+				"feeds", activeFeeds, "dry_run", dryRun, "focus", focus)
+			db := svc.Library().DB()
+			opts := agentpkg.RunOptions{
+				ArcConfig:    cfg,
+				AgentCfg:     agentCfg,
+				DB:           db,
+				FeedStateDir: filepath.Join(cfg.AgentPath, "state"),
+				RunsPath:     filepath.Join(cfg.AgentPath, "runs.jsonl"),
+				DecisionsDir: cfg.AgentPath,
+				DryRun:       dryRun,
+				Focus:        focus,
+				Status: func(slot int, txt string) {
+					if slot == 0 {
+						slog.Debug("agent run status", "slot", slot, "msg", txt)
+						send(statusUpdateMsg{text: txt})
+					}
+				},
+			}
+			rec, err := agentpkg.RunFeeds(ctx, opts)
+			if err != nil {
+				slog.Error("agent run failed", "err", err)
+				return agentRunDoneMsg{err: err.Error()}
+			}
+			slog.Info("agent run complete",
+				"run_id", rec.RunID, "ingested", rec.TotalIngest,
+				"maybe", rec.TotalMaybe, "skipped", rec.TotalSkip,
+				"cost_usd", rec.TotalCostUSD)
+			return agentRunDoneMsg{rec: rec, newRunID: rec.RunID}
+		}
 	}
 	m.focus = paneCommand
 	m.input.SetValue("")
@@ -4551,7 +4690,9 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 
 // cmdAgentRerun prepares a decisions-rerun confirmation block for the selected run.
 func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
+	slog.Debug("/agent-rerun invoked", "arg", arg)
 	if m.agentRunning {
+		slog.Debug("/agent-rerun rejected: already running")
 		m.statusMsg = "✗ agent run already in progress"
 		return nil
 	}
@@ -4584,6 +4725,10 @@ func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
 		m.statusMsg = "✗ no items queued — use a/s keys to mark items for ingest"
 		return nil
 	}
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
 
 	rec := m.agentRuns[m.agentRunsCursor]
 	dryStr := "no"
@@ -4592,6 +4737,25 @@ func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
 	}
 	decisionsPath := filepath.Join(m.cfg.AgentPath, "decisions-"+rec.RunID+".json")
 
+	agentCfgPath := filepath.Join(m.cfg.AgentPath, "config.json")
+	agentCfg, err := agentpkg.LoadAgentConfig(agentCfgPath)
+	if err != nil {
+		m.statusMsg = "✗ could not load agent config: " + err.Error()
+		return nil
+	}
+
+	// Create context now so cancel is stored in the model before confirmation.
+	ctx, cancel := context.WithCancel(context.Background())
+	m.agentRunCancelFn = cancel
+
+	// Capture only non-model data for the closure — do NOT capture m.
+	send := *m.programSend
+	cfg := m.cfg
+	svc := m.svc
+
+	slog.Debug("/agent-rerun confirm ready",
+		"run_id", rec.RunID, "queued", queued,
+		"decisions_path", decisionsPath, "dry_run", dryRun)
 	m.agentConfirmLines = []string{
 		fmt.Sprintf("  Agent rerun — decisions from %s", rec.RunID),
 		"",
@@ -4601,97 +4765,37 @@ func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
 		"",
 		"  yes to confirm   Esc to cancel",
 	}
-	runID := rec.RunID
 	m.agentConfirmAction = func() tea.Cmd {
-		return m.execAgentRerun(decisionsPath, runID, dryRun)
+		return func() tea.Msg {
+			slog.Info("agent rerun goroutine started",
+				"decisions_path", decisionsPath, "queued", queued, "dry_run", dryRun)
+			db := svc.Library().DB()
+			opts := agentpkg.RunOptions{
+				ArcConfig: cfg,
+				AgentCfg:  agentCfg,
+				DB:        db,
+				RunsPath:  filepath.Join(cfg.AgentPath, "runs.jsonl"),
+				DryRun:    dryRun,
+				Status: func(slot int, txt string) {
+					if slot == 0 {
+						slog.Debug("agent rerun status", "slot", slot, "msg", txt)
+						send(statusUpdateMsg{text: txt})
+					}
+				},
+			}
+			rec, err := agentpkg.RunDecisions(ctx, opts, decisionsPath)
+			if err != nil {
+				slog.Error("agent rerun failed", "err", err)
+				return agentRunDoneMsg{err: err.Error(), isRerun: true}
+			}
+			slog.Info("agent rerun complete",
+				"run_id", rec.RunID, "ingested", rec.TotalIngest, "cost_usd", rec.TotalCostUSD)
+			return agentRunDoneMsg{rec: rec, isRerun: true}
+		}
 	}
 	m.focus = paneCommand
 	m.input.SetValue("")
 	return nil
-}
-
-// execAgentRun launches a fresh feed scan in a goroutine.
-func (m *Model) execAgentRun(agentCfg agentpkg.AgentConfig, dryRun bool, focus string) tea.Cmd {
-	if m.svc == nil {
-		m.statusMsg = "✗ service unavailable"
-		return nil
-	}
-	send := *m.programSend
-	cfg := m.cfg
-	db := m.svc.Library().DB()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.agentRunning = true
-	m.agentRunCancelFn = cancel
-	m.ingestLabel = "starting…"
-	m.ingestLog = nil
-
-	return func() tea.Msg {
-		opts := agentpkg.RunOptions{
-			ArcConfig:    cfg,
-			AgentCfg:     agentCfg,
-			DB:           db,
-			FeedStateDir: filepath.Join(cfg.AgentPath, "state"),
-			RunsPath:     filepath.Join(cfg.AgentPath, "runs.jsonl"),
-			DecisionsDir: cfg.AgentPath,
-			DryRun:       dryRun,
-			Focus:        focus,
-			Status: func(slot int, msg string) {
-				if slot == 0 {
-					send(statusUpdateMsg{text: msg})
-				}
-			},
-		}
-		rec, err := agentpkg.RunFeeds(ctx, opts)
-		if err != nil {
-			return agentRunDoneMsg{err: err.Error()}
-		}
-		return agentRunDoneMsg{rec: rec, newRunID: rec.RunID}
-	}
-}
-
-// execAgentRerun launches a decisions run in a goroutine.
-func (m *Model) execAgentRerun(decisionsPath, runID string, dryRun bool) tea.Cmd {
-	if m.svc == nil {
-		m.statusMsg = "✗ service unavailable"
-		return nil
-	}
-	send := *m.programSend
-	cfg := m.cfg
-	db := m.svc.Library().DB()
-
-	agentCfgPath := filepath.Join(cfg.AgentPath, "config.json")
-	agentCfg, err := agentpkg.LoadAgentConfig(agentCfgPath)
-	if err != nil {
-		m.statusMsg = "✗ could not load agent config: " + err.Error()
-		return nil
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.agentRunning = true
-	m.agentRunCancelFn = cancel
-	m.ingestLabel = "starting…"
-	m.ingestLog = nil
-
-	return func() tea.Msg {
-		opts := agentpkg.RunOptions{
-			ArcConfig: cfg,
-			AgentCfg:  agentCfg,
-			DB:        db,
-			RunsPath:  filepath.Join(cfg.AgentPath, "runs.jsonl"),
-			DryRun:    dryRun,
-			Status: func(slot int, msg string) {
-				if slot == 0 {
-					send(statusUpdateMsg{text: msg})
-				}
-			},
-		}
-		rec, err := agentpkg.RunDecisions(ctx, opts, decisionsPath)
-		if err != nil {
-			return agentRunDoneMsg{err: err.Error(), isRerun: true}
-		}
-		return agentRunDoneMsg{rec: rec, isRerun: true}
-	}
 }
 
 // parseAgentRunFlags parses --dry-run and --focus "..." from a command arg string.
