@@ -67,9 +67,14 @@ func reverse(text string) string {
 	return "\033[7m" + text + "\033[0m"
 }
 
-// navSelected renders a selected nav row: yellow left-bar + reverse-video.
-func navSelected(text string) string {
-	return fg("#FFD700", "▌") + reverse(text)
+// navSelected renders a selected nav row.
+// When the nav pane (or nav sub-tab) has focus, the yellow ▌ indicator is shown.
+// Otherwise the item stays reverse-video (selected) but the indicator moves away.
+func (m Model) navSelected(text string) string {
+	if m.focus == paneNav || m.focus == paneNavSubTab {
+		return fg("#FFD700", "▌") + reverse(text)
+	}
+	return reverse(text)
 }
 
 // hexToRGB parses a "#RRGGBB" color string.
@@ -697,7 +702,7 @@ func (m Model) renderNavCollections(maxLines int) []string {
 			}
 			label = truncate(label, m.navWidth()-1)
 			if selected {
-				line = navSelected(label)
+				line = m.navSelected(label)
 			} else {
 				line = fgBold(t.NavGroup, label)
 			}
@@ -718,7 +723,7 @@ func (m Model) renderNavCollections(maxLines int) []string {
 			}
 			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot)-idTagLen)
 			if selected {
-				line = navSelected(prefix + idTag + dot + title)
+				line = m.navSelected(prefix + idTag + dot + title)
 			} else if row.item.favorite {
 				idPart := ""
 				if idTag != "" {
@@ -809,7 +814,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				if ws.pinned {
 					pin = "★ "
 				}
-				label = navSelected(truncate(arrow+pin+ws.name+counts+flags, w-1))
+				label = m.navSelected(truncate(arrow+pin+ws.name+counts+flags, w-1))
 			} else if ws.pinned {
 				label = fgBold(t.NavGroup, truncate(arrow, w-1)) +
 					fgBold(t.Pinned, "★ ") +
@@ -824,7 +829,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			name := storefs.ScratchName(ws.name)
 			label = prefix + dot + name
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavDimmed, prefix) + fg(t.Accent, "✎") + " " + fg(t.NavText, name)
 			}
@@ -836,7 +841,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			}
 			label = truncate(arrow+row.colSlug+fmt.Sprintf(" (%d)", row.count), w-1)
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavText, label)
 			}
@@ -856,7 +861,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			title := truncate(oneLine(row.title), w-len(prefix)-len(dot)-idTagLen)
 			label = prefix + idTag + dot + title
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				idPart := ""
 				if idTag != "" {
@@ -872,7 +877,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			}
 			label = truncate(arrow+"resources"+fmt.Sprintf(" (%d)", row.count), w-1)
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavText, label)
 			}
@@ -888,7 +893,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			dirName := filepath.Base(row.resourceName)
 			label = truncate(indent+arrow+dirName, w-1)
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavDimmed, indent) + fg(t.NavText, arrow+dirName)
 			}
@@ -901,7 +906,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			name = truncate(name, w-len(prefix)-len(dot))
 			label = prefix + dot + name
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavDimmed, prefix) + fg(t.NavDimmed, "◦") + " " + fg(t.NavText, name)
 			}
@@ -913,7 +918,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			}
 			label = truncate(arrow+"outcomes"+fmt.Sprintf(" (%d)", row.count), w-1)
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavText, label)
 			}
@@ -924,7 +929,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			name := truncate(row.outcomeName, w-len(prefix)-len(dot))
 			label = prefix + dot + name
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavDimmed, prefix) + fg(t.NavDimmed, "◦") + " " + fg(t.NavText, name)
 			}
@@ -936,7 +941,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			}
 			label = truncate(arrow+"attic"+fmt.Sprintf(" (%d)", row.count), w-1)
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavDimmed, label)
 			}
@@ -947,7 +952,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			title := truncate(oneLine(row.title), w-len(prefix)-len(dot))
 			label = prefix + dot + title
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavDimmed, prefix+dot+title)
 			}
@@ -958,7 +963,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			name := truncate(row.colSlug, w-len(prefix)-len(dot))
 			label = prefix + dot + name
 			if selected {
-				label = navSelected(label)
+				label = m.navSelected(label)
 			} else {
 				label = fg(t.NavDimmed, prefix+dot+name)
 			}
@@ -1043,7 +1048,7 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 		title := truncate(oneLine(item.title), m.navWidth()-len(prefix)-idWidth-1)
 		var line string
 		if i == m.navCursor {
-			line = navSelected(idStr + prefix + title)
+			line = m.navSelected(idStr + prefix + title)
 		} else {
 			idPart := fg(t.NavDimmed, idStr)
 			if numbered {
@@ -1362,7 +1367,11 @@ func (m Model) renderContentLibrary(height, width int) []string {
 					break
 				}
 				if isCursor && wi == 0 {
-					lines = append(lines, fgBold(t.InputPrompt, "▶ ")+fg(t.TopBarText, wl))
+					markerColor := lipgloss.Color(t.InputPrompt)
+					if m.focus == paneContent {
+						markerColor = "#FFD700"
+					}
+					lines = append(lines, fgBold(markerColor, "▶ ")+fg(t.TopBarText, wl))
 				} else if isCursor {
 					lines = append(lines, "  "+fg(t.TopBarText, wl))
 				} else {
@@ -1672,7 +1681,7 @@ func (m Model) renderNavAgentRuns(maxLines int) []string {
 		label := fmt.Sprintf("  %s  %s%s", date, ingested, cost)
 
 		if selected {
-			lines = append(lines, navSelected(label))
+			lines = append(lines, m.navSelected(label))
 		} else {
 			lines = append(lines, fg(t.NavText, " "+label))
 		}
@@ -1818,7 +1827,8 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 			text := fmt.Sprintf("  %s %s%s", arrow, r.feedName, feedErr)
 			statsText := "    " + r.feedStats
 			if selected {
-				rowLines = append(rowLines, rowLine{curNavPos, fgBold(t.Accent, text)})
+				arrowColored := fg("#FFD700", fmt.Sprintf("  %s ", arrow)) + fgBold(t.Accent, r.feedName+feedErr)
+				rowLines = append(rowLines, rowLine{curNavPos, arrowColored})
 				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
 			} else {
 				rowLines = append(rowLines, rowLine{curNavPos, fg(t.ContentText, text)})
@@ -1844,7 +1854,7 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 			iconPart := fg(iconCol, "    "+icon+" ")
 			titlePart := fg(t.ContentText, r.title)
 			if selected {
-				iconPart = fgBold(iconCol, "    "+icon+" ")
+				iconPart = fg("#FFD700", "▌") + fg(iconCol, "   "+icon+" ")
 				titlePart = fgBold(t.ContentText, r.title)
 			}
 			rowLines = append(rowLines, rowLine{curNavPos, iconPart + titlePart})
@@ -2138,7 +2148,8 @@ func (m Model) renderCommandInput() string {
 					}
 					var cursorSeq string
 					if m.cursorVisible {
-						cursorSeq = "\033[7m" + curChar + "\033[27m"
+						// Yellow background block cursor — visible even on a space character.
+						cursorSeq = "\033[48;2;255;215;0m\033[30m" + curChar + "\033[0m"
 					} else {
 						cursorSeq = fg(t.InputText, curChar)
 						if curChar == " " {
