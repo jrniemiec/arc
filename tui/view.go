@@ -1767,35 +1767,6 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 	if rec.Error != "" {
 		header = append(header, "", fg(t.StatusError, "  Error: "+rec.Error))
 	}
-	// For decisions-type runs: show ingested-in-this-run section before feed list.
-	if runType == "decisions" {
-		ingestedLoaded := m.agentRunIngestedID == rec.RunID
-		header = append(header, "", fg(t.ContentTitle, "  Ingested in this rerun"))
-		if !ingestedLoaded {
-			header = append(header, fg(t.ContentDimmed, "  (loading…)"))
-		} else if m.agentRunIngestedErr != "" {
-			header = append(header, fg(t.StatusError, "  error: "+m.agentRunIngestedErr))
-		} else if len(m.agentRunIngested) == 0 {
-			header = append(header, fg(t.ContentDimmed, "  (none)"))
-		} else {
-			for _, a := range m.agentRunIngested {
-				title := a.Title
-				if title == "" {
-					title = a.ID
-				}
-				reason := ""
-				if a.AgentReason != "" {
-					r := a.AgentReason
-					if len([]rune(r)) > 60 {
-						r = string([]rune(r)[:57]) + "..."
-					}
-					reason = "  " + fg(t.ContentDimmed, r)
-				}
-				header = append(header, "  "+fg(t.NavMark, "✓")+" "+fg(t.ContentText, title)+reason)
-			}
-		}
-	}
-
 	header = append(header, "", fg(t.ContentDimmed, "  Feed Decisions  (Space to expand · a=ingest · s=skip)"))
 
 	detailRows := m.buildAgentDecisionRows()
@@ -1815,9 +1786,6 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 
 	navPos := 0
 	for i, r := range detailRows {
-		if r.kind == agentRowHeader {
-			continue
-		}
 		isNav := false
 		curNavPos := -1
 		for _, ni := range navIdx {
@@ -1831,6 +1799,12 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 		selected := isNav && curNavPos == m.agentContentCursor && m.focus == paneContent
 
 		switch r.kind {
+		case agentRowHeader:
+			if r.text != "" {
+				rowLines = append(rowLines, rowLine{-1, fg(t.ContentTitle, r.text)})
+			} else {
+				rowLines = append(rowLines, rowLine{-1, ""})
+			}
 		case agentRowFeed:
 			expanded := m.agentFeedExpanded[r.feedIdx]
 			arrow := "▶"

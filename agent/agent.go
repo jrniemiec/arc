@@ -149,6 +149,7 @@ func RunFeeds(ctx context.Context, opts RunOptions) (RunRecord, error) {
 		rec.TotalMaybe += fr.Maybe
 		rec.TotalSkip += fr.Skip
 		rec.TotalCostUSD += fr.CostUSD
+		rec.IngestedSlugs = append(rec.IngestedSlugs, fr.Slugs...)
 	}
 
 	rec.FinishedAt = time.Now().UTC()
@@ -298,7 +299,8 @@ func runFeed(
 	}
 
 	decisions := make([]ItemDecision, total)
-	costs := make([]float64, total) // per-item cost, written by each goroutine at its own index
+	costs := make([]float64, total)  // per-item cost, written by each goroutine at its own index
+	slugs := make([]string, total)   // per-item slug, written by each goroutine at its own index
 	var (
 		ingestSem = make(chan struct{}, IngestConcurrency)
 		ingestWg  sync.WaitGroup
@@ -390,6 +392,7 @@ func runFeed(
 					)
 				} else {
 					costs[idx] = pResult.Cost.TotalUSD
+					slugs[idx] = pResult.Slug
 					slog.Info("ingested",
 						"slug", pResult.Slug,
 						"title", it.Title,
@@ -404,8 +407,11 @@ func runFeed(
 
 	ingestWg.Wait()
 	fr.Items = decisions
-	for _, c := range costs {
+	for i, c := range costs {
 		fr.CostUSD += c
+		if slugs[i] != "" {
+			fr.Slugs = append(fr.Slugs, slugs[i])
+		}
 	}
 
 	// Mark all new items as seen (even skipped ones, to avoid re-filtering next run).
@@ -593,6 +599,7 @@ func RunDecisions(ctx context.Context, opts RunOptions, decisionsPath string) (R
 			fr.CostUSD += pResult.Cost.TotalUSD
 			rec.TotalIngest++
 			rec.TotalCostUSD += pResult.Cost.TotalUSD
+			rec.IngestedSlugs = append(rec.IngestedSlugs, pResult.Slug)
 			item.Verdict = "ingest"
 			item.Status = "done"
 			allItems = append(allItems, item) // for verbose report

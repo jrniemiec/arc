@@ -298,11 +298,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Reload the decisions file so done items are trimmed.
 			cmds = append(cmds, loadAgentDecisions(m.cfg.AgentPath, m.agentRunDecisionsID))
 			// Index newly ingested articles into SQLite (pipeline writes files only).
-			if n > 0 {
+			if len(msg.rec.IngestedSlugs) > 0 {
 				svc := m.svc
+				slugs := msg.rec.IngestedSlugs
 				cmds = append(cmds, func() tea.Msg {
-					if _, err := svc.Library().Reindex(context.Background(), nil); err != nil {
-						slog.Warn("reindex after decisions rerun failed", "err", err)
+					if err := svc.Library().IndexSlugs(context.Background(), slugs); err != nil {
+						slog.Warn("index after decisions rerun failed", "err", err)
 					}
 					return nil
 				})
@@ -313,6 +314,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				"run_id", msg.newRunID, "ingested", n)
 			m.statusMsg = fmt.Sprintf("✓ agent run complete — %d ingested", n)
 			m.statusSuccess = true
+			// Index newly ingested articles into SQLite (pipeline writes files only).
+			if len(msg.rec.IngestedSlugs) > 0 {
+				svc := m.svc
+				slugs := msg.rec.IngestedSlugs
+				cmds = append(cmds, func() tea.Msg {
+					if err := svc.Library().IndexSlugs(context.Background(), slugs); err != nil {
+						slog.Warn("index after agent run failed", "err", err)
+					}
+					return nil
+				})
+			}
 		}
 		// Reload runs list; auto-select new run after load.
 		if msg.newRunID != "" {
@@ -343,22 +355,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.runID == m.agentRunDecisionsID {
 			if msg.err == "" {
 				m.agentRunDecisions = msg.df
-				// For decisions-type runs, auto-expand feeds that have rerun-ingested
-				// items (status:done, action:"+") so they're immediately visible.
-				if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) &&
-					m.agentRuns[m.agentRunsCursor].RunType == "decisions" {
-					for fi, df := range msg.df.Feeds {
-						for _, item := range df.Items {
-							if item.Status == "done" && item.Action == "+" {
-								if m.agentFeedExpanded == nil {
-									m.agentFeedExpanded = make(map[int]bool)
-								}
-								m.agentFeedExpanded[fi] = true
-								break
-							}
-						}
-					}
-				}
 			}
 		}
 
@@ -1362,25 +1358,30 @@ func (m *Model) triggerAgentRunDetail() tea.Cmd {
 		}
 	}
 
-	// Already loaded?
-	if fileID == m.agentRunDecisionsID {
-		return nil
+	var cmds []tea.Cmd
+
+	// Reload decisions file only when the source file changes.
+	if fileID != m.agentRunDecisionsID {
+		slog.Info("triggerAgentRunDetail loading decisions", "runID", runID, "fileID", fileID)
+		m.agentRunDecisionsID = fileID
+		m.agentRunDecisions = agentpkg.DecisionsFile{}
+		m.agentFeedExpanded = nil
+		m.agentContentCursor = 0
+		m.agentContentScroll = 0
+		cmds = append(cmds, loadAgentDecisions(m.cfg.AgentPath, fileID))
 	}
 
-	slog.Info("triggerAgentRunDetail loading", "runID", runID, "fileID", fileID, "runType", rec.RunType)
-	m.agentRunDecisionsID = fileID
-	m.agentRunDecisions = agentpkg.DecisionsFile{}
-	m.agentRunIngested = nil
-	m.agentRunIngestedID = ""
-	m.agentRunIngestedErr = ""
-	m.agentFeedExpanded = nil
-	m.agentContentCursor = 0
-	m.agentContentScroll = 0
-
-	cmds := []tea.Cmd{loadAgentDecisions(m.cfg.AgentPath, fileID)}
-	if rec.RunType == "decisions" {
+	// Reload ingested articles only when the decisions run itself changes.
+	// Tracked separately from fileID so re-visiting the same run doesn't re-fetch.
+	if rec.RunType == "decisions" && m.agentRunIngestedID != runID && m.agentRunIngestedErr == "" {
 		slog.Info("triggerAgentRunDetail: scheduling loadAgentRunIngested", "runID", runID)
+		m.agentRunIngested = nil
+		m.agentRunIngestedID = ""
 		cmds = append(cmds, loadAgentRunIngested(m.svc, runID))
+	}
+
+	if len(cmds) == 0 {
+		return nil
 	}
 	return tea.Batch(cmds...)
 }
@@ -1431,6 +1432,7 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 		// Toggle expand on the feed header at cursor.
 		if m.agentContentCursor < len(navIdx) {
 			row := rows[navIdx[m.agentContentCursor]]
+			slog.Info("agentContent expand", "cursor", m.agentContentCursor, "rowKind", row.kind, "feedIdx", row.feedIdx, "title", row.title)
 			if row.kind == agentRowFeed {
 				if m.agentFeedExpanded == nil {
 					m.agentFeedExpanded = make(map[int]bool)
@@ -1442,6 +1444,7 @@ func (m *Model) handleAgentContentKey(msg tea.KeyMsg) tea.Cmd {
 		// Open article URL in browser.
 		if m.agentContentCursor < len(navIdx) {
 			row := rows[navIdx[m.agentContentCursor]]
+			slog.Info("agentContent open", "cursor", m.agentContentCursor, "rowKind", row.kind, "url", row.url, "status", row.status)
 			if row.kind == agentRowArticle && row.url != "" {
 				return openInChrome(row.url)
 			}

@@ -25,6 +25,10 @@ type RunRecord struct {
 	TotalSkip     int     `json:"total_skip"`     // items skipped
 	TotalCostUSD  float64 `json:"total_cost_usd"` // cumulative LLM cost across all ingested articles
 
+	// IngestedSlugs holds the article IDs ingested in this run.
+	// Omitted from JSON; used by callers to index only new articles into SQLite.
+	IngestedSlugs []string `json:"-"`
+
 	Error string `json:"error,omitempty"` // top-level error if the run failed
 }
 
@@ -43,6 +47,10 @@ type FeedRecord struct {
 	// Items holds per-article decisions, populated during the run.
 	// Available for verbose reporting; omitted from the JSONL run log to keep it compact.
 	Items []ItemDecision `json:"-"`
+
+	// Slugs holds the article IDs successfully ingested in this feed.
+	// Omitted from JSON; used by callers to index only new articles into SQLite.
+	Slugs []string `json:"-"`
 }
 
 // ItemDecision records the filter outcome for a single feed item.

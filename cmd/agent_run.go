@@ -139,13 +139,14 @@ func runAgentRun(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Index newly ingested articles into SQLite.
-	// pipeline.Run writes files only; the service layer normally handles reindexing.
-	if rec.TotalIngest > 0 && !agentDryRun {
+	// pipeline.Run writes files only; index only the new slugs rather than
+	// walking the entire library.
+	if len(rec.IngestedSlugs) > 0 && !agentDryRun {
 		if isTTY {
 			fmt.Print("indexing...")
 		}
-		if _, err := svc.Library().Reindex(ctx, nil); err != nil {
-			slog.Warn("reindex after agent run failed", "err", err)
+		if err := svc.Library().IndexSlugs(ctx, rec.IngestedSlugs); err != nil {
+			slog.Warn("index after agent run failed", "err", err)
 		}
 		if isTTY {
 			fmt.Print("\r\033[K") // clear "indexing..." line

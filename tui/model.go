@@ -152,6 +152,7 @@ const (
 // agentDetailRow is one display row in the agent run detail content pane.
 type agentDetailRow struct {
 	kind      agentDetailRowKind
+	text      string // for agentRowHeader: optional display text (section label)
 	feedIdx   int    // for agentRowFeed and agentRowArticle
 	verdict   string // for agentRowArticle: "ingest" | "maybe" | "skip"
 	action    string // for agentRowArticle (decisions): "+" | "-" | ""
@@ -907,9 +908,44 @@ func loadNav(svc *service.Service) tea.Cmd {
 
 // buildAgentDecisionRows builds the flat row list for the Decisions sub-tab content pane.
 // Uses m.agentRunDecisions directly; shows all items grouped by feed.
+// For decisions-type runs, prepends an "Ingested in this rerun" section.
 func (m Model) buildAgentDecisionRows() []agentDetailRow {
+	var rows []agentDetailRow
+
+	// Prepend rerun section for decisions-type runs.
+	if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) &&
+		m.agentRuns[m.agentRunsCursor].RunType == "decisions" {
+		rec := m.agentRuns[m.agentRunsCursor]
+		ingestedLoaded := m.agentRunIngestedID == rec.RunID
+		rows = append(rows, agentDetailRow{kind: agentRowHeader, text: "  Ingested in this rerun"})
+		if !ingestedLoaded {
+			rows = append(rows, agentDetailRow{kind: agentRowHeader, text: "  (loading…)"})
+		} else if m.agentRunIngestedErr != "" {
+			rows = append(rows, agentDetailRow{kind: agentRowHeader, text: "  error: " + m.agentRunIngestedErr})
+		} else if len(m.agentRunIngested) == 0 {
+			rows = append(rows, agentDetailRow{kind: agentRowHeader, text: "  (none)"})
+		} else {
+			for _, a := range m.agentRunIngested {
+				title := a.Title
+				if title == "" {
+					title = a.ID
+				}
+				rows = append(rows, agentDetailRow{
+					kind:    agentRowArticle,
+					feedIdx: -1,
+					verdict: "ingest",
+					status:  "done",
+					title:   title,
+					reason:  a.AgentReason,
+					url:     a.URL,
+				})
+			}
+		}
+		rows = append(rows, agentDetailRow{kind: agentRowHeader}) // blank spacer
+	}
+
 	if len(m.agentRunDecisions.Feeds) == 0 {
-		return nil
+		return rows
 	}
 
 	// Build feed stats lookup from selected run record for display.
@@ -921,7 +957,6 @@ func (m Model) buildAgentDecisionRows() []agentDetailRow {
 		}
 	}
 
-	var rows []agentDetailRow
 	rows = append(rows, agentDetailRow{kind: agentRowHeader})
 
 	for fi, df := range m.agentRunDecisions.Feeds {

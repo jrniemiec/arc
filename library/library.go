@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jrniemiec/arc/config"
@@ -213,6 +214,32 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 	})
 	result.Articles = indexed
 	return result, err
+}
+
+// IndexSlugs reads each article by ID from the filesystem and upserts it into
+// SQLite. Used after agent runs to index only the newly ingested articles
+// without a full Reindex walk of the entire library.
+func (l *Library) IndexSlugs(ctx context.Context, slugs []string) error {
+	for _, id := range slugs {
+		dir := filepath.Join(l.cfg.ArticlesRoot, id)
+		files := fs.ProbeFiles(dir)
+		meta, err := fs.ReadMeta(files.Meta)
+		if err != nil {
+			return fmt.Errorf("read meta %s: %w", id, err)
+		}
+		a := meta.ToArticle(id, files)
+		l.resolveFiles(&a)
+		summaryText := ""
+		if a.Files.Summary != "" {
+			if text, err := l.fs.ReadSummary(a); err == nil {
+				summaryText = text
+			}
+		}
+		if err := l.db.Upsert(ctx, a, summaryText); err != nil {
+			return fmt.Errorf("upsert %s: %w", id, err)
+		}
+	}
+	return nil
 }
 
 // MarkRead records that an article was read at time t.
