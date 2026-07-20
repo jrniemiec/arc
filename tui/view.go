@@ -454,7 +454,7 @@ func (m Model) renderNavPane(height int) []string {
 		case agentSubTabRuns:
 			lines = append(lines, m.renderNavAgentRuns(height-2)...)
 		case agentSubTabFeeds:
-			lines = append(lines, fg(t.NavDimmed, "  (no feeds)"))
+			lines = append(lines, m.renderNavAgentFeeds(height-2)...)
 		}
 	default:
 		// Other tabs keep a single label header.
@@ -1689,6 +1689,129 @@ func (m Model) renderNavAgentRuns(maxLines int) []string {
 	return lines
 }
 
+// renderNavAgentFeeds renders the feeds list in the Agent nav pane.
+func (m Model) renderNavAgentFeeds(maxLines int) []string {
+	t := ActiveTheme
+	if !m.agentFeedsLoaded {
+		return []string{fg(t.NavDimmed, "  loading…")}
+	}
+	if m.agentFeedsErr != "" {
+		return []string{fg(t.StatusError, "  "+m.agentFeedsErr)}
+	}
+	if len(m.agentFeeds) == 0 {
+		return []string{
+			fg(t.NavDimmed, "  No feeds configured."),
+			fg(t.NavDimmed, "  Press a to add one."),
+		}
+	}
+
+	var lines []string
+	for i := m.agentFeedsScroll; i < len(m.agentFeeds) && len(lines) < maxLines; i++ {
+		feed := m.agentFeeds[i]
+		selected := i == m.agentFeedsCursor
+
+		name := feed.Name
+		if name == "" {
+			name = feed.URL
+		}
+		status := ""
+		if feed.Disabled {
+			status = fg(t.NavDimmed, "  disabled")
+		}
+		label := fmt.Sprintf("  %-24s%s", truncate(name, 24), status)
+
+		if selected {
+			lines = append(lines, m.navSelected(label))
+		} else {
+			lines = append(lines, fg(t.NavText, " "+label))
+		}
+	}
+	return lines
+}
+
+// renderContentAgentFeeds renders the detail card for the selected feed.
+func (m Model) renderContentAgentFeeds(height, width int) []string {
+	t := ActiveTheme
+	var lines []string
+
+	if !m.agentFeedsLoaded {
+		lines = append(lines, fg(t.ContentDimmed, "Loading…"))
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+	if len(m.agentFeeds) == 0 {
+		lines = append(lines, fgBold(t.ContentTitle, "Feeds"))
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  No feeds configured."))
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  Press a to add a feed."))
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+	if m.agentFeedsCursor < 0 || m.agentFeedsCursor >= len(m.agentFeeds) {
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+
+	f := m.agentFeeds[m.agentFeedsCursor]
+
+	name := f.Name
+	if name == "" {
+		name = f.URL
+	}
+	statusStr := "enabled"
+	if f.Disabled {
+		statusStr = "disabled"
+	}
+
+	lines = append(lines, fgBold(t.ContentTitle, name))
+	lines = append(lines, "")
+	lines = append(lines, fg(t.ContentDimmed, "URL")+"    "+fg(t.NavText, f.URL))
+	if f.Filter != "" {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "Filter"))
+		lines = append(lines, "  "+fg(t.NavText, truncate(f.Filter, width-4)))
+	}
+	if len(f.Tags) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "Tags")+"    "+fg(t.NavText, strings.Join(f.Tags, ", ")))
+	}
+	lines = append(lines, "")
+	lines = append(lines, fg(t.ContentDimmed, "Status")+"  "+fg(t.NavText, statusStr))
+
+	if s, ok := m.agentFeedsStats[f.URL]; ok && s.runs > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "Stats"))
+		ingestRate := 0
+		if s.ingested+s.maybe+s.skip > 0 {
+			ingestRate = s.ingested * 100 / (s.ingested + s.maybe + s.skip)
+		}
+		statsLine := fmt.Sprintf("  runs: %d   ingested: %d   maybe: %d   skip: %d   rate: %d%%",
+			s.runs, s.ingested, s.maybe, s.skip, ingestRate)
+		if s.costUSD > 0 {
+			statsLine += fmt.Sprintf("   $%.2f", s.costUSD)
+		}
+		lines = append(lines, fg(t.NavText, statsLine))
+		if !s.lastRun.IsZero() {
+			lines = append(lines, fg(t.ContentDimmed, "  last run: ")+fg(t.NavText, s.lastRun.Local().Format("2006-01-02 15:04")))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, fg(t.ContentDimmed, "  e=edit  a=add  d=toggle  D=delete"))
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lines[:height]
+}
+
 // renderContentAgent renders the Agent tab content pane.
 func (m Model) renderContentAgent(height, width int) []string {
 	t := ActiveTheme
@@ -1710,11 +1833,7 @@ func (m Model) renderContentAgent(height, width int) []string {
 			return m.renderAgentRunContent(height, width)
 		}
 	case agentSubTabFeeds:
-		lines = append(lines, fgBold(t.ContentTitle, "Feeds"))
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "  No feeds configured."))
-		lines = append(lines, "")
-		lines = append(lines, fg(t.ContentDimmed, "  Use /agent feed add <url> to add a feed."))
+		return m.renderContentAgentFeeds(height, width)
 	}
 
 	for len(lines) < height {

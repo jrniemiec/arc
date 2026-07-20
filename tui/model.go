@@ -345,6 +345,14 @@ type Model struct {
 	agentRunsLoaded bool
 	agentRunsErr    string
 
+	// Agent nav — Feeds sub-tab
+	agentFeeds       []agentpkg.FeedConfig
+	agentFeedsCursor int
+	agentFeedsScroll int
+	agentFeedsLoaded bool
+	agentFeedsErr    string
+	agentFeedsStats  map[string]feedRunStats // keyed by feed URL
+
 	// Agent content — run detail
 	agentRunDecisions   agentpkg.DecisionsFile // decisions for selected run (may be empty)
 	agentRunDecisionsID string                 // decisions FILE ID loaded (= SourceRunID for decisions runs)
@@ -612,6 +620,14 @@ var workspaceCommands = []cmdCompletion{
 	{"/remove", "[--article slug] [--collection slug] [--all-articles] [--all-collections] [--dry-run]", "remove articles/collections from workspace"},
 }
 
+// feedCommands are available when the Agent Feeds sub-tab is active.
+var feedCommands = []cmdCompletion{
+	{"/feed-add", "", "add a new feed (opens $EDITOR with template)"},
+	{"/feed-edit", "", "edit selected feed in $EDITOR"},
+	{"/feed-toggle", "", "toggle selected feed enabled/disabled"},
+	{"/feed-delete", "", "delete selected feed (with confirmation)"},
+}
+
 // chatCommands are available when workspace chat mode is active.
 var chatCommands = []cmdCompletion{
 	{"/clear", "", "clear conversation history"},
@@ -654,6 +670,12 @@ func (m *Model) allCommands() []cmdCompletion {
 		return chatCommands
 	}
 	if m.activeTab != tabLibrary {
+		if m.activeTab == tabAgent && m.agentSubTab == agentSubTabFeeds {
+			out := make([]cmdCompletion, 0, len(feedCommands)+len(globalCommands))
+			out = append(out, feedCommands...)
+			out = append(out, globalCommands...)
+			return out
+		}
 		return globalCommands
 	}
 	var ctx []cmdCompletion
@@ -669,6 +691,16 @@ func (m *Model) allCommands() []cmdCompletion {
 	out = append(out, ctx...)
 	out = append(out, globalCommands...)
 	return out
+}
+
+// feedRunStats holds aggregated per-feed statistics from all agent runs.
+type feedRunStats struct {
+	runs     int
+	ingested int
+	maybe    int
+	skip     int
+	costUSD  float64
+	lastRun  time.Time
 }
 
 // ── Bubbletea message types ───────────────────────────────────────────────────
@@ -734,6 +766,19 @@ type agentRunDoneMsg struct {
 	err      string
 	isRerun  bool   // true = decisions run; reload current decisions file
 	newRunID string // for fresh runs: auto-select this run after reload
+}
+
+// agentFeedsLoadedMsg carries the feeds list loaded from agent config, plus run stats.
+type agentFeedsLoadedMsg struct {
+	feeds []agentpkg.FeedConfig
+	stats map[string]feedRunStats // keyed by feed URL
+	err   string
+}
+
+// agentFeedSavedMsg signals that a feed mutation (add/update/delete/toggle) completed.
+type agentFeedSavedMsg struct {
+	feeds []agentpkg.FeedConfig // updated feeds list (nil on error)
+	err   string
 }
 
 type collectionArticlesLoadedMsg struct {
@@ -1034,6 +1079,61 @@ func loadAgentRuns(agentPath string) tea.Cmd {
 			return agentRunsLoadedMsg{err: err.Error()}
 		}
 		return agentRunsLoadedMsg{runs: recs}
+	}
+}
+
+func loadAgentFeeds(agentPath string) tea.Cmd {
+	return func() tea.Msg {
+		cfg, err := agentpkg.LoadAgentConfig(filepath.Join(agentPath, "config.json"))
+		if err != nil {
+			return agentFeedsLoadedMsg{err: err.Error()}
+		}
+		// Aggregate per-feed stats from all runs.
+		stats := make(map[string]feedRunStats)
+		runs, _ := agentpkg.LoadRuns(filepath.Join(agentPath, "runs.jsonl"))
+		for _, r := range runs {
+			for _, f := range r.Feeds {
+				s := stats[f.URL]
+				s.runs++
+				s.ingested += f.Ingest
+				s.maybe += f.Maybe
+				s.skip += f.Skip
+				s.costUSD += f.CostUSD
+				if r.StartedAt.After(s.lastRun) {
+					s.lastRun = r.StartedAt
+				}
+				stats[f.URL] = s
+			}
+		}
+		return agentFeedsLoadedMsg{feeds: cfg.Feeds, stats: stats}
+	}
+}
+
+func toggleAgentFeed(agentPath string, idx int) tea.Cmd {
+	return func() tea.Msg {
+		cfgPath := filepath.Join(agentPath, "config.json")
+		if err := agentpkg.ToggleFeed(cfgPath, idx); err != nil {
+			return agentFeedSavedMsg{err: err.Error()}
+		}
+		cfg, err := agentpkg.LoadAgentConfig(cfgPath)
+		if err != nil {
+			return agentFeedSavedMsg{err: err.Error()}
+		}
+		return agentFeedSavedMsg{feeds: cfg.Feeds}
+	}
+}
+
+func deleteAgentFeed(agentPath string, idx int) tea.Cmd {
+	return func() tea.Msg {
+		cfgPath := filepath.Join(agentPath, "config.json")
+		if err := agentpkg.DeleteFeed(cfgPath, idx); err != nil {
+			return agentFeedSavedMsg{err: err.Error()}
+		}
+		cfg, err := agentpkg.LoadAgentConfig(cfgPath)
+		if err != nil {
+			return agentFeedSavedMsg{err: err.Error()}
+		}
+		return agentFeedSavedMsg{feeds: cfg.Feeds}
 	}
 }
 
@@ -1621,6 +1721,7 @@ func (m Model) Init() tea.Cmd {
 		}
 	}
 	cmds = append(cmds, loadAgentRuns(m.cfg.AgentPath))
+	cmds = append(cmds, loadAgentFeeds(m.cfg.AgentPath))
 	return tea.Batch(cmds...)
 }
 

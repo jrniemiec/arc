@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -373,6 +374,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Auto-load decisions for the selected run.
 		cmds = append(cmds, m.triggerAgentRunDetail())
+
+	case agentFeedsLoadedMsg:
+		m.agentFeedsLoaded = true
+		if msg.err != "" {
+			m.agentFeedsErr = msg.err
+		} else {
+			m.agentFeeds = msg.feeds
+			m.agentFeedsStats = msg.stats
+			m.agentFeedsErr = ""
+			if m.agentFeedsCursor >= len(m.agentFeeds) {
+				m.agentFeedsCursor = max(0, len(m.agentFeeds)-1)
+			}
+		}
+
+	case agentFeedSavedMsg:
+		if msg.err != "" {
+			m.setStatusError("feed: " + msg.err)
+		} else {
+			m.agentFeeds = msg.feeds
+			if m.agentFeedsCursor >= len(m.agentFeeds) {
+				m.agentFeedsCursor = max(0, len(m.agentFeeds)-1)
+			}
+			m.statusMsg = "feed saved"
+		}
 
 	case statsLoadedMsg:
 		if msg.err == "" {
@@ -802,6 +827,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.syncInputHeight()
 		// In chat mode, Esc always returns focus to command input — never exits chat.
 		// Use /exit or q to leave chat.
+		// In chat mode, Esc always returns focus to command input — never exits chat.
+		// Use /exit or q to leave chat.
 		m.focus = paneCommand
 		m.cursorVisible = true
 		return nil
@@ -976,6 +1003,36 @@ func (m *Model) handleNavSubTabKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
+	// Feed-specific operations in the Agent Feeds sub-tab.
+	if m.activeTab == tabAgent && m.agentSubTab == agentSubTabFeeds && msg.Type == tea.KeyRunes {
+		switch msg.String() {
+		case "a":
+			m.openEditorForFeed(-1)
+			return nil
+		case "e":
+			if len(m.agentFeeds) > 0 {
+				m.openEditorForFeed(m.agentFeedsCursor)
+			}
+			return nil
+		case "d":
+			if len(m.agentFeeds) > 0 {
+				return toggleAgentFeed(m.cfg.AgentPath, m.agentFeedsCursor)
+			}
+			return nil
+		case "D":
+			if len(m.agentFeeds) > 0 {
+				name := m.agentFeeds[m.agentFeedsCursor].Name
+				if name == "" {
+					name = m.agentFeeds[m.agentFeedsCursor].URL
+				}
+				idx := m.agentFeedsCursor
+				m.askConfirm(fmt.Sprintf("delete %q? yes/no", name), func() tea.Cmd {
+					return deleteAgentFeed(m.cfg.AgentPath, idx)
+				})
+			}
+			return nil
+		}
+	}
 	switch {
 	case key.Matches(msg, keys.ContentTabPrev):
 		return m.navLeft()
@@ -1204,7 +1261,12 @@ func (m *Model) navRight() tea.Cmd {
 // so pressing UP should transfer focus to the tab bar instead.
 func (m *Model) navAtTop() bool {
 	if m.activeTab == tabAgent {
-		return m.agentRunsCursor == 0
+		switch m.agentSubTab {
+		case agentSubTabFeeds:
+			return m.agentFeedsCursor == 0
+		default:
+			return m.agentRunsCursor == 0
+		}
 	}
 	switch m.navSubTab {
 	case navSubTabArticles:
@@ -1303,6 +1365,11 @@ func (m *Model) agentNavCursorUp() tea.Cmd {
 			m.clampAgentRunsScroll()
 			return m.triggerAgentRunDetail()
 		}
+	case agentSubTabFeeds:
+		if m.agentFeedsCursor > 0 {
+			m.agentFeedsCursor--
+			m.clampAgentFeedsScroll()
+		}
 	}
 	return nil
 }
@@ -1315,6 +1382,11 @@ func (m *Model) agentNavCursorDown() tea.Cmd {
 			m.agentRunsCursor++
 			m.clampAgentRunsScroll()
 			return m.triggerAgentRunDetail()
+		}
+	case agentSubTabFeeds:
+		if m.agentFeedsCursor < len(m.agentFeeds)-1 {
+			m.agentFeedsCursor++
+			m.clampAgentFeedsScroll()
 		}
 	}
 	return nil
@@ -1530,6 +1602,19 @@ func (m *Model) clampAgentRunsScroll() {
 	}
 	if m.agentRunsCursor >= m.agentRunsScroll+h {
 		m.agentRunsScroll = m.agentRunsCursor - h + 1
+	}
+}
+
+func (m *Model) clampAgentFeedsScroll() {
+	h := m.navPaneHeight() - 2 // subtract sub-tab bar + blank line
+	if h < 1 {
+		h = 1
+	}
+	if m.agentFeedsCursor < m.agentFeedsScroll {
+		m.agentFeedsScroll = m.agentFeedsCursor
+	}
+	if m.agentFeedsCursor >= m.agentFeedsScroll+h {
+		m.agentFeedsScroll = m.agentFeedsCursor - h + 1
 	}
 }
 
@@ -2182,6 +2267,96 @@ func (m *Model) viewWsFileInTerminal() tea.Cmd {
 	cmd := exec.Command("osascript", "-e", appleScript)
 	cmd.Start()
 	return nil
+}
+
+// openEditorForFeed opens $EDITOR for adding (idx < 0) or editing (idx >= 0) a feed.
+// Writes a temp JSON file, waits for the editor to close in a background goroutine,
+// then parses the result and saves the config. Sends agentFeedSavedMsg when done.
+func (m *Model) openEditorForFeed(idx int) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		m.setStatusError("$EDITOR is not set")
+		return
+	}
+
+	var data []byte
+	var err error
+	if idx >= 0 && idx < len(m.agentFeeds) {
+		data, err = json.MarshalIndent(m.agentFeeds[idx], "", "  ")
+	} else {
+		// New feed: write a full template so the user knows all fields.
+		data = []byte("{\n  \"name\": \"\",\n  \"url\": \"\",\n  \"filter\": \"\",\n  \"tags\": [],\n  \"disabled\": false\n}\n")
+	}
+	if err != nil {
+		m.setStatusError("openEditorForFeed: marshal: " + err.Error())
+		return
+	}
+
+	tmp, err := os.CreateTemp("", "arc-feed-*.json")
+	if err != nil {
+		m.setStatusError("openEditorForFeed: " + err.Error())
+		return
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		m.setStatusError("openEditorForFeed: " + err.Error())
+		return
+	}
+	tmp.Close()
+
+	cmd := exec.Command(editor, tmp.Name())
+	if err := cmd.Start(); err != nil {
+		os.Remove(tmp.Name())
+		m.setStatusError("openEditorForFeed: " + err.Error())
+		return
+	}
+
+	cfgPath := filepath.Join(m.cfg.AgentPath, "config.json")
+	send := *m.programSend
+	go func() {
+		defer os.Remove(tmp.Name())
+		cmd.Wait()
+
+		raw, err := os.ReadFile(tmp.Name())
+		if err != nil {
+			send(agentFeedSavedMsg{err: "read temp: " + err.Error()})
+			return
+		}
+		var updated agentpkg.FeedConfig
+		if err := json.Unmarshal(raw, &updated); err != nil {
+			send(agentFeedSavedMsg{err: "parse: " + err.Error()})
+			return
+		}
+		if updated.URL == "" {
+			send(agentFeedSavedMsg{err: "URL is required"})
+			return
+		}
+		if idx < 0 {
+			err = agentpkg.AddFeed(cfgPath, updated)
+		} else {
+			err = agentpkg.UpdateFeed(cfgPath, idx, updated)
+		}
+		if err != nil {
+			send(agentFeedSavedMsg{err: err.Error()})
+			return
+		}
+		cfg, err := agentpkg.LoadAgentConfig(cfgPath)
+		if err != nil {
+			send(agentFeedSavedMsg{err: err.Error()})
+			return
+		}
+		send(agentFeedSavedMsg{feeds: cfg.Feeds})
+	}()
+
+	label := "new feed"
+	if idx >= 0 && idx < len(m.agentFeeds) {
+		label = m.agentFeeds[idx].Name
+		if label == "" {
+			label = m.agentFeeds[idx].URL
+		}
+	}
+	m.setStatusLines([]string{fmt.Sprintf("opened %q in external editor — save to update config", label)})
 }
 
 // openEditorInTerminal opens $EDITOR as a detached process with a background
@@ -3324,6 +3499,36 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdAgentRun(arg)
 	case "/agent-rerun":
 		return m.cmdAgentRerun(arg)
+	case "/feed-add":
+		m.openEditorForFeed(-1)
+		return nil
+	case "/feed-edit":
+		if len(m.agentFeeds) > 0 {
+			m.openEditorForFeed(m.agentFeedsCursor)
+		} else {
+			m.setStatusError("no feed selected")
+		}
+		return nil
+	case "/feed-toggle":
+		if len(m.agentFeeds) > 0 {
+			return toggleAgentFeed(m.cfg.AgentPath, m.agentFeedsCursor)
+		}
+		m.setStatusError("no feed selected")
+		return nil
+	case "/feed-delete":
+		if len(m.agentFeeds) > 0 {
+			name := m.agentFeeds[m.agentFeedsCursor].Name
+			if name == "" {
+				name = m.agentFeeds[m.agentFeedsCursor].URL
+			}
+			idx := m.agentFeedsCursor
+			m.askConfirm(fmt.Sprintf("delete %q? yes/no", name), func() tea.Cmd {
+				return deleteAgentFeed(m.cfg.AgentPath, idx)
+			})
+		} else {
+			m.setStatusError("no feed selected")
+		}
+		return nil
 	}
 
 	// ── Context-sensitive commands ──────────────────────────────────────────
@@ -5753,6 +5958,10 @@ var helpGroups = []struct {
 	{"agent", []cmdCompletion{
 		{"/agent-run", "[--dry-run] [--focus \"...\"]", "fresh feed scan — poll all feeds, filter, ingest"},
 		{"/agent-rerun", "[--dry-run]", "process decisions for the selected run (mark items with a/s first)"},
+		{"/feed-add", "", "add a new feed (opens $EDITOR with template)"},
+		{"/feed-edit", "", "edit selected feed in $EDITOR"},
+		{"/feed-toggle", "", "toggle selected feed enabled/disabled"},
+		{"/feed-delete", "", "delete selected feed (with confirmation)"},
 	}},
 	{"system", []cmdCompletion{
 		{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},

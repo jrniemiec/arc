@@ -107,6 +107,55 @@ func LoadAgentConfig(path string) (AgentConfig, error) {
 	return cfg, nil
 }
 
+// AddFeed appends f to the feeds list in the config at path and saves.
+func AddFeed(path string, f FeedConfig) error {
+	cfg, err := LoadAgentConfig(path)
+	if err != nil {
+		return err
+	}
+	cfg.Feeds = append(cfg.Feeds, f)
+	return SaveAgentConfig(path, cfg)
+}
+
+// UpdateFeed replaces the feed at idx in the config at path and saves.
+func UpdateFeed(path string, idx int, f FeedConfig) error {
+	cfg, err := LoadAgentConfig(path)
+	if err != nil {
+		return err
+	}
+	if idx < 0 || idx >= len(cfg.Feeds) {
+		return fmt.Errorf("feed index %d out of range", idx)
+	}
+	cfg.Feeds[idx] = f
+	return SaveAgentConfig(path, cfg)
+}
+
+// DeleteFeed removes the feed at idx from the config at path and saves.
+func DeleteFeed(path string, idx int) error {
+	cfg, err := LoadAgentConfig(path)
+	if err != nil {
+		return err
+	}
+	if idx < 0 || idx >= len(cfg.Feeds) {
+		return fmt.Errorf("feed index %d out of range", idx)
+	}
+	cfg.Feeds = append(cfg.Feeds[:idx], cfg.Feeds[idx+1:]...)
+	return SaveAgentConfig(path, cfg)
+}
+
+// ToggleFeed flips the Disabled field of the feed at idx in the config at path and saves.
+func ToggleFeed(path string, idx int) error {
+	cfg, err := LoadAgentConfig(path)
+	if err != nil {
+		return err
+	}
+	if idx < 0 || idx >= len(cfg.Feeds) {
+		return fmt.Errorf("feed index %d out of range", idx)
+	}
+	cfg.Feeds[idx].Disabled = !cfg.Feeds[idx].Disabled
+	return SaveAgentConfig(path, cfg)
+}
+
 // SaveAgentConfig writes cfg to path as indented JSON.
 func SaveAgentConfig(path string, cfg AgentConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
