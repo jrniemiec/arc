@@ -4891,16 +4891,6 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 	send := *m.programSend
 	m.ingestRunning = true
 	m.ingestLabel = "fetching…"
-	// Estimate cost from agent run history (avg cost per ingested article).
-	var totalCost float64
-	var totalIngested int
-	for _, r := range m.agentRuns {
-		totalCost += r.TotalCostUSD
-		totalIngested += r.TotalIngest
-	}
-	if totalIngested > 0 {
-		m.ingestLabel = fmt.Sprintf("fetching…  (est. ~$%.3f)", totalCost/float64(totalIngested))
-	}
 	m.statusMsg = ""
 	return func() tea.Msg {
 		start := time.Now()
@@ -4982,26 +4972,6 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 	slog.Debug("/agent-run confirm ready",
 		"active_feeds", activeFeeds, "filter", filterProfile,
 		"ingest", summaryProfile, "focus", focusStr, "dry_run", dryRun)
-	// Estimate cost from recent daily runs (last 5).
-	costStr := "unknown (no prior runs)"
-	var costSamples []float64
-	for _, r := range m.agentRuns {
-		if r.RunType == "" || r.RunType == "daily" {
-			costSamples = append(costSamples, r.TotalCostUSD)
-			if len(costSamples) >= 5 {
-				break
-			}
-		}
-	}
-	if len(costSamples) > 0 {
-		var total float64
-		for _, c := range costSamples {
-			total += c
-		}
-		avg := total / float64(len(costSamples))
-		costStr = fmt.Sprintf("~$%.3f  (avg of last %d runs)", avg, len(costSamples))
-	}
-
 	m.agentConfirmLines = []string{
 		"  Agent run — poll all feeds",
 		"",
@@ -5010,7 +4980,6 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 		fmt.Sprintf("  %-12s %s", "Ingest", summaryProfile),
 		fmt.Sprintf("  %-12s %s", "Focus", focusStr),
 		fmt.Sprintf("  %-12s %s", "Dry-run", dryStr),
-		fmt.Sprintf("  %-12s %s", "Est. cost", costStr),
 		"",
 		"  yes to confirm   Esc to cancel",
 	}
