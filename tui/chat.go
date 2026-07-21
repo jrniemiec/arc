@@ -77,6 +77,7 @@ func (m *Model) sendChatMsg(prompt string) tea.Cmd {
 	m.chatStreaming = true
 	m.chatStreamBuf = ""
 	m.chatActivityLine = ""
+	m.chatStreamingUserPrompt = prompt
 	shared := &streamBuf{}
 	m.chatSharedBuf = shared
 
@@ -366,6 +367,11 @@ func (m *Model) rebuildChatLines(width int) {
 		default:
 			// Unknown roles (e.g. tool-result) — skip silently.
 		}
+	}
+
+	// In-flight user prompt: show immediately while engine hasn't persisted it yet.
+	if m.chatStreamingUserPrompt != "" {
+		appendUser(m.chatStreamingUserPrompt)
 	}
 
 	// Streaming buffer: render in-progress markdown (may be partial).
@@ -1133,6 +1139,29 @@ func renderWaveIndicator(frame int, label string, bright, dim lipgloss.Color) st
 		col := lerpColor(dim, bright, t)
 		sb.WriteString(fg(col, string(r)))
 	}
+	return sb.String()
+}
+
+// renderWaveIndicatorLeading renders ●●●●● with a chasing bright dot followed
+// by a static label. One bright bullet cycles left-to-right every 500ms so
+// motion is immediately obvious regardless of terminal color depth.
+func renderWaveIndicatorLeading(frame int, label string, bright, dim lipgloss.Color) string {
+	const nBullets = 5
+	peak := frame % nBullets
+	var sb strings.Builder
+	for i := 0; i < nBullets; i++ {
+		dist := i - peak
+		if dist < 0 {
+			dist = -dist
+		}
+		t := 1.0 - float64(dist)/float64(nBullets)
+		if t < 0 {
+			t = 0
+		}
+		col := lerpColor(dim, bright, t)
+		sb.WriteString(fg(col, "●"))
+	}
+	sb.WriteString(fg(bright, " "+label))
 	return sb.String()
 }
 

@@ -490,8 +490,9 @@ type Model struct {
 	chatRawMsgs        []chat.Message        // history msgs for display before engine is ready
 	chatArticleCount   int                   // total articles in workspace (populated by loadChatHistoryCmd)
 	chatGroundingMode  string                // effective grounding mode ("corpus-only"/"corpus-first"/"open")
-	chatActivityLine   string                // tool activity indicator (e.g. "→ reading: wal-internals")
-	chatBoxCursor      int                   // selected box index in boxed view (focus==paneContent)
+	chatActivityLine          string                // tool activity indicator (e.g. "→ reading: wal-internals")
+	chatStreamingUserPrompt   string                // user prompt in flight — shown before engine persists it to history
+	chatBoxCursor             int                   // selected box index in boxed view (focus==paneContent)
 	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
 
@@ -852,6 +853,7 @@ type askxStreamDoneMsg struct {
 	fullText string // complete response text
 	err      string
 	costUSD  float64
+	elapsed  time.Duration
 }
 
 // correctionDoneMsg is returned by doCorrection when the LLM call completes.

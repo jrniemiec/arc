@@ -738,6 +738,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatStreamBuf = ""
 		m.chatSharedBuf = nil
 		m.chatActivityLine = ""
+		m.chatStreamingUserPrompt = ""
 		if m.chatCancelStream != nil {
 			m.chatCancelStream = nil
 		}
@@ -749,12 +750,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatLastElapsed = msg.elapsed
 		}
 		m.rebuildChatLines(m.chatBuildWidth())
-		// Collapse the newly completed exchange.
+		// Leave collapse state untouched — the new response is not in chatCollapsed
+		// so it renders fully expanded. Previous boxes stay as they were.
 		if n := m.chatBoxCount(); n > 0 {
-			if m.chatCollapsed == nil {
-				m.chatCollapsed = make(map[int]bool)
-			}
-			m.chatCollapsed[n-1] = true
 			if m.chatAutoScroll {
 				m.chatBoxCursor = n - 1
 			}
@@ -6167,8 +6165,8 @@ var helpGroups = []struct {
 	{"system", []cmdCompletion{
 		{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
 		{"/Scratch", "[msg]", "global scratch (append / toggle)"},
-		{"/askX", "<prompt>", "workspace-local LLM query"},
-		{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
+		{"/askX", "[--profile <name>] <prompt>", "workspace-local LLM query"},
+		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
 		{"/config", "", "show resolved configuration"},
 		{"/config-edit", "", "open config file in $EDITOR"},
 		{"/tags", "", "list all tags"},
