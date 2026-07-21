@@ -7550,6 +7550,7 @@ func doCorrection(text string, cfg config.Config) tea.Cmd {
 			Model:    prof.Model,
 			Host:     prof.Host,
 			APIKey:   apiKey,
+			Think:    prof.Think,
 		})
 		if err != nil {
 			return correctionDoneMsg{err: fmt.Errorf("correction: %w", err)}

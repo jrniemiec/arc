@@ -81,6 +81,7 @@ func WorkspacePopulate(
 		Model:    prof.Model,
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
+		Think:    prof.Think,
 	})
 	if err != nil {
 		return PopulateResult{}, fmt.Errorf("llm provider: %w", err)

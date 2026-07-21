@@ -69,6 +69,7 @@ func Summarize(ctx context.Context, cfg config.Config, req SummarizeRequest) (Su
 		Model:    prof.Model,
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
+		Think:    prof.Think,
 	})
 	if err != nil {
 		return SummarizeResult{}, fmt.Errorf("llm provider: %w", err)
@@ -116,6 +117,7 @@ func Flash(ctx context.Context, cfg config.Config, req FlashRequest) (FlashResul
 		Model:    prof.Model,
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
+		Think:    prof.Think,
 	})
 	if err != nil {
 		return FlashResult{}, fmt.Errorf("llm provider: %w", err)
@@ -167,6 +169,7 @@ func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (
 		Model:    prof.Model,
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
+		Think:    prof.Think,
 	})
 	if err != nil {
 		return FlashcardsResult{}, fmt.Errorf("llm provider: %w", err)
@@ -1074,6 +1077,7 @@ func CollectionSuggest(ctx context.Context, cfg config.Config, req CollectionSug
 		Model:    prof.Model,
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
+		Think:    prof.Think,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("llm provider: %w", err)
@@ -1164,6 +1168,7 @@ func CollectionArticleSuggest(ctx context.Context, cfg config.Config, req Collec
 		Model:    prof.Model,
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
+		Think:    prof.Think,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("llm provider: %w", err)
@@ -1235,6 +1240,7 @@ func CollectionDescribe(ctx context.Context, cfg config.Config, req CollectionDe
 		Model:    prof.Model,
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
+		Think:    prof.Think,
 	})
 	if err != nil {
 		return "", fmt.Errorf("llm provider: %w", err)

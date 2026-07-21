@@ -120,7 +120,8 @@ type ChatConfig struct {
 type Profile struct {
 	Provider string `json:"provider"` // "anthropic" | "openai" | "ollama"
 	Model    string `json:"model"`
-	Host     string `json:"host,omitempty"` // Ollama only, default http://localhost:11434
+	Host     string `json:"host,omitempty"`  // Ollama only, default http://localhost:11434
+	Think    bool   `json:"think,omitempty"` // Ollama only: enable thinking/reasoning mode
 
 	Info ProfileInfo `json:"info"`
 }

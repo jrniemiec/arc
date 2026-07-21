@@ -399,6 +399,7 @@ func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 			Host:            prof.Host,
 			APIKey:          apiKey,
 			MaxOutputTokens: maxTokens,
+			Think:           prof.Think,
 		})
 		if err != nil {
 			return askxStreamDoneMsg{err: fmt.Sprintf("askX: %v", err)}
