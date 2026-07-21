@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/internal/jsonc"
 )
 
 // WorkspaceMeta is the on-disk representation of a workspace's meta.json.
@@ -983,7 +984,7 @@ func ReadChatConfig(dataRoot, name string) (config.ChatConfig, error) {
 	// Preferred: config.jsonc — already migrated, return directly.
 	if data, err := os.ReadFile(filepath.Join(chatDir, "config.jsonc")); err == nil {
 		var cfg config.ChatConfig
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		if err := jsonc.Unmarshal(data, &cfg); err != nil {
 			return config.ChatConfig{}, fmt.Errorf("parse chat config: %w", err)
 		}
 		return cfg, nil
