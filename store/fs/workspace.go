@@ -44,7 +44,7 @@ func WorkspaceDir(dataRoot, name string) string {
 }
 
 // CreateWorkspace creates a new workspace directory with all subdirectories,
-// writes meta.json, and writes chat/chat.json from chatCfg.
+// writes meta.json, and writes chat/config.json from chatCfg.
 // Returns an error if the workspace already exists.
 func CreateWorkspace(dataRoot, name, description string, chatCfg config.ChatConfig) error {
 	dir := WorkspaceDir(dataRoot, name)
@@ -972,24 +972,29 @@ func WriteWorkspaceResource(dataRoot, name, filename string, data []byte) error 
 
 // ── Chat config ───────────────────────────────────────────────────────────────
 
-// ReadChatConfig reads chat/chat.json from a workspace. Returns zero value if missing.
+// ReadChatConfig reads chat/config.json from a workspace.
+// Falls back to the legacy chat/chat.json if config.json does not exist.
+// Returns zero value if neither file exists.
 func ReadChatConfig(dataRoot, name string) (config.ChatConfig, error) {
-	path := filepath.Join(WorkspaceDir(dataRoot, name), "chat", "chat.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return config.ChatConfig{}, nil
+	chatDir := filepath.Join(WorkspaceDir(dataRoot, name), "chat")
+	for _, filename := range []string{"config.json", "chat.json"} {
+		data, err := os.ReadFile(filepath.Join(chatDir, filename))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return config.ChatConfig{}, fmt.Errorf("read chat config: %w", err)
 		}
-		return config.ChatConfig{}, fmt.Errorf("read chat config: %w", err)
+		var cfg config.ChatConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return config.ChatConfig{}, fmt.Errorf("parse chat config: %w", err)
+		}
+		return cfg, nil
 	}
-	var cfg config.ChatConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return config.ChatConfig{}, fmt.Errorf("parse chat config: %w", err)
-	}
-	return cfg, nil
+	return config.ChatConfig{}, nil
 }
 
-// WriteChatConfig writes chat/chat.json to a workspace.
+// WriteChatConfig writes chat/config.json to a workspace.
 func WriteChatConfig(dataRoot, name string, cfg config.ChatConfig) error {
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "chat")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -999,7 +1004,7 @@ func WriteChatConfig(dataRoot, name string, cfg config.ChatConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshal chat config: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, "chat.json"), data, 0644)
+	return os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
