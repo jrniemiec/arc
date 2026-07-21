@@ -1574,7 +1574,8 @@ func (m Model) mainAreaHeight() int {
 
 // chatViewHeight returns the number of visible lines in the chat content area.
 // Accounts for the split pane (askX/preview/scratch) taking 1/3 of the height
-// when open. The chat header (workspace title + separator) occupies 2 lines.
+// when open. Matches the header line count that renderChatPane actually emits
+// (title + optional description lines + separator).
 func (m Model) chatViewHeight() int {
 	mainH := m.mainAreaHeight()
 	contentH := mainH
@@ -1588,8 +1589,12 @@ func (m Model) chatViewHeight() int {
 			contentH = 3
 		}
 	}
-	const chatHeaderLines = 2 // workspace title + separator
-	h := contentH - chatHeaderLines
+	headerLines := 2 // workspace title + separator
+	ws := m.selectedWorkspace()
+	if ws != nil && ws.description != "" {
+		headerLines += len(wordWrap(ws.description, m.chatBuildWidth()-2))
+	}
+	h := contentH - headerLines
 	if h < 1 {
 		h = 1
 	}

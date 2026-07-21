@@ -1561,6 +1561,9 @@ func (m *Model) chatAutoScrollToBottom(viewH int) {
 		total = len(vlines)
 	}
 	maxScroll := total - viewH
+	if m.chatStreaming {
+		maxScroll-- // one line of breathing room between streamed text and pane bottom
+	}
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
