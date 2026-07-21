@@ -3859,7 +3859,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	case "/ingest":
 		if arg == "" {
-			m.statusMsg = "usage: /ingest <url>"
+			m.statusMsg = "usage: /ingest <url> [--profile <name>] [--style <name>]"
 			return nil
 		}
 		return m.cmdIngest(arg)
@@ -4905,9 +4905,15 @@ func (m *Model) cmdReprocess() tea.Cmd {
 }
 
 // cmdIngest ingests a new article from a URL.
-func (m *Model) cmdIngest(url string) tea.Cmd {
+// arg is "<url> [--profile <name>] [--style <name>]".
+func (m *Model) cmdIngest(arg string) tea.Cmd {
 	if m.svc == nil {
 		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	url, profile, style := parseIngestFlags(arg)
+	if url == "" {
+		m.statusMsg = "usage: /ingest <url> [--profile <name>] [--style <name>]"
 		return nil
 	}
 	svc := m.svc
@@ -4920,7 +4926,11 @@ func (m *Model) cmdIngest(url string) tea.Cmd {
 	return func() tea.Msg {
 		start := time.Now()
 		req := service.IngestRequest{
-			URL: url,
+			URL:             url,
+			SummaryProfile:  profile,
+			FlashProfile:    profile,
+			FlashcardProfile: profile,
+			SummaryStyle:    style,
 			Progress: func(step string) {
 				send(statusUpdateMsg{text: step})
 			},
@@ -5157,6 +5167,31 @@ func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
 	m.focus = paneCommand
 	m.input.SetValue("")
 	return nil
+}
+
+// parseIngestFlags parses "<url> [--profile <name>] [--style <name>]".
+// The URL is the first non-flag token. Flags may appear before or after the URL.
+func parseIngestFlags(arg string) (url, profile, style string) {
+	parts := strings.Fields(arg)
+	for i := 0; i < len(parts); i++ {
+		switch parts[i] {
+		case "--profile":
+			if i+1 < len(parts) {
+				i++
+				profile = parts[i]
+			}
+		case "--style":
+			if i+1 < len(parts) {
+				i++
+				style = parts[i]
+			}
+		default:
+			if url == "" {
+				url = parts[i]
+			}
+		}
+	}
+	return
 }
 
 // parseAgentRunFlags parses --dry-run and --focus "..." from a command arg string.
@@ -6063,7 +6098,7 @@ var helpGroups = []struct {
 		{"/favorite", "", "toggle favorite"},
 		{"/delete", "", "delete current article"},
 		{"/reprocess", "", "regenerate summary/flash"},
-		{"/ingest", "<url>", "add a new article — use /article ingest from any tab"},
+		{"/ingest", "<url> [--profile <name>] [--style <name>]", "add a new article — use /article ingest from any tab"},
 	}},
 	{"collection", []cmdCompletion{
 		{"/search", "<query>", "filter collections by name/slug"},

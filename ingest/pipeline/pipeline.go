@@ -5,6 +5,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -383,7 +384,23 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	// ── Cost estimate (fires before any LLM call) ─────────────────────────
 	if !isTeaser && req.OnCostEstimate != nil {
 		flashcardsEnabled := (cfg.Ingest.Flashcards || req.Flashcards) && !req.NoFlashcards
-		nChunks, usd := estimateIngestCost(extracted.Text, cfg, flashcardsEnabled)
+		// Apply per-request overrides so the estimate reflects the actual profiles used.
+		estCfg := cfg
+		if req.SummaryModel != "" {
+			estCfg.Ingest.SummaryProfile = req.SummaryModel
+			estCfg.Ingest.FlashProfile = req.SummaryModel
+			estCfg.Ingest.FlashcardProfile = req.SummaryModel
+		}
+		if req.FlashModel != "" {
+			estCfg.Ingest.FlashProfile = req.FlashModel
+		}
+		if req.FlashcardModel != "" {
+			estCfg.Ingest.FlashcardProfile = req.FlashcardModel
+		}
+		if req.SummaryStyle != "" {
+			estCfg.Ingest.SummaryStyle = req.SummaryStyle
+		}
+		nChunks, usd := estimateIngestCost(extracted.Text, estCfg, flashcardsEnabled)
 		if nChunks > 0 {
 			req.OnCostEstimate(nChunks, usd)
 		}
@@ -752,19 +769,46 @@ func chat(ctx context.Context, p llm.Provider, system, prompt string) (string, l
 
 // briefAdapter bridges github.com/jrniemiec/llm.Provider → brief/llm.Provider.
 // brief expects a simpler single-turn interface; we wrap the multi-turn one.
-// onCall, if set, is invoked before each LLM call (used for per-chunk progress).
+// onCall, if set, is invoked before the first attempt of each LLM call.
+// onRetry, if set, is invoked on each failed attempt before retrying.
 type briefAdapter struct {
-	p      llm.Provider
-	model  string
-	onCall func()
+	p       llm.Provider
+	model   string
+	onCall  func()
+	onDone  func(elapsed time.Duration, u llm.Usage)
+	onRetry func(attempt int, err error)
 }
+
+const maxChunkRetries = 3
 
 func (a *briefAdapter) Name() string { return a.model }
 func (a *briefAdapter) Chat(ctx context.Context, system, prompt string) (string, briefllm.Usage, error) {
 	if a.onCall != nil {
 		a.onCall()
 	}
-	out, u, err := a.p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
+	start := time.Now()
+	var out string
+	var u llm.Usage
+	var err error
+	for attempt := 1; attempt <= maxChunkRetries; attempt++ {
+		out, u, err = a.p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
+		if err == nil {
+			break
+		}
+		// Don't retry if the caller canceled (user pressed Esc).
+		// context.DeadlineExceeded is the transport timeout — that IS worth retrying.
+		if errors.Is(err, context.Canceled) {
+			break
+		}
+		if attempt < maxChunkRetries {
+			if a.onRetry != nil {
+				a.onRetry(attempt, err)
+			}
+		}
+	}
+	if err == nil && a.onDone != nil {
+		a.onDone(time.Since(start), u)
+	}
 	return out, briefllm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}, err
 }
 
@@ -796,12 +840,24 @@ func summarizeText(ctx context.Context, p llm.Provider, text, title, source, sty
 		model: model,
 		onCall: func() {
 			call++
+		},
+		onDone: func(elapsed time.Duration, u llm.Usage) {
 			if call <= n {
-				// MAP phase
-				progress(fmt.Sprintf("chunk %d/%d (~%d tokens, style: %s, model: %s)", call, n, chunkTokenCounts[call-1], style, model))
+				progress(fmt.Sprintf("chunk %d/%d (~%d in, style: %s, model: %s) out=%d %.1fs", call, n, chunkTokenCounts[call-1], style, model, u.OutputTokens, elapsed.Seconds()))
 			} else {
-				// REDUCE phase
-				progress(fmt.Sprintf("reducing %d chunk summaries (style: %s)...", n, style))
+				progress(fmt.Sprintf("reducing %d chunk summaries (style: %s) out=%d %.1fs", n, style, u.OutputTokens, elapsed.Seconds()))
+			}
+		},
+		onRetry: func(attempt int, err error) {
+			// Truncate the error to its last ": <detail>" segment for readability.
+			errStr := err.Error()
+			if i := strings.LastIndex(errStr, ": "); i >= 0 {
+				errStr = errStr[i+2:]
+			}
+			if call <= n {
+				progress(fmt.Sprintf("chunk %d/%d retry %d/%d: %s", call, n, attempt, maxChunkRetries, errStr))
+			} else {
+				progress(fmt.Sprintf("reduce retry %d/%d: %s", attempt, maxChunkRetries, errStr))
 			}
 		},
 	}
