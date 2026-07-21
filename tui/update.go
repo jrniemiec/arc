@@ -3667,11 +3667,20 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		m.setStatusLines(m.cmdConfigLines())
 		m.focus = paneStatus
 		return nil
+	case "/config-view":
+		m.cmdConfigView()
+		return nil
+	case "/agent-config-view":
+		m.cmdAgentConfigView()
+		return nil
+	case "/config-chat-view":
+		m.cmdChatConfigView()
+		return nil
 	case "/config-edit":
 		return m.cmdConfigEdit()
 	case "/agent-config-edit":
 		return m.cmdAgentConfigEdit()
-	case "/chat-config-edit":
+	case "/config-chat-edit":
 		return m.cmdChatConfigEdit()
 	case "/stats":
 		return m.cmdStats()
@@ -4719,6 +4728,42 @@ func (m *Model) cmdConfigLines() []string {
 	return lines
 }
 
+// cmdViewConfigFile reads a config file and opens it in the resource overlay.
+func (m *Model) cmdViewConfigFile(path, label string) {
+	resolved := resolveConfigPath(path)
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			m.setStatusError("config file not found: " + resolved)
+		} else {
+			m.setStatusError("read config: " + err.Error())
+		}
+		return
+	}
+	m.openResourceOverlay(label, string(data))
+}
+
+// cmdConfigView opens the global config in the resource overlay.
+func (m *Model) cmdConfigView() {
+	home, _ := os.UserHomeDir()
+	m.cmdViewConfigFile(filepath.Join(home, ".arc", "config.jsonc"), "config.jsonc")
+}
+
+// cmdAgentConfigView opens the agent config in the resource overlay.
+func (m *Model) cmdAgentConfigView() {
+	m.cmdViewConfigFile(filepath.Join(m.cfg.AgentPath, "config.jsonc"), "agent/config.jsonc")
+}
+
+// cmdChatConfigView opens the workspace chat config in the resource overlay.
+func (m *Model) cmdChatConfigView() {
+	if !m.chatMode {
+		m.statusMsg = "✗ /config-chat-view is only available in workspace chat"
+		return
+	}
+	path := filepath.Join(m.cfg.DataRoot, "workspaces", m.chatWorkspace, "chat", "config.jsonc")
+	m.cmdViewConfigFile(path, m.chatWorkspace+"/chat/config.jsonc")
+}
+
 // editorOrError returns the $EDITOR value or sets a status error and returns "".
 func (m *Model) editorOrError() string {
 	editor := os.Getenv("EDITOR")
@@ -4775,7 +4820,7 @@ func (m *Model) cmdAgentConfigEdit() tea.Cmd {
 // cmdChatConfigEdit opens the workspace chat config file in $EDITOR.
 func (m *Model) cmdChatConfigEdit() tea.Cmd {
 	if !m.chatMode {
-		m.statusMsg = "✗ /chat-config-edit is only available in workspace chat"
+		m.statusMsg = "✗ /config-chat-edit is only available in workspace chat"
 		return nil
 	}
 	editor := m.editorOrError()
@@ -4783,7 +4828,7 @@ func (m *Model) cmdChatConfigEdit() tea.Cmd {
 		return nil
 	}
 	cfgPath := resolveConfigPath(filepath.Join(m.cfg.DataRoot, "workspaces", m.chatWorkspace, "chat", "config.jsonc"))
-	m.openEditorInTerminal(editor, cfgPath, filepath.Base(cfgPath))
+	m.openEditorInTerminal(editor, cfgPath, m.chatWorkspace+"/chat/"+filepath.Base(cfgPath))
 	return nil
 }
 
@@ -6313,9 +6358,12 @@ var helpGroups = []struct {
 		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
 		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
 		{"/config", "", "show resolved configuration"},
+		{"/config-view", "", "view config.jsonc in overlay"},
 		{"/config-edit", "", "open config.jsonc in $EDITOR"},
+		{"/agent-config-view", "", "view agent/config.jsonc in overlay"},
 		{"/agent-config-edit", "", "open agent/config.jsonc in $EDITOR"},
-		{"/chat-config-edit", "", "open workspace chat/config.jsonc in $EDITOR"},
+		{"/config-chat-view", "", "view workspace chat/config.jsonc in overlay"},
+		{"/config-chat-edit", "", "open workspace chat/config.jsonc in $EDITOR"},
 		{"/tags", "", "list all tags"},
 		{"/stats", "", "show library stats"},
 		{"/models", "", "list available LLM profiles"},
