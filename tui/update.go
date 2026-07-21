@@ -6545,13 +6545,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					return nil
 				}
 			}
-			m.scratchFocused = false
-			m.askxFocused = false
-			m.previewFocused = false
-			if m.chatMode {
-				m.rebuildChatLines(m.chatBuildWidth())
-				m.chatBoxCursor = 0
-			}
+			m.setFocusPane(paneContent)
 		}
 
 	case tea.MouseActionMotion:
