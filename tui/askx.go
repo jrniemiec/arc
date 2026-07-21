@@ -193,6 +193,17 @@ type askxTokenResult struct {
 func parseAskXTokens(prompt string, profiles map[string]config.Profile) (askxTokenResult, error) {
 	var res askxTokenResult
 
+	// Strip leading --profile <name> flag before @token parsing.
+	if strings.HasPrefix(prompt, "--profile ") {
+		rest := strings.TrimPrefix(prompt, "--profile ")
+		idx := strings.IndexByte(rest, ' ')
+		if idx < 0 {
+			return res, fmt.Errorf("--profile requires a profile name")
+		}
+		res.profileOverride = rest[:idx]
+		prompt = strings.TrimSpace(rest[idx:])
+	}
+
 	words := strings.Fields(prompt)
 	consumed := 0
 	for _, w := range words {
@@ -207,7 +218,7 @@ func parseAskXTokens(prompt string, profiles map[string]config.Profile) (askxTok
 		// Try profile match first.
 		if _, ok := profiles[token]; ok {
 			if res.profileOverride != "" {
-				return res, fmt.Errorf("multiple profiles: @%s and @%s", res.profileOverride, token)
+				return res, fmt.Errorf("multiple profiles specified")
 			}
 			res.profileOverride = token
 			consumed++
@@ -297,13 +308,17 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 	}
 
 	// Resolve @<numID> article references before parsing other @tokens.
+	// Keep a display version (truncated) separate from the full LLM version.
+	displayBase := prompt
 	if atRefPattern.MatchString(prompt) {
 		resolved, err := m.resolveAtRefs(prompt)
 		if err != nil {
 			m.setStatusError("askX: " + err.Error())
 			return nil
 		}
+		displayResolved, _ := m.resolveAtRefsDisplay(prompt, 128)
 		prompt = resolved
+		displayBase = displayResolved
 	}
 
 	// Parse @tokens (profile override, file inclusions).
@@ -312,26 +327,27 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 		m.setStatusError("askX: " + err.Error())
 		return nil
 	}
+	parsedDisplay, _ := parseAskXTokens(displayBase, m.cfg.Profiles)
 
 	// Store the clean prompt (without @tokens) as the user message.
-	displayPrompt := parsed.cleanPrompt
+	displayPrompt := parsedDisplay.cleanPrompt
 	if displayPrompt == "" {
 		m.setStatusError("askX: empty prompt after @token parsing")
 		return nil
 	}
 
 	// Build the LLM prompt: prepend file contents as context blocks.
-	llmPrompt := displayPrompt
+	llmPrompt := parsed.cleanPrompt
 	if len(parsed.fileContents) > 0 {
 		var sb strings.Builder
 		for i, content := range parsed.fileContents {
 			sb.WriteString(fmt.Sprintf("--- file: %s ---\n%s\n---\n\n", parsed.fileNames[i], content))
 		}
-		sb.WriteString(displayPrompt)
+		sb.WriteString(parsed.cleanPrompt)
 		llmPrompt = sb.String()
 	}
 
-	// Append user message (display version, without file contents).
+	// Append user message (display version, with truncated @ref content).
 	m.askxMsgs = append(m.askxMsgs, chat.Message{
 		Role:    chat.RoleUser,
 		Content: displayPrompt,
@@ -409,16 +425,18 @@ func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 			{Role: llm.RoleUser, Content: prompt},
 		}
 
+		start := time.Now()
 		fullText, usage, err := prov.ChatStream(ctx, systemPrompt, msgs, func(delta string) error {
 			shared.Append(delta)
 			return nil
 		})
+		elapsed := time.Since(start)
 		if err != nil {
-			return askxStreamDoneMsg{err: fmt.Sprintf("askX: %v", err), fullText: fullText}
+			return askxStreamDoneMsg{err: fmt.Sprintf("askX: %v", err), fullText: fullText, elapsed: elapsed}
 		}
 		costUSD := cfg.CalcCost(prof.Model, usage.InputTokens, usage.OutputTokens)
 		appendAskXEvent(cfg.EventsPath, prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
-		return askxStreamDoneMsg{fullText: fullText, costUSD: costUSD}
+		return askxStreamDoneMsg{fullText: fullText, costUSD: costUSD, elapsed: elapsed}
 	}
 }
 
@@ -479,7 +497,11 @@ func (m *Model) handleAskXStreamDone(msg askxStreamDoneMsg) {
 			Time:    time.Now(),
 		})
 		m.saveAskXHistory()
-		m.statusMsg = "✓ askX done · " + m.askxResolvedProfile
+		cost := formatUSD(msg.costUSD)
+		if msg.costUSD == 0 {
+			cost = "free"
+		}
+		m.statusMsg = fmt.Sprintf("✓ askX · %s · %s  %.1fs", m.askxResolvedProfile, cost, msg.elapsed.Seconds())
 	}
 
 	m.askxStreamBuf = ""
@@ -1029,28 +1051,37 @@ func (m Model) renderAskXPane(height, width int) []string {
 	var lines []string
 
 	// Header separator with label.
-	label := " AskX "
+	name := "askX"
+	if m.askxGlobal {
+		name = "AskX"
+	}
+	label := " " + name + " "
 	ws := m.askxWorkspace()
 	if ws != "" {
-		label = " AskX [" + ws + "] "
+		label = " " + name + " [" + ws + "] "
 	}
 	if m.askxResolvedProfile != "" {
 		label += "· " + m.askxResolvedProfile + " "
 	}
-	if m.askxStreaming {
-		label += "● "
+	hint := " V view "
+	labelLen := len([]rune(label))
+	hintLen := len([]rune(hint))
+	remaining := width - labelLen
+	if remaining < 0 {
+		remaining = 0
 	}
-	sepLen := width - len([]rune(label))
-	if sepLen < 0 {
-		sepLen = 0
+	leftSep := remaining / 2
+	rightFull := remaining - leftSep
+	rightSep := rightFull - hintLen
+	if rightSep < 1 {
+		rightSep = 0
+		hint = ""
 	}
-	leftSep := sepLen / 2
-	rightSep := sepLen - leftSep
 	headerColor := t.Dimmed
 	if m.askxFocused && m.focus == paneContent {
 		headerColor = t.Accent
 	}
-	header := fg(headerColor, strings.Repeat("─", leftSep)+label+strings.Repeat("─", rightSep))
+	header := fg(headerColor, strings.Repeat("─", leftSep)+label+strings.Repeat("─", rightSep)+hint)
 	lines = append(lines, header)
 
 	viewH := height - 1

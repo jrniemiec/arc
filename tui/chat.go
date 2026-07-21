@@ -49,18 +49,31 @@ func (m *Model) loadChatHistoryCmd(workspaceName string, focus bool) tea.Cmd {
 			groundingMode = "corpus-first"
 		}
 
+		wsStats, _ := chatengine.LoadWorkspaceStats(cfg.EventsPath, workspaceName)
+
 		if err != nil {
-			return chatHistoryLoadedMsg{workspace: workspaceName, err: err.Error(), focus: focus, articleCount: articleCount, groundingMode: groundingMode}
+			return chatHistoryLoadedMsg{workspace: workspaceName, err: err.Error(), focus: focus, articleCount: articleCount, groundingMode: groundingMode, workspaceStats: wsStats, profile: chatCfg.Profile}
 		}
-		return chatHistoryLoadedMsg{workspace: workspaceName, msgs: history.Msgs, focus: focus, articleCount: articleCount, groundingMode: groundingMode}
+		return chatHistoryLoadedMsg{workspace: workspaceName, msgs: history.Msgs, focus: focus, articleCount: articleCount, groundingMode: groundingMode, workspaceStats: wsStats, profile: chatCfg.Profile}
+	}
+}
+
+// loadChatWorkspaceStatsCmd reloads lifetime stats for the workspace from events.jsonl.
+func (m *Model) loadChatWorkspaceStatsCmd() tea.Cmd {
+	eventsPath := m.cfg.EventsPath
+	workspace := m.chatWorkspace
+	return func() tea.Msg {
+		stats, _ := chatengine.LoadWorkspaceStats(eventsPath, workspace)
+		return chatWorkspaceStatsMsg{stats: stats}
 	}
 }
 
 // startChatCmd constructs a chat engine asynchronously.
 func (m *Model) startChatCmd(workspaceName string) tea.Cmd {
 	cfg := m.cfg
+	profileOverride := m.chatProfileOverride
 	return func() tea.Msg {
-		eng, err := chatengine.New(cfg, workspaceName, "")
+		eng, err := chatengine.New(cfg, workspaceName, profileOverride)
 		if err != nil {
 			return chatReadyMsg{err: err.Error(), workspace: workspaceName}
 		}
@@ -82,12 +95,14 @@ func (m *Model) sendChatMsg(prompt string) tea.Cmd {
 	m.chatSharedBuf = shared
 
 	return func() tea.Msg {
+		var toolCalls int
 		cb := chatengine.ChatCallbacks{
 			OnTextDelta: func(delta string) error {
 				shared.Append(delta)
 				return nil
 			},
 			OnToolStart: func(toolName string) {
+				toolCalls++
 				shared.SetActivity("→ " + toolName)
 			},
 			OnToolDone: func(toolName string) {
@@ -96,9 +111,9 @@ func (m *Model) sendChatMsg(prompt string) tea.Cmd {
 		}
 		result, err := eng.ChatWithTools(ctx, prompt, chatengine.ChatOptions{}, cb)
 		if err != nil {
-			return chatStreamDoneMsg{usage: result.Usage, elapsed: result.Elapsed, err: err.Error()}
+			return chatStreamDoneMsg{usage: result.Usage, elapsed: result.Elapsed, err: err.Error(), toolCalls: toolCalls}
 		}
-		return chatStreamDoneMsg{usage: result.Usage, elapsed: result.Elapsed}
+		return chatStreamDoneMsg{usage: result.Usage, elapsed: result.Elapsed, toolCalls: toolCalls}
 	}
 }
 
@@ -1089,13 +1104,15 @@ func (m Model) renderChatStatusLine() string {
 		center = fg(t.ContentDimmed, fmt.Sprintf("in:%d out:%d  %.1fs", u.InputTokens, u.OutputTokens, m.chatLastElapsed.Seconds()))
 	}
 
-	// Right: session stats.
+	// Right: workspace lifetime stats.
 	var right string
-	if m.chatEngine != nil {
-		inTok, outTok, cost := m.chatEngine.SessionStats()
-		if inTok > 0 || outTok > 0 {
-			right = fg(t.ContentDimmed, fmt.Sprintf("session: %d/%d  %s", inTok, outTok, formatUSD(cost)))
-		}
+	ws := m.chatWorkspaceStats
+	if ws.Turns > 0 {
+		s := ws
+		right = fg(t.ContentDimmed, fmt.Sprintf("%d turns · %d tool calls · %dk in · %dk out · %s",
+			s.Turns, s.ToolCalls,
+			(s.InputTokens+500)/1000, (s.OutputTokens+500)/1000,
+			formatUSD(s.CostUSD)))
 	}
 
 	// Compose: left | center (padded) | right

@@ -93,9 +93,10 @@ type ChatOptions struct {
 
 // ChatResult holds the outcome of a Chat() call.
 type ChatResult struct {
-	Usage   chat.Usage
-	Elapsed time.Duration
-	Rounds  int
+	Usage     chat.Usage
+	Elapsed   time.Duration
+	Rounds    int
+	ToolCalls int // total individual tool invocations across all rounds
 }
 
 // New creates an Engine for the given workspace, loading history and system prompt.
@@ -236,6 +237,7 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 	// --- 3. Tool loop ---
 	var turnUsage chat.Usage
 	var finalText string
+	var totalToolCalls int
 	round := 0
 
 	for {
@@ -323,6 +325,7 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 		workingMsgs = append(workingMsgs, assistantMsg)
 
 		// Execute tool calls concurrently.
+		totalToolCalls += len(toolCalls)
 		results := e.parallelExec(ctx, toolCalls, cb)
 
 		// Record results and append to working list.
@@ -373,7 +376,7 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 		"output_tokens", turnUsage.OutputTokens,
 		"cost_usd", fmt.Sprintf("%.6f", costUSD),
 		"elapsed", elapsed)
-	e.appendTurnCompleteEvent(turnUsage, round, elapsed)
+	e.appendTurnCompleteEvent(turnUsage, round, totalToolCalls, elapsed)
 
 	// --- 6. Update session accounting ---
 	e.mu.Lock()
@@ -383,7 +386,7 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 
 	_ = finalText // response text is in history; callers read it from there
 
-	return ChatResult{Usage: turnUsage, Elapsed: elapsed, Rounds: round}, nil
+	return ChatResult{Usage: turnUsage, Elapsed: elapsed, Rounds: round, ToolCalls: totalToolCalls}, nil
 }
 
 // toolResult holds the output of a single tool execution.
@@ -627,7 +630,7 @@ func (e *Engine) appendAPICallEvent(u chat.Usage, round int) {
 }
 
 // appendTurnCompleteEvent logs the completion of an entire turn (all rounds).
-func (e *Engine) appendTurnCompleteEvent(u chat.Usage, rounds int, elapsed time.Duration) {
+func (e *Engine) appendTurnCompleteEvent(u chat.Usage, rounds, toolCalls int, elapsed time.Duration) {
 	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens)
 	e.appendEvent(struct {
 		TS            time.Time    `json:"ts"`
@@ -635,6 +638,7 @@ func (e *Engine) appendTurnCompleteEvent(u chat.Usage, rounds int, elapsed time.
 		WorkspaceName string       `json:"workspace_name"`
 		TurnID        int          `json:"turn_id"`
 		Rounds        int          `json:"rounds"`
+		ToolCalls     int          `json:"tool_calls,omitempty"`
 		Profile       string       `json:"profile"`
 		Model         string       `json:"model"`
 		Cost          chatCostInfo `json:"cost"`
@@ -645,6 +649,7 @@ func (e *Engine) appendTurnCompleteEvent(u chat.Usage, rounds int, elapsed time.
 		WorkspaceName: e.workspaceName,
 		TurnID:        e.turnID,
 		Rounds:        rounds,
+		ToolCalls:     toolCalls,
 		Profile:       e.profileName,
 		Model:         e.profile.Model,
 		Cost: chatCostInfo{
@@ -669,4 +674,55 @@ func (e *Engine) appendToolCapEvent() {
 		WorkspaceName: e.workspaceName,
 		TurnID:        e.turnID,
 	})
+}
+
+// WorkspaceStats holds lifetime aggregated chat statistics for a workspace.
+type WorkspaceStats struct {
+	Turns        int
+	ToolCalls    int
+	InputTokens  int
+	OutputTokens int
+	CostUSD      float64
+}
+
+// LoadWorkspaceStats scans events.jsonl and returns lifetime chat stats for the
+// given workspace by summing all chat_turn_complete entries.
+func LoadWorkspaceStats(eventsPath, workspaceName string) (WorkspaceStats, error) {
+	f, err := os.Open(eventsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return WorkspaceStats{}, nil
+		}
+		return WorkspaceStats{}, err
+	}
+	defer f.Close()
+
+	type turnEvent struct {
+		Type          string `json:"type"`
+		WorkspaceName string `json:"workspace_name"`
+		ToolCalls     int    `json:"tool_calls"`
+		Cost          struct {
+			InputTokens  int     `json:"input_tokens"`
+			OutputTokens int     `json:"output_tokens"`
+			CostUSD      float64 `json:"cost_usd"`
+		} `json:"cost"`
+	}
+
+	var stats WorkspaceStats
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var ev turnEvent
+		if err := dec.Decode(&ev); err != nil {
+			continue // skip malformed lines
+		}
+		if ev.Type != "chat_turn_complete" || ev.WorkspaceName != workspaceName {
+			continue
+		}
+		stats.Turns++
+		stats.ToolCalls += ev.ToolCalls
+		stats.InputTokens += ev.Cost.InputTokens
+		stats.OutputTokens += ev.Cost.OutputTokens
+		stats.CostUSD += ev.Cost.CostUSD
+	}
+	return stats, nil
 }

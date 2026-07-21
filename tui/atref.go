@@ -18,6 +18,16 @@ var atRefPattern = regexp.MustCompile(`@(\d+)(?:-(flash|f|summ|s|body|b|meta|m))
 // content, and returns the expanded string. Returns an error if any token is
 // invalid (unknown ID, collection ID, etc.).
 func (m *Model) resolveAtRefs(input string) (string, error) {
+	return m.resolveAtRefsWithLimit(input, 0)
+}
+
+// resolveAtRefsDisplay is like resolveAtRefs but truncates each expansion to
+// maxLen characters (adding "...") for display in the TUI chat history.
+func (m *Model) resolveAtRefsDisplay(input string, maxLen int) (string, error) {
+	return m.resolveAtRefsWithLimit(input, maxLen)
+}
+
+func (m *Model) resolveAtRefsWithLimit(input string, maxLen int) (string, error) {
 	matches := atRefPattern.FindAllStringSubmatchIndex(input, -1)
 	if len(matches) == 0 {
 		return input, nil
@@ -59,9 +69,9 @@ func (m *Model) resolveAtRefs(input string) (string, error) {
 		}
 
 		tokens = append(tokens, tokenInfo{
-			start: fullStart,
-			end:   fullEnd,
-			numID: numID,
+			start:  fullStart,
+			end:    fullEnd,
+			numID:  numID,
 			suffix: suffix,
 		})
 	}
@@ -73,6 +83,9 @@ func (m *Model) resolveAtRefs(input string) (string, error) {
 		content, err := m.expandAtRef(ctx, tok.numID, tok.suffix)
 		if err != nil {
 			return "", err
+		}
+		if maxLen > 0 && len(content) > maxLen {
+			content = content[:maxLen] + "..."
 		}
 		result = result[:tok.start] + content + result[tok.end:]
 	}

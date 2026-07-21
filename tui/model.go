@@ -490,9 +490,12 @@ type Model struct {
 	chatRawMsgs        []chat.Message        // history msgs for display before engine is ready
 	chatArticleCount   int                   // total articles in workspace (populated by loadChatHistoryCmd)
 	chatGroundingMode  string                // effective grounding mode ("corpus-only"/"corpus-first"/"open")
-	chatActivityLine          string                // tool activity indicator (e.g. "→ reading: wal-internals")
-	chatStreamingUserPrompt   string                // user prompt in flight — shown before engine persists it to history
-	chatBoxCursor             int                   // selected box index in boxed view (focus==paneContent)
+	chatLoadedProfile         string                    // profile from workspace chat/chat.json (persisted on disk)
+	chatProfileOverride       string                    // session-only override (empty = use chatLoadedProfile)
+	chatActivityLine          string                    // tool activity indicator (e.g. "→ reading: wal-internals")
+	chatStreamingUserPrompt   string                    // user prompt in flight — shown before engine persists it to history
+	chatWorkspaceStats        chatengine.WorkspaceStats // lifetime stats for current workspace (from events.jsonl)
+	chatBoxCursor             int                       // selected box index in boxed view (focus==paneContent)
 	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
 
@@ -661,6 +664,7 @@ var feedCommands = []cmdCompletion{
 var chatCommands = []cmdCompletion{
 	{"/clear", "", "clear conversation history"},
 	{"/mode", "[corpus-only|corpus-first|open]", "show or switch grounding mode"},
+	{"/profile", "[name]", "show or switch LLM profile for this session"},
 	{"/reload", "", "rebuild corpus map to pick up article changes"},
 	{"/stats", "", "show session token usage and cost"},
 	{"/system", "", "print system prompt"},
@@ -826,12 +830,14 @@ type collectionArticlesLoadedMsg struct {
 
 // chatHistoryLoadedMsg signals that workspace chat history has been read from disk.
 type chatHistoryLoadedMsg struct {
-	workspace    string
-	msgs         []chat.Message
-	err          string
-	focus        bool   // true = user explicitly selected this workspace (Enter/click), switch focus to command pane
-	articleCount int    // total articles in workspace (direct + via collections)
-	groundingMode string // effective grounding mode ("corpus-only" / "corpus-first" / "open")
+	workspace      string
+	msgs           []chat.Message
+	err            string
+	focus          bool                      // true = user explicitly selected this workspace (Enter/click), switch focus to command pane
+	articleCount   int                       // total articles in workspace (direct + via collections)
+	groundingMode  string                    // effective grounding mode ("corpus-only" / "corpus-first" / "open")
+	workspaceStats chatengine.WorkspaceStats // lifetime chat stats for this workspace
+	profile        string                    // profile name from workspace chat/chat.json (may be empty)
 }
 
 // chatReadyMsg signals that the chat engine has been constructed.
@@ -843,9 +849,15 @@ type chatReadyMsg struct {
 
 // chatStreamDoneMsg signals that the streaming response is complete.
 type chatStreamDoneMsg struct {
-	usage   chat.Usage
-	elapsed time.Duration
-	err     string
+	usage     chat.Usage
+	elapsed   time.Duration
+	err       string
+	toolCalls int // number of tool invocations during the turn
+}
+
+// chatWorkspaceStatsMsg carries refreshed lifetime stats for the current workspace.
+type chatWorkspaceStatsMsg struct {
+	stats chatengine.WorkspaceStats
 }
 
 // askxStreamDoneMsg signals that the askX streaming response is complete.
@@ -1393,6 +1405,25 @@ func (m Model) inputPrompt() string {
 		return fmt.Sprintf(" [%d/%d] Enter=remove  n=keep  q=done > ", m.removeReviewIdx+1, n)
 	}
 	if m.chatMode {
+		if m.chatProfileOverride != "" {
+			return m.chatWorkspace + ":" + m.chatProfileOverride + "> "
+		}
+		if m.chatEngine != nil {
+			return m.chatWorkspace + ":" + m.chatEngine.ProfileName() + "> "
+		}
+		// Engine not yet initialised — use profile from workspace chat/chat.json if
+		// available, otherwise fall back to ingest.flash_profile, then any profile.
+		if m.chatLoadedProfile != "" {
+			return m.chatWorkspace + ":" + m.chatLoadedProfile + "> "
+		}
+		if p := m.cfg.Ingest.FlashProfile; p != "" {
+			if _, ok := m.cfg.Profiles[p]; ok {
+				return m.chatWorkspace + ":" + p + "> "
+			}
+		}
+		for name := range m.cfg.Profiles {
+			return m.chatWorkspace + ":" + name + "> "
+		}
 		return m.chatWorkspace + "> "
 	}
 	return "> "

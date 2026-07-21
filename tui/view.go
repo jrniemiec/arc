@@ -2519,7 +2519,7 @@ func (m Model) renderStatusLine() string {
 	}
 	if m.askxStreaming && !m.selectionMode {
 		label := "askX streaming · " + m.askxResolvedProfile
-		return renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
+		return renderWaveIndicatorLeading(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
 	}
 	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
 		return m.renderChatStatusLine()

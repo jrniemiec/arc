@@ -686,12 +686,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatCancelStream = nil
 			}
 			m.chatMode = true
-			m.chatEngine = nil       // lazy — engine init deferred to first message
-			m.chatPendingPrompt = "" // clear any pending prompt from previous workspace
+			m.chatEngine = nil        // lazy — engine init deferred to first message
+			m.chatPendingPrompt = ""  // clear any pending prompt from previous workspace
+			m.chatProfileOverride = "" // reset session-only override on workspace change
+			m.chatLoadedProfile = msg.profile // profile from workspace chat/chat.json
 			m.chatWorkspace = msg.workspace
 			m.chatRawMsgs = msg.msgs
 			m.chatArticleCount = msg.articleCount
 			m.chatGroundingMode = msg.groundingMode
+			m.chatWorkspaceStats = msg.workspaceStats
 			m.chatAutoScroll = true
 			m.chatStreaming = false
 			m.chatStreamBuf = ""
@@ -748,6 +751,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			usage := msg.usage
 			m.chatLastUsage = &usage
 			m.chatLastElapsed = msg.elapsed
+			// Build completion status: ✓ model · N tools · $cost  Xs
+			profile := ""
+			if m.chatEngine != nil {
+				profile = m.chatEngine.Profile().Model
+			}
+			cost := formatUSD(m.cfg.CalcCost(profile, usage.InputTokens, usage.OutputTokens))
+			status := "✓ " + profile
+			if msg.toolCalls > 0 {
+				status += fmt.Sprintf(" · %d tool calls", msg.toolCalls)
+			}
+			status += " · " + cost + fmt.Sprintf("  %.1fs", msg.elapsed.Seconds())
+			m.statusMsg = status
 		}
 		m.rebuildChatLines(m.chatBuildWidth())
 		// Leave collapse state untouched — the new response is not in chatCollapsed
@@ -760,8 +775,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		chatViewH := m.chatViewHeight()
 		m.chatAutoScrollToBottom(chatViewH)
 		if msg.err == "" {
-			cmds = append(cmds, loadStats(m.svc))
+			cmds = append(cmds, loadStats(m.svc), m.loadChatWorkspaceStatsCmd())
 		}
+
+	case chatWorkspaceStatsMsg:
+		m.chatWorkspaceStats = msg.stats
 
 	case askxStreamDoneMsg:
 		m.handleAskXStreamDone(msg)
@@ -3522,6 +3540,16 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 	case "/agent-rerun":
 		return nil
 
+	case "/profile":
+		var items []cmdCompletion
+		for name, p := range m.cfg.Profiles {
+			if p.Provider != "anthropic" {
+				continue // tool calling only supported for Anthropic
+			}
+			items = append(items, cmdCompletion{cmd: name, desc: p.Model})
+		}
+		return items
+
 	case "/help":
 		// Second level: "/help article " → return command entries for that group.
 		trimmed := strings.TrimSpace(strings.ToLower(arg))
@@ -3913,6 +3941,54 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 		m.chatGroundingMode = arg
 		m.statusMsg = "grounding mode → " + arg
+		return nil
+
+	case "/profile":
+		if !m.chatMode {
+			m.statusMsg = "✗ /profile is only available in workspace chat"
+			return nil
+		}
+		if arg == "" {
+			active := ""
+			if m.chatEngine != nil {
+				active = m.chatEngine.ProfileName()
+			} else if m.chatProfileOverride != "" {
+				active = m.chatProfileOverride
+			}
+			if active != "" {
+				m.statusMsg = "profile: " + active
+			} else {
+				m.statusMsg = "profile: (workspace default)"
+			}
+			return nil
+		}
+		p, ok := m.cfg.Profiles[arg]
+		if !ok {
+			m.statusMsg = "✗ unknown profile: " + arg
+			return nil
+		}
+		if p.Provider != "anthropic" {
+			m.statusMsg = "✗ " + arg + ": tool calling requires an Anthropic profile"
+			return nil
+		}
+		// Persist to workspace chat/chat.json.
+		chatCfg, _ := storefs.ReadChatConfig(m.cfg.DataRoot, m.chatWorkspace)
+		chatCfg.Profile = arg
+		if err := storefs.WriteChatConfig(m.cfg.DataRoot, m.chatWorkspace, chatCfg); err != nil {
+			m.statusMsg = "✗ save profile: " + err.Error()
+			return nil
+		}
+		m.chatLoadedProfile = arg
+		m.chatProfileOverride = arg // also set session override for immediate prompt update
+		// Reset engine so it reinitializes with the new profile on next message.
+		if m.chatCancelStream != nil {
+			m.chatCancelStream()
+			m.chatCancelStream = nil
+		}
+		m.chatEngine = nil
+		m.chatStreaming = false
+		m.syncInputPrompt()
+		m.statusMsg = "profile → " + arg
 		return nil
 
 	case "/reload":
@@ -6167,6 +6243,7 @@ var helpGroups = []struct {
 		{"/Scratch", "[msg]", "global scratch (append / toggle)"},
 		{"/askX", "[--profile <name>] <prompt>", "workspace-local LLM query"},
 		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
+		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
 		{"/config", "", "show resolved configuration"},
 		{"/config-edit", "", "open config file in $EDITOR"},
 		{"/tags", "", "list all tags"},
