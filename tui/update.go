@@ -3412,7 +3412,9 @@ func (m *Model) updateCompletions() {
 		return
 	}
 
-	// Completion mode: "/prefix" with no space.
+	// Completion mode: "/prefix" with no space — clear any stale param items.
+	m.paramItems = nil
+	m.paramIdx = -1
 	// Use case-sensitive matching so /S shows /Scratch but not /scratch.
 	var filtered []cmdCompletion
 	for _, c := range m.allCommands() {
@@ -3539,6 +3541,13 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 
 	case "/agent-rerun":
 		return nil
+
+	case "/mode":
+		return []cmdCompletion{
+			{cmd: "corpus-only", desc: "answers from workspace articles only"},
+			{cmd: "corpus-first", desc: "articles first, then open knowledge"},
+			{cmd: "open", desc: "no grounding — general LLM knowledge"},
+		}
 
 	case "/profile":
 		var items []cmdCompletion

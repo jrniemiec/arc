@@ -46,7 +46,14 @@ func (m *Model) loadChatHistoryCmd(workspaceName string, focus bool) tea.Cmd {
 		chatCfg, _ := storefs.ReadChatConfig(cfg.DataRoot, workspaceName)
 		groundingMode := chatCfg.GroundingMode
 		if groundingMode == "" {
-			groundingMode = "corpus-first"
+			// Fall back to global config, then hardcoded default.
+			groundingMode = cfg.Chat.GroundingMode
+			if groundingMode == "" {
+				groundingMode = "corpus-first"
+			}
+			// Write back so the workspace config is always explicit.
+			chatCfg.GroundingMode = groundingMode
+			_ = storefs.WriteChatConfig(cfg.DataRoot, workspaceName, chatCfg)
 		}
 
 		wsStats, _ := chatengine.LoadWorkspaceStats(cfg.EventsPath, workspaceName)
@@ -1285,20 +1292,22 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		return nil
 
 	case "/mode":
-		if m.chatEngine == nil {
-			m.statusMsg = "✗ send a message first to initialise the engine"
-			return nil
-		}
 		if fullArg == "" {
-			m.statusMsg = fmt.Sprintf("current mode: %s  (options: corpus-only, corpus-first, open)", m.chatEngine.GroundingMode())
+			m.statusMsg = fmt.Sprintf("current mode: %s  (options: corpus-only, corpus-first, open)", m.chatGroundingMode)
 			return nil
 		}
-		if err := m.chatEngine.SetGroundingMode(fullArg); err != nil {
-			m.statusMsg = "✗ " + err.Error()
-		} else {
-			m.chatGroundingMode = fullArg
-			m.statusMsg = "✓ mode set to " + fullArg
+		if m.chatEngine != nil {
+			if err := m.chatEngine.SetGroundingMode(fullArg); err != nil {
+				m.statusMsg = "✗ " + err.Error()
+				return nil
+			}
 		}
+		m.chatGroundingMode = fullArg
+		// Persist to workspace chat/chat.json.
+		chatCfg, _ := storefs.ReadChatConfig(m.cfg.DataRoot, m.chatWorkspace)
+		chatCfg.GroundingMode = fullArg
+		_ = storefs.WriteChatConfig(m.cfg.DataRoot, m.chatWorkspace, chatCfg)
+		m.statusMsg = "✓ mode set to " + fullArg
 		return nil
 
 	case "/populate":
