@@ -3670,7 +3670,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	case "/config-view":
 		m.cmdConfigView()
 		return nil
-	case "/agent-config-view":
+	case "/config-agent-view":
 		m.cmdAgentConfigView()
 		return nil
 	case "/config-chat-view":
@@ -3678,7 +3678,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 	case "/config-edit":
 		return m.cmdConfigEdit()
-	case "/agent-config-edit":
+	case "/config-agent-edit":
 		return m.cmdAgentConfigEdit()
 	case "/config-chat-edit":
 		return m.cmdChatConfigEdit()
@@ -6360,8 +6360,8 @@ var helpGroups = []struct {
 		{"/config", "", "show resolved configuration"},
 		{"/config-view", "", "view config.jsonc in overlay"},
 		{"/config-edit", "", "open config.jsonc in $EDITOR"},
-		{"/agent-config-view", "", "view agent/config.jsonc in overlay"},
-		{"/agent-config-edit", "", "open agent/config.jsonc in $EDITOR"},
+		{"/config-agent-view", "", "view agent/config.jsonc in overlay"},
+		{"/config-agent-edit", "", "open agent/config.jsonc in $EDITOR"},
 		{"/config-chat-view", "", "view workspace chat/config.jsonc in overlay"},
 		{"/config-chat-edit", "", "open workspace chat/config.jsonc in $EDITOR"},
 		{"/tags", "", "list all tags"},
