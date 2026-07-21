@@ -972,11 +972,24 @@ func WriteWorkspaceResource(dataRoot, name, filename string, data []byte) error 
 
 // ── Chat config ───────────────────────────────────────────────────────────────
 
-// ReadChatConfig reads chat/config.json from a workspace.
-// Falls back to the legacy chat/chat.json if config.json does not exist.
-// Returns zero value if neither file exists.
+// ReadChatConfig reads chat/config.jsonc from a workspace.
+// Falls back to legacy chat/config.json then chat/chat.json if not found.
+// When reading from a legacy file, config.jsonc is written immediately so
+// the workspace self-migrates on first access.
+// Returns zero value if no config file exists.
 func ReadChatConfig(dataRoot, name string) (config.ChatConfig, error) {
 	chatDir := filepath.Join(WorkspaceDir(dataRoot, name), "chat")
+
+	// Preferred: config.jsonc — already migrated, return directly.
+	if data, err := os.ReadFile(filepath.Join(chatDir, "config.jsonc")); err == nil {
+		var cfg config.ChatConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return config.ChatConfig{}, fmt.Errorf("parse chat config: %w", err)
+		}
+		return cfg, nil
+	}
+
+	// Legacy files — parse then migrate to config.jsonc.
 	for _, filename := range []string{"config.json", "chat.json"} {
 		data, err := os.ReadFile(filepath.Join(chatDir, filename))
 		if err != nil {
@@ -989,6 +1002,9 @@ func ReadChatConfig(dataRoot, name string) (config.ChatConfig, error) {
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return config.ChatConfig{}, fmt.Errorf("parse chat config: %w", err)
 		}
+		// Migrate: write commented config.jsonc alongside the legacy file.
+		// Ignore write errors — migration is best-effort.
+		_ = WriteChatConfig(dataRoot, name, cfg)
 		return cfg, nil
 	}
 	return config.ChatConfig{}, nil
