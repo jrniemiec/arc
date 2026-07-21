@@ -1073,7 +1073,7 @@ func (m Model) renderChatStatusLine() string {
 		} else if m.chatEngine != nil {
 			streamLabel += " · " + m.chatEngine.Profile().Model
 		}
-		left = renderWaveIndicator(m.spinnerFrame, streamLabel, t.StreamingText, t.Dimmed)
+		left = renderWaveIndicatorLeading(m.spinnerFrame, streamLabel, t.StreamingText, t.Dimmed)
 	} else if m.statusMsg != "" {
 		if m.statusErr || strings.HasPrefix(m.statusMsg, "✗") {
 			left = fgBold(t.StatusError, " "+m.statusMsg)
@@ -1142,27 +1142,26 @@ func renderWaveIndicator(frame int, label string, bright, dim lipgloss.Color) st
 	return sb.String()
 }
 
-// renderWaveIndicatorLeading renders ●●●●● with a chasing bright dot followed
-// by a static label. One bright bullet cycles left-to-right every 500ms so
-// motion is immediately obvious regardless of terminal color depth.
+// renderWaveIndicatorLeading renders a rotating line spinner followed by a
+// static label. Classic ASCII+unicode 4-step rotation: | / ─ \
+//
+// Saved comet-tail variant (100/60/40/20/10 gradient, ●○ chars):
+//
+//	peak := (frame / 2) % 5
+//	for i := 0; i < 5; i++ {
+//	    dist := abs(i - peak)
+//	    switch dist { case 0: "●" bright; case 1: "●" 60%; case 2: "●" 40%;
+//	                  case 3: "●" 20%; case 4: "○" 10%; default: "○" dim }
+//	}
+//
+// Saved equalizer variant (4 bars, ▁▂▃▄, phaseStep=3):
+//
+//	blocks := []string{"▁","▂","▃","▄"}; n := len(blocks)*2; nBars := 4; phaseStep := 3
+//	for each bar: f=(frame+i*phaseStep)%n; blockIdx up-then-down; color by height
 func renderWaveIndicatorLeading(frame int, label string, bright, dim lipgloss.Color) string {
-	const nBullets = 5
-	peak := frame % nBullets
-	var sb strings.Builder
-	for i := 0; i < nBullets; i++ {
-		dist := i - peak
-		if dist < 0 {
-			dist = -dist
-		}
-		t := 1.0 - float64(dist)/float64(nBullets)
-		if t < 0 {
-			t = 0
-		}
-		col := lerpColor(dim, bright, t)
-		sb.WriteString(fg(col, "●"))
-	}
-	sb.WriteString(fg(bright, " "+label))
-	return sb.String()
+	frames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+	spinner := frames[frame%len(frames)]
+	return fg(bright, " "+spinner+" "+label)
 }
 
 // lerpColor linearly interpolates between two hex colors.
