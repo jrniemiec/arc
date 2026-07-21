@@ -994,17 +994,74 @@ func ReadChatConfig(dataRoot, name string) (config.ChatConfig, error) {
 	return config.ChatConfig{}, nil
 }
 
-// WriteChatConfig writes chat/config.json to a workspace.
+// WriteChatConfig writes chat/config.jsonc to a workspace with inline comments
+// documenting every field. The file is always fully regenerated — it is
+// machine-managed. User edits survive only until arc rewrites the file (e.g.
+// via /mode or /profile), so the disclaimer at the top warns accordingly.
 func WriteChatConfig(dataRoot, name string, cfg config.ChatConfig) error {
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "chat")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create chat dir: %w", err)
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal chat config: %w", err)
-	}
-	return os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+	data := formatChatConfig(cfg)
+	return os.WriteFile(filepath.Join(dir, "config.jsonc"), data, 0644)
+}
+
+// formatChatConfig renders a ChatConfig as a commented JSONC file.
+func formatChatConfig(cfg config.ChatConfig) []byte {
+	q := func(s string) string { return `"` + s + `"` }
+	return []byte(fmt.Sprintf(`// workspace chat configuration — managed by arc
+// NOTE: arc rewrites this file when you use /mode or /profile.
+// Edit manually only when arc is not running, then restart to apply changes.
+{
+  // LLM profile used for this workspace's chat sessions.
+  // Must be an Anthropic profile (tool calling requires Anthropic).
+  // Empty: falls back to ingest.flash_profile, then the first available profile.
+  // Use /profile in the TUI to switch without editing this file.
+  "profile": %s,
+
+  // How the assistant sources its answers.
+  // "corpus-only"  — workspace articles only; never uses general knowledge.
+  // "corpus-first" — articles first, then general knowledge to fill gaps.
+  // "open"         — articles, library, general knowledge, and web search.
+  // Use /mode in the TUI to switch without editing this file.
+  "grounding_mode": %s,
+
+  // How conversation history is trimmed to fit the context window.
+  // "tail"         — keep the last max_user_messages turns (default).
+  // "token-budget" — keep as many turns as fit within context_limit tokens.
+  // "summarize"    — compress old turns via LLM using summarizer_profile.
+  "strategy": %s,
+
+  // Maximum number of past user turns kept by the "tail" strategy. Default: 50.
+  "max_user_messages": %d,
+
+  // Token budget for "token-budget" and "summarize" strategies.
+  // 0 means no explicit limit (provider context window is used).
+  "context_limit": %d,
+
+  // Maximum tokens in each response. 0 uses the provider default (4096).
+  "max_output_tokens": %d,
+
+  // Profile used to compress history in the "summarize" strategy.
+  // Empty: falls back to the main profile above.
+  "summarizer_profile": %s,
+
+  // Fraction of the token budget kept as verbatim recent messages in the
+  // "summarize" strategy. The remainder is covered by the LLM summary.
+  // Default: 0.4 (40%% verbatim, 60%% summary).
+  "verbatim_ratio": %g
+}
+`,
+		q(cfg.Profile),
+		q(cfg.GroundingMode),
+		q(cfg.Strategy),
+		cfg.MaxUserMessages,
+		cfg.ContextLimit,
+		cfg.MaxOutputTokens,
+		q(cfg.SummarizerProfile),
+		cfg.VerbatimRatio,
+	))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
