@@ -39,6 +39,11 @@ type AgentConfig struct {
 	// summary quality. Override to "sonnet" for higher-quality summaries.
 	SummaryProfile string `json:"summary_profile,omitempty"`
 
+	// FlashProfile is the LLM profile name used for flash (audio) summary generation.
+	// Defaults to the global ingest.flash_profile if empty.
+	// Flash generation is a single short call — a cheaper model than summary is fine.
+	FlashProfile string `json:"flash_profile,omitempty"`
+
 	// Languages is an optional list of ISO 639-1 language codes to accept (e.g. ["en"]).
 	// Articles whose detected language is not in the list are skipped before ingest.
 	// Empty means accept all languages.
@@ -90,6 +95,12 @@ func (c *AgentConfig) SummaryProfileName() string {
 		return c.SummaryProfile
 	}
 	return "haiku"
+}
+
+// FlashProfileName returns the effective flash profile name for agent-ingested articles.
+// Returns empty string when not set, so the pipeline falls back to the global ingest.flash_profile.
+func (c *AgentConfig) FlashProfileName() string {
+	return c.FlashProfile
 }
 
 // LoadAgentConfig reads the agent config from path.

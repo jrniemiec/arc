@@ -372,6 +372,7 @@ func runFeed(
 					AgentVerdict:     string(r.Verdict),
 					AgentReason:      r.Reason,
 					SummaryModel:     opts.AgentCfg.SummaryProfileName(),
+					FlashModel:       opts.AgentCfg.FlashProfileName(),
 					AllowedLanguages: opts.AgentCfg.Languages,
 				}
 				if len(r.Collections) > 0 {
@@ -586,6 +587,7 @@ func RunDecisions(ctx context.Context, opts RunOptions, decisionsPath string) (R
 				AgentVerdict: "ingest",
 				AgentReason:  item.Reason,
 				SummaryModel: opts.AgentCfg.SummaryProfileName(),
+				FlashModel:   opts.AgentCfg.FlashProfileName(),
 			})
 			if pErr != nil {
 				slog.Warn("decisions ingest failed", "url", item.URL, "err", pErr)
