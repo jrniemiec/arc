@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/jrniemiec/arc/internal/jsonc"
 )
 
 // AgentConfig is the agent's own configuration file (~/.arc/agent/config.json).
@@ -89,19 +93,28 @@ func (c *AgentConfig) SummaryProfileName() string {
 }
 
 // LoadAgentConfig reads the agent config from path.
+// Accepts both .jsonc (preferred) and .json — if path ends in .json and a
+// .jsonc sibling exists, the .jsonc file is used instead.
 // Returns a minimal default config (empty feeds, no profile) if the file does not exist.
 func LoadAgentConfig(path string) (AgentConfig, error) {
-	f, err := os.Open(path)
+	// Prefer .jsonc sibling when caller passes the legacy .json path.
+	if strings.HasSuffix(path, ".json") {
+		jsoncPath := filepath.Join(filepath.Dir(path), "config.jsonc")
+		if _, err := os.Stat(jsoncPath); err == nil {
+			path = jsoncPath
+		}
+	}
+
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return AgentConfig{}, nil
 		}
 		return AgentConfig{}, fmt.Errorf("open agent config: %w", err)
 	}
-	defer f.Close()
 
 	var cfg AgentConfig
-	if err := json.NewDecoder(f).Decode(&cfg); err != nil {
+	if err := jsonc.Unmarshal(data, &cfg); err != nil {
 		return AgentConfig{}, fmt.Errorf("decode agent config: %w", err)
 	}
 	return cfg, nil

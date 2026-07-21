@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/jrniemiec/arc/internal/jsonc"
 )
 
 // Config is the top-level arc configuration.
@@ -637,18 +639,27 @@ func Default() Config {
 }
 
 // Load reads a config file, falling back to defaults for missing fields.
+// Accepts both .jsonc (preferred) and .json. When path ends in .json and the
+// .jsonc sibling exists, the .jsonc file is used instead.
 // Built-in profiles are always available; user-defined profiles are merged in.
 func Load(path string) (Config, error) {
 	cfg := Default()
 
-	f, err := os.Open(path)
+	// Prefer .jsonc sibling when caller passes the legacy .json path.
+	if filepath.Ext(path) == ".json" {
+		jsonc_path := path[:len(path)-5] + ".jsonc"
+		if _, err := os.Stat(jsonc_path); err == nil {
+			path = jsonc_path
+		}
+	}
+
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return cfg, nil
 		}
 		return cfg, fmt.Errorf("open config: %w", err)
 	}
-	defer f.Close()
 
 	// Decode into a temporary struct so we can merge profiles rather than replace.
 	var overlay struct {
@@ -669,7 +680,7 @@ func Load(path string) (Config, error) {
 		LogPath            string                    `json:"log_path"`
 		LogLevel           string                    `json:"log_level"`
 	}
-	if err := json.NewDecoder(f).Decode(&overlay); err != nil {
+	if err := jsonc.Unmarshal(data, &overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
 	}
 

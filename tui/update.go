@@ -3669,6 +3669,10 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 	case "/config-edit":
 		return m.cmdConfigEdit()
+	case "/agent-config-edit":
+		return m.cmdAgentConfigEdit()
+	case "/chat-config-edit":
+		return m.cmdChatConfigEdit()
 	case "/stats":
 		return m.cmdStats()
 	case "/models", "/profiles":
@@ -4623,7 +4627,7 @@ func cmdCollectionSearch(svc *service.Service, query string) tea.Cmd {
 // following c2's /config pattern: key settings + full profile listing.
 func (m *Model) cmdConfigLines() []string {
 	home, _ := os.UserHomeDir()
-	cfgPath := filepath.Join(home, ".arc", "config.json")
+	cfgPath := resolveConfigPath(filepath.Join(home, ".arc", "config.jsonc"))
 
 	row := func(label, value string) string {
 		return fmt.Sprintf("  %-20s%s", label+":", value)
@@ -4715,16 +4719,71 @@ func (m *Model) cmdConfigLines() []string {
 	return lines
 }
 
-// cmdConfigEdit opens the arc config file in $EDITOR.
-func (m *Model) cmdConfigEdit() tea.Cmd {
+// editorOrError returns the $EDITOR value or sets a status error and returns "".
+func (m *Model) editorOrError() string {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		m.setStatusError("$EDITOR is not set — add 'export EDITOR=<path>' to your shell config")
+	}
+	return editor
+}
+
+// resolveConfigPath returns path if it exists, otherwise tries the .jsonc/.json sibling.
+func resolveConfigPath(base string) string {
+	if _, err := os.Stat(base); err == nil {
+		return base
+	}
+	// Try the other extension.
+	ext := filepath.Ext(base)
+	var alt string
+	if ext == ".json" {
+		alt = base[:len(base)-5] + ".jsonc"
+	} else if ext == ".jsonc" {
+		alt = base[:len(base)-6] + ".json"
+	}
+	if alt != "" {
+		if _, err := os.Stat(alt); err == nil {
+			return alt
+		}
+	}
+	return base // return original even if missing — editor will create it
+}
+
+// cmdConfigEdit opens the arc config file in $EDITOR.
+func (m *Model) cmdConfigEdit() tea.Cmd {
+	editor := m.editorOrError()
+	if editor == "" {
 		return nil
 	}
 	home, _ := os.UserHomeDir()
-	cfgPath := filepath.Join(home, ".arc", "config.json")
-	m.openEditorInTerminal(editor, cfgPath, "config.json")
+	cfgPath := resolveConfigPath(filepath.Join(home, ".arc", "config.jsonc"))
+	m.openEditorInTerminal(editor, cfgPath, filepath.Base(cfgPath))
+	return nil
+}
+
+// cmdAgentConfigEdit opens the agent config file in $EDITOR.
+func (m *Model) cmdAgentConfigEdit() tea.Cmd {
+	editor := m.editorOrError()
+	if editor == "" {
+		return nil
+	}
+	cfgPath := resolveConfigPath(filepath.Join(m.cfg.AgentPath, "config.jsonc"))
+	m.openEditorInTerminal(editor, cfgPath, filepath.Base(cfgPath))
+	return nil
+}
+
+// cmdChatConfigEdit opens the workspace chat config file in $EDITOR.
+func (m *Model) cmdChatConfigEdit() tea.Cmd {
+	if !m.chatMode {
+		m.statusMsg = "✗ /chat-config-edit is only available in workspace chat"
+		return nil
+	}
+	editor := m.editorOrError()
+	if editor == "" {
+		return nil
+	}
+	cfgPath := resolveConfigPath(filepath.Join(m.cfg.DataRoot, "workspaces", m.chatWorkspace, "chat", "config.jsonc"))
+	m.openEditorInTerminal(editor, cfgPath, filepath.Base(cfgPath))
 	return nil
 }
 
@@ -6254,7 +6313,9 @@ var helpGroups = []struct {
 		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
 		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
 		{"/config", "", "show resolved configuration"},
-		{"/config-edit", "", "open config file in $EDITOR"},
+		{"/config-edit", "", "open config.jsonc in $EDITOR"},
+		{"/agent-config-edit", "", "open agent/config.jsonc in $EDITOR"},
+		{"/chat-config-edit", "", "open workspace chat/config.jsonc in $EDITOR"},
 		{"/tags", "", "list all tags"},
 		{"/stats", "", "show library stats"},
 		{"/models", "", "list available LLM profiles"},
