@@ -17,10 +17,10 @@ var (
 	listTag        string
 	listUnread     bool
 	listUnplayed   bool
-	listAgent      bool
-	listAgentRun   string
-	listSlugs      bool
-	listLimit      int
+	listUncollected bool
+	listAgent       bool
+	listAgentRun    string
+	listSlugs       bool
 )
 
 func init() {
@@ -28,10 +28,10 @@ func init() {
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().BoolVar(&listUnread, "unread", false, "show only unread articles")
 	listCmd.Flags().BoolVar(&listUnplayed, "unplayed", false, "show only unplayed articles")
+	listCmd.Flags().BoolVar(&listUncollected, "uncollected", false, "show only articles not in any collection")
 	listCmd.Flags().BoolVar(&listSlugs, "slugs", false, "print one slug per line (for scripting)")
 	listCmd.Flags().BoolVar(&listAgent, "agent", false, "show only articles ingested by the feed agent")
 	listCmd.Flags().StringVar(&listAgentRun, "agent-run", "", "show only articles from a specific agent run ID")
-	listCmd.Flags().IntVar(&listLimit, "limit", 50, "maximum number of results")
 	rootCmd.AddCommand(listCmd)
 }
 
@@ -48,11 +48,11 @@ Each article is shown on two lines:
            flashcards:<style>/<model>, embed:<model> (dimmed, colored by cost tier)
 
 Filtering:
-  --collection  show only articles in the given collection
-  --tag         show only articles with the given tag
-  --unread      show only articles not yet marked as read
-  --unplayed    show only articles not yet marked as played
-  --limit       cap the number of results (default 50)
+  --collection    show only articles in the given collection
+  --tag           show only articles with the given tag
+  --unread        show only articles not yet marked as read
+  --unplayed      show only articles not yet marked as played
+  --uncollected   show only articles not in any collection
 
 Examples:
   arc list
@@ -69,13 +69,13 @@ Examples:
 		}
 
 		f := store.Filter{
-			Collection: listCollection,
-			Tags:       tags,
-			Unread:     listUnread,
-			Unplayed:   listUnplayed,
-			AgentOnly:  listAgent,
-			AgentRunID: listAgentRun,
-			Limit:      listLimit,
+			Collection:  listCollection,
+			Uncollected: listUncollected,
+			Tags:        tags,
+			Unread:      listUnread,
+			Unplayed:    listUnplayed,
+			AgentOnly:   listAgent,
+			AgentRunID:  listAgentRun,
 		}
 
 		articles, err := svc.List(cmd.Context(), f)

@@ -984,18 +984,15 @@ func (s *Service) SearchCollections(ctx context.Context, query string) ([]Collec
 }
 
 // SuggestCollections calls the LLM to propose a set of collections for the whole library.
-func (s *Service) SuggestCollections(ctx context.Context, profile string, progress func(string)) ([]CollectionSuggestion, error) {
-	articles, err := s.lib.List(ctx, store.Filter{})
+func (s *Service) SuggestCollections(ctx context.Context, profile string, count, minArticles int, progress func(string)) ([]CollectionSuggestion, error) {
+	articles, err := s.lib.List(ctx, store.Filter{Uncollected: true})
 	if err != nil {
-		return nil, fmt.Errorf("list articles: %w", err)
+		return nil, fmt.Errorf("list uncollected articles: %w", err)
 	}
 
-	pipeArticles := make([]pipeline.CollectionSuggestArticle, 0, len(articles))
+	titles := make([]string, 0, len(articles))
 	for _, a := range articles {
-		pipeArticles = append(pipeArticles, pipeline.CollectionSuggestArticle{
-			Slug:  a.ID,
-			Title: a.Title,
-		})
+		titles = append(titles, a.Title)
 	}
 
 	existing, err := s.ListCollections(ctx)
@@ -1011,10 +1008,12 @@ func (s *Service) SuggestCollections(ctx context.Context, profile string, progre
 	}
 
 	results, err := pipeline.CollectionSuggest(ctx, s.cfg, pipeline.CollectionSuggestRequest{
-		Articles: pipeArticles,
-		Existing: pipeExisting,
-		Profile:  profile,
-		Progress: progress,
+		Titles:      titles,
+		Existing:    pipeExisting,
+		Profile:     profile,
+		Count:       count,
+		MinArticles: minArticles,
+		Progress:    progress,
 	})
 	if err != nil {
 		return nil, err
@@ -1023,9 +1022,9 @@ func (s *Service) SuggestCollections(ctx context.Context, profile string, progre
 	out := make([]CollectionSuggestion, 0, len(results))
 	for _, r := range results {
 		out = append(out, CollectionSuggestion{
-			Slug:        r.Slug,
-			Description: r.Description,
-			Articles:    r.Articles,
+			Slug:           r.Slug,
+			Description:    r.Description,
+			EstimatedCount: r.EstimatedCount,
 		})
 	}
 	return out, nil
@@ -1611,7 +1610,7 @@ func (s *Service) aggregateCosts() (today, thisWeek, thisMonth, total float64, b
 			continue
 		}
 		// Only count turn_complete to avoid double-counting (api_call is per-round).
-		if ce.Type != "chat_turn_complete" && ce.Type != "askx_call" {
+		if ce.Type != "chat_turn_complete" && ce.Type != "askx_call" && ce.Type != "collection_suggest" {
 			continue
 		}
 		usd := ce.Cost.CostUSD

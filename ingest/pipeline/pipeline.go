@@ -1043,23 +1043,19 @@ func resolveAPIKey(provider string) string {
 
 // CollectionSuggestRequest describes a library-wide collection suggestion call.
 type CollectionSuggestRequest struct {
-	Articles    []CollectionSuggestArticle
+	Titles      []string                     // article titles
 	Existing    []CollectionSuggestCollection // already-created collections to avoid duplicating
-	Profile     string                        // profile name override; falls back to CollectionSuggestProfileName
+	Profile     string                       // profile name override; falls back to CollectionSuggestProfileName
+	Count       int                          // optional: target number of collections (0 = let the model decide)
+	MinArticles int                          // optional: minimum articles per collection (0 = no constraint)
 	Progress    func(string)
-}
-
-// CollectionSuggestArticle is one article entry for the suggestion prompt.
-type CollectionSuggestArticle struct {
-	Slug  string
-	Title string
 }
 
 // CollectionSuggestResult is one proposed collection from library-wide analysis.
 type CollectionSuggestResult struct {
-	Slug        string
-	Description string
-	Articles    []string
+	Slug           string
+	Description    string
+	EstimatedCount int
 }
 
 // CollectionSuggest calls the LLM to suggest collections for the whole library.
@@ -1073,24 +1069,26 @@ func CollectionSuggest(ctx context.Context, cfg config.Config, req CollectionSug
 		return nil, fmt.Errorf("profile: %w", err)
 	}
 	p, err := llm.New(llm.ProviderConfig{
-		Provider: prof.Provider,
-		Model:    prof.Model,
-		Host:     prof.Host,
-		APIKey:   resolveAPIKey(prof.Provider),
-		Think:    prof.Think,
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           false,
+		MaxOutputTokens: 16384,
+		Timeout:         5 * time.Minute,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("llm provider: %w", err)
 	}
 
-	// Build prompt input
+	// Build prompt input — titles + existing collections
 	var sb strings.Builder
-	sb.WriteString("Articles:\n")
-	for _, a := range req.Articles {
-		sb.WriteString(fmt.Sprintf("- slug: %s | title: %s\n", a.Slug, a.Title))
+	sb.WriteString("Article titles:\n")
+	for _, t := range req.Titles {
+		sb.WriteString(fmt.Sprintf("- %s\n", t))
 	}
 	if len(req.Existing) > 0 {
-		sb.WriteString("\nExisting collections (do not suggest these):\n")
+		sb.WriteString("\nExisting collections (do not suggest these — they are already created):\n")
 		for _, c := range req.Existing {
 			if c.Description != "" {
 				sb.WriteString(fmt.Sprintf("- %s: %s\n", c.Slug, c.Description))
@@ -1099,30 +1097,47 @@ func CollectionSuggest(ctx context.Context, cfg config.Config, req CollectionSug
 			}
 		}
 	}
-
 	userMsg := sb.String()
+
+	// Build optional rule injections
+	var extraRules strings.Builder
+	if req.Count > 0 {
+		extraRules.WriteString(fmt.Sprintf("- Aim for approximately %d collections\n", req.Count))
+	}
+	if req.MinArticles > 0 {
+		extraRules.WriteString(fmt.Sprintf("- Each collection should cover at least %d articles from the list\n", req.MinArticles))
+	}
 	systemPrompt := cfg.CollectionSuggestPrompt()
+	systemPrompt = strings.Replace(systemPrompt, "{extra_rules}", extraRules.String(), 1)
 
 	slog.Info("collection suggest request",
 		"profile", profileName,
 		"model", prof.Model,
-		"articles", len(req.Articles),
-		"existing_collections", len(req.Existing),
+		"titles", len(req.Titles),
 		"system_prompt", systemPrompt,
 		"user_message", userMsg,
 	)
 	if req.Progress != nil {
-		req.Progress(fmt.Sprintf("suggesting collections for %d articles (model: %s)...", len(req.Articles), prof.Model))
+		req.Progress(fmt.Sprintf("suggesting collections for %d titles (model: %s)...", len(req.Titles), prof.Model))
 		req.Progress("--- system prompt ---\n" + systemPrompt)
 		req.Progress("--- user message ---\n" + userMsg)
 	}
 
-	resp, _, err := p.Chat(ctx, systemPrompt, []llm.Message{
+	resp, usage, err := p.Chat(ctx, systemPrompt, []llm.Message{
 		{Role: llm.RoleUser, Content: userMsg},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("llm: %w", err)
 	}
+
+	costUSD := cfg.CalcCost(prof.Model, usage.InputTokens, usage.OutputTokens)
+	slog.Info("collection suggest done",
+		"model", prof.Model,
+		"input_tokens", usage.InputTokens,
+		"output_tokens", usage.OutputTokens,
+		"cost_usd", costUSD,
+	)
+	appendCollectionSuggestEvent(cfg.EventsPath, prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
 
 	return parseCollectionSuggestions(resp)
 }
@@ -1287,9 +1302,9 @@ func parseCollectionSuggestions(resp string) ([]CollectionSuggestResult, error) 
 	}
 
 	var raw []struct {
-		Slug        string   `json:"slug"`
-		Description string   `json:"description"`
-		Articles    []string `json:"articles"`
+		Slug           string `json:"slug"`
+		Description    string `json:"description"`
+		EstimatedCount int    `json:"estimated_count"`
 	}
 	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
 		return nil, fmt.Errorf("parse collection suggestions: %w\nresponse: %s", err, resp)
@@ -1300,9 +1315,9 @@ func parseCollectionSuggestions(resp string) ([]CollectionSuggestResult, error) 
 			continue
 		}
 		out = append(out, CollectionSuggestResult{
-			Slug:        r.Slug,
-			Description: r.Description,
-			Articles:    r.Articles,
+			Slug:           r.Slug,
+			Description:    r.Description,
+			EstimatedCount: r.EstimatedCount,
 		})
 	}
 	return out, nil
@@ -1342,6 +1357,37 @@ func parseCollectionMatches(resp string) ([]CollectionArticleMatchResult, error)
 		}
 	}
 	return out, nil
+}
+
+func appendCollectionSuggestEvent(eventsPath, model string, inputTokens, outputTokens int, costUSD float64) {
+	type costBlock struct {
+		CostUSD float64 `json:"cost_usd"`
+		Model   string  `json:"model"`
+	}
+	ev := struct {
+		TS    time.Time `json:"ts"`
+		Type  string    `json:"type"`
+		Model string    `json:"model"`
+		Cost  costBlock `json:"cost"`
+	}{
+		TS:    time.Now().UTC(),
+		Type:  "collection_suggest",
+		Model: model,
+		Cost: costBlock{
+			CostUSD: costUSD,
+			Model:   model,
+		},
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
 }
 
 func appendEvent(path string, ev store.Event) {

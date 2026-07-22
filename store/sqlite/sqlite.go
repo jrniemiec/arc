@@ -695,7 +695,9 @@ func buildListQuery(f store.Filter) (string, []any) {
 	var where []string
 	var args []any
 
-	if f.Collection != "" {
+	if f.Uncollected {
+		where = append(where, `id NOT IN (SELECT article_id FROM article_collections WHERE collection_id != 'uncollected')`)
+	} else if f.Collection != "" {
 		where = append(where, `id IN (SELECT article_id FROM article_collections WHERE collection_id = ?)`)
 		args = append(args, f.Collection)
 	}

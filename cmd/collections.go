@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -30,6 +31,7 @@ func init() {
 	collectionsCmd.AddCommand(collectionsDeleteCmd)
 	collectionsCmd.AddCommand(collectionsRenameCmd)
 
+	collectionsListCmd.Flags().BoolP("quiet", "q", false, "output slugs only, one per line")
 	collectionsShowCmd.Flags().StringVar(&collectionsShowArticle, "article", "", "show collections that contain this article slug")
 	collectionsDeleteCmd.Flags().Bool("force", false, "skip confirmation prompt")
 	collectionsDeleteCmd.Flags().Bool("purge", false, "also delete articles that belong only to this collection")
@@ -51,6 +53,9 @@ func init() {
 	collectionsSuggestCmd.Flags().Bool("apply", false, "interactively create collections and link articles")
 	collectionsSuggestCmd.Flags().Bool("all", false, "with --apply: accept all without prompting")
 	collectionsSuggestCmd.Flags().Bool("uncollected", false, "suggest collections for all uncollected articles")
+	collectionsSuggestCmd.Flags().Int("count", 0, "target number of collections (0 = let the model decide)")
+	collectionsSuggestCmd.Flags().Int("min", 0, "minimum articles per collection (0 = no constraint)")
+	collectionsSuggestCmd.Flags().Int("limit", 0, "with --uncollected: process at most N articles (0 = no limit)")
 
 	collectionsReadCmd.Flags().Bool("flash", false, "read flash summaries (default)")
 	collectionsReadCmd.Flags().Bool("summary", false, "read full summaries")
@@ -77,16 +82,34 @@ Examples:
 }
 
 var collectionsListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all collections",
+	Use:   "list [pattern]",
+	Short: "List collections (optional glob pattern, e.g. ai-*)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 		cols, err := svc.ListCollections(cmd.Context())
 		if err != nil {
 			return fmt.Errorf("list collections: %w", err)
 		}
+		if len(args) == 1 {
+			pattern := args[0]
+			filtered := cols[:0]
+			for _, c := range cols {
+				if matched, _ := filepath.Match(pattern, c.Slug); matched {
+					filtered = append(filtered, c)
+				}
+			}
+			cols = filtered
+		}
 		if len(cols) == 0 {
 			fmt.Println("no collections — create one with: arc collections create <slug>")
+			return nil
+		}
+		quiet, _ := cmd.Flags().GetBool("quiet")
+		if quiet {
+			for _, c := range cols {
+				fmt.Fprintln(cmd.OutOrStdout(), c.Slug)
+			}
 			return nil
 		}
 		tty := isTTY(os.Stdout)
@@ -576,19 +599,17 @@ Examples:
 			if len(args) > 0 {
 				return fmt.Errorf("cannot specify a slug together with --uncollected")
 			}
-			articles, err := svc.List(cmd.Context(), store.Filter{})
+			pending, err := svc.List(cmd.Context(), store.Filter{Uncollected: true})
 			if err != nil {
 				return err
-			}
-			var pending []store.Article
-			for _, a := range articles {
-				if len(a.Collections) == 0 {
-					pending = append(pending, a)
-				}
 			}
 			if len(pending) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "no uncollected articles")
 				return nil
+			}
+			limit, _ := cmd.Flags().GetInt("limit")
+			if limit > 0 && len(pending) > limit {
+				pending = pending[:limit]
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "%d uncollected articles\n\n", len(pending))
 			for i, a := range pending {
@@ -601,8 +622,19 @@ Examples:
 		}
 
 		if len(args) == 0 {
-			// Library-wide suggestion
-			suggestions, err := svc.SuggestCollections(cmd.Context(), profile, progress)
+			// Library-wide suggestion (uncollected articles only)
+			uncollectedArticles, err := svc.List(cmd.Context(), store.Filter{Uncollected: true})
+			if err != nil {
+				return fmt.Errorf("list uncollected: %w", err)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "%d uncollected articles\n", len(uncollectedArticles))
+			if len(uncollectedArticles) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "no uncollected articles — nothing to suggest")
+				return nil
+			}
+			count, _ := cmd.Flags().GetInt("count")
+			minArticles, _ := cmd.Flags().GetInt("min")
+			suggestions, err := svc.SuggestCollections(cmd.Context(), profile, count, minArticles, progress)
 			if err != nil {
 				return fmt.Errorf("suggest collections: %w", err)
 			}
@@ -613,40 +645,26 @@ Examples:
 			fmt.Fprintln(cmd.OutOrStdout())
 			for _, s := range suggestions {
 				fmt.Fprintf(cmd.OutOrStdout(), "%s", bold(s.Slug, tty))
+				if s.EstimatedCount > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "  ~%d articles", s.EstimatedCount)
+				}
 				if s.Description != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "  %s", dim(s.Description, tty))
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "  (%d articles)\n", len(s.Articles))
-				for _, a := range s.Articles {
-					fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", a)
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections create %s\n", s.Slug)
-				for _, a := range s.Articles {
-					fmt.Fprintf(cmd.OutOrStdout(), "  arc collections add %s %s\n", a, s.Slug)
-				}
+				fmt.Fprintln(cmd.OutOrStdout())
+				fmt.Fprintf(cmd.OutOrStdout(), "  arc collections create %s %q\n", s.Slug, s.Description)
 				fmt.Fprintln(cmd.OutOrStdout())
 
 				if !apply {
 					continue
 				}
 
-				if acceptAll || promptYN(cmd, fmt.Sprintf("Create %q and add %d articles? [Y/n] ", s.Slug, len(s.Articles))) {
+				if acceptAll || promptYN(cmd, fmt.Sprintf("Create %q? [Y/n] ", s.Slug)) {
 					if err := svc.CreateCollection(cmd.Context(), s.Slug, s.Description); err != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "  skip (create): %v\n", err)
 						continue
 					}
-					if s.Description != "" {
-						_ = svc.SetCollectionDescription(cmd.Context(), s.Slug, s.Description)
-					}
-					added := 0
-					for _, a := range s.Articles {
-						if err := svc.AddToCollection(cmd.Context(), a, s.Slug); err != nil {
-							fmt.Fprintf(cmd.ErrOrStderr(), "  skip %s: %v\n", a, err)
-							continue
-						}
-						added++
-					}
-					fmt.Fprintf(cmd.OutOrStdout(), "  created %s, added %d articles\n", s.Slug, added)
+					fmt.Fprintf(cmd.OutOrStdout(), "  created %s\n", s.Slug)
 				} else {
 					fmt.Fprintln(cmd.OutOrStdout(), "  skipped")
 				}

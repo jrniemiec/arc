@@ -270,27 +270,32 @@ Rules:
 - Use only information from the provided text`
 
 // DefaultCollectionSuggestPrompt is the built-in system prompt for library-wide
-// collection suggestion. Given a list of article titles, the LLM proposes a set
-// of collection slugs with descriptions and article assignments.
-const DefaultCollectionSuggestPrompt = `You are organizing a personal knowledge base into collections.
+// collection suggestion. Given a list of article titles, the LLM proposes
+// collection definitions (slug + description). No article assignments.
+const DefaultCollectionSuggestPrompt = `You are organizing a personal knowledge base into broad, meaningful collections.
 
-Given a list of articles (slug + title), suggest 5-10 collection slugs that would
-meaningfully group them. A collection should represent a coherent topic or theme.
+Given a list of article titles, suggest collections that group them by topic.
 
 Rules:
-- Collection slugs: lowercase, hyphens only, no spaces (e.g. "machine-learning", "go-performance")
-- Each collection should have 2+ articles — do not create single-article collections
-- An article can belong to multiple collections
-- Prefer specific over generic (e.g. "transformer-architectures" over "ai")
+- Prefer broad themes over narrow sub-topics (e.g. "go" over "go-concurrency-patterns")
+- Do not over-split — fewer broad collections are better than many narrow ones
+- Collection slugs: lowercase, hyphens only, no spaces
 - Do not suggest collections that already exist (listed under "Existing collections")
+- Always include an "uncollected" collection as the last entry for articles that do not fit any theme
+- For each collection, estimate how many articles from the list would fit
 - Return JSON only, no prose
-
+{extra_rules}
 Return a JSON array:
 [
   {
-    "slug": "machine-learning",
-    "description": "ML papers, architectures, and research",
-    "articles": ["slug-1", "slug-2"]
+    "slug": "distributed-systems",
+    "description": "Consensus, consistency, coordination, and distributed architecture patterns",
+    "estimated_count": 45
+  },
+  {
+    "slug": "uncollected",
+    "description": "Articles that do not fit any thematic collection",
+    "estimated_count": 30
   }
 ]`
 

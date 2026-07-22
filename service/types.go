@@ -180,9 +180,9 @@ type FlashcardsResult struct {
 
 // CollectionSuggestion is a proposed new collection from library-wide analysis.
 type CollectionSuggestion struct {
-	Slug        string
-	Description string
-	Articles    []string // article slugs
+	Slug           string
+	Description    string
+	EstimatedCount int
 }
 
 // CollectionMatch is a ranked suggestion for which collection an article fits.
