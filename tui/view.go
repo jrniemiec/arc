@@ -2522,7 +2522,12 @@ func (m Model) renderStatusLine() string {
 		return renderWaveIndicatorLeading(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
 	}
 	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
-		return m.renderChatStatusLine()
+		// On the Workspaces sub-tab with nothing active, fall through to show
+		// "Workspaces · N total" consistently with Articles/Collections tabs.
+		if m.activeTab != tabLibrary || m.navSubTab != navSubTabWorkspaces ||
+			m.chatStreaming || m.ttsPlayer.Playing() || m.statusMsg != "" {
+			return m.renderChatStatusLine()
+		}
 	}
 	if m.ttsPlayer.Playing() && m.contentTTSText != "" && !m.selectionMode {
 		rate := m.cfg.TTSRate
@@ -2573,6 +2578,18 @@ func (m Model) renderStatusLine() string {
 		case navSubTabWorkspaces:
 			if m.workspacesLoaded {
 				return fg(t.Dimmed, fmt.Sprintf(" Workspaces · %d total", len(m.workspaceItems)))
+			}
+		}
+	}
+	if m.activeTab == tabAgent {
+		switch m.agentSubTab {
+		case agentSubTabRuns:
+			if m.agentRunsLoaded {
+				return fg(t.Dimmed, fmt.Sprintf(" Runs · %d total", len(m.agentRuns)))
+			}
+		case agentSubTabFeeds:
+			if m.agentFeedsLoaded {
+				return fg(t.Dimmed, fmt.Sprintf(" Feeds · %d total", len(m.agentFeeds)))
 			}
 		}
 	}
