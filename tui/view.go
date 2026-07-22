@@ -2649,18 +2649,63 @@ func (m Model) renderResourceOverlay() string {
 	out = append(out, " "+left)
 	out = append(out, fg(t.BoxBorder, strings.Repeat("─", w)))
 
-	// Scrollable content.
-	start := m.resourceScroll
-	end := start + contentH
-	if end > len(m.resourceLines) {
-		end = len(m.resourceLines)
+	// Scrollable content — wrap long source lines to fit the terminal width.
+	lineW := w - 2 // 2 chars for "▶ " / "  " prefix
+	if lineW < 1 {
+		lineW = 1
 	}
-	for i := start; i < end; i++ {
-		line := m.resourceLines[i]
-		if i == m.resourceCursor {
-			out = append(out, fgBold(t.InputPrompt, "▶ ")+fg(t.TopBarText, line))
-		} else {
-			out = append(out, fg(t.Dimmed, "  ")+fg(t.ChatAssistant, line))
+	// wrapSourceLine splits one source line into visual chunks of at most lineW
+	// runes, breaking at word boundaries where possible.
+	wrapSourceLine := func(s string) []string {
+		if s == "" {
+			return []string{""}
+		}
+		var chunks []string
+		for len(s) > 0 {
+			runes := []rune(s)
+			if len(runes) <= lineW {
+				chunks = append(chunks, s)
+				break
+			}
+			// Find the last space at or before lineW.
+			cut := lineW
+			for cut > 0 && runes[cut] != ' ' {
+				cut--
+			}
+			if cut == 0 {
+				// No space found — hard break at lineW.
+				cut = lineW
+			}
+			chunks = append(chunks, string(runes[:cut]))
+			// Skip the breaking space if we broke on one.
+			rest := runes[cut:]
+			if len(rest) > 0 && rest[0] == ' ' {
+				rest = rest[1:]
+			}
+			s = string(rest)
+		}
+		return chunks
+	}
+
+	// Render source lines starting from resourceScroll, filling contentH visual rows.
+	visualRows := 0
+	for srcIdx := m.resourceScroll; srcIdx < len(m.resourceLines) && visualRows < contentH; srcIdx++ {
+		chunks := wrapSourceLine(m.resourceLines[srcIdx])
+		isCursor := srcIdx == m.resourceCursor
+		for ci, chunk := range chunks {
+			if visualRows >= contentH {
+				break
+			}
+			if isCursor {
+				prefix := fg(t.Dimmed, "  ")
+				if ci == 0 {
+					prefix = fgBold(t.InputPrompt, "▶ ")
+				}
+				out = append(out, prefix+fg(t.TopBarText, chunk))
+			} else {
+				out = append(out, fg(t.Dimmed, "  ")+fg(t.ChatAssistant, chunk))
+			}
+			visualRows++
 		}
 	}
 	// Pad remaining content lines.
