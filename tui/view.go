@@ -2568,16 +2568,25 @@ func (m Model) renderStatusLine() string {
 		case navSubTabCollections:
 			if m.collectionsLoaded {
 				n := 0
+				articles := 0
 				for _, r := range m.navRows {
 					if r.kind == rowCollection {
 						n++
+						articles += r.colCount
 					}
 				}
-				return fg(t.Dimmed, fmt.Sprintf(" Collections · %d total", n))
+				return fg(t.Dimmed, fmt.Sprintf(" Collections · %d total · %d articles", n, articles))
 			}
 		case navSubTabWorkspaces:
 			if m.workspacesLoaded {
-				return fg(t.Dimmed, fmt.Sprintf(" Workspaces · %d total", len(m.workspaceItems)))
+				articles, collections, resources := 0, 0, 0
+				for _, ws := range m.workspaceItems {
+					articles += ws.articleCount
+					collections += ws.collectionCount
+					resources += ws.resourceCount
+				}
+				return fg(t.Dimmed, fmt.Sprintf(" Workspaces · %d total · %d articles · %d collections · %d resources",
+					len(m.workspaceItems), articles, collections, resources))
 			}
 		}
 	}

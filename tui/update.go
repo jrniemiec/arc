@@ -3513,6 +3513,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		return []cmdCompletion{
 			{cmd: "list", desc: "go to Collections sub-tab"},
 			{cmd: "search", desc: "<query>  filter by name/slug"},
+			{cmd: "reload", desc: "refresh collections list from disk"},
 		}
 
 	case "/workspace":
@@ -3524,7 +3525,6 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			{cmd: "describe", arg: "<text>", desc: "set workspace description"},
 			{cmd: "add", arg: "article|collection <slug>", desc: "add article or collection; resets chat engine"},
 			{cmd: "remove", arg: "article|collection <slug>", desc: "remove article or collection; resets chat engine"},
-			{cmd: "reload", desc: "reset chat engine to pick up corpus changes"},
 		}
 
 	case "/workspace add":
@@ -4014,11 +4014,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 
 	case "/reload":
-		if sub != navSubTabWorkspaces {
-			m.statusMsg = "✗ /reload is only available in Workspaces context"
+		switch sub {
+		case navSubTabWorkspaces:
+			return m.cmdWorkspaceReload()
+		case navSubTabCollections:
+			return m.cmdCollectionReload()
+		default:
+			m.statusMsg = "✗ /reload is only available in Workspaces or Collections context"
 			return nil
 		}
-		return m.cmdWorkspaceReload()
 
 	case "/populate":
 		if sub != navSubTabWorkspaces {
@@ -4100,6 +4104,8 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 			} else {
 				m.filterCollections(arg)
 			}
+		case "reload":
+			return tea.Batch(switchCmd, m.cmdCollectionReload())
 		default:
 			m.statusMsg = "✗ unknown collection command: " + verb
 		}
@@ -4130,8 +4136,6 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 			}
 		case "add", "remove":
 			return tea.Batch(switchCmd, m.cmdWorkspaceMembership(verb, arg))
-		case "reload":
-			return tea.Batch(switchCmd, m.cmdWorkspaceReload())
 		default:
 			m.statusMsg = "✗ unknown workspace command: " + verb
 		}
@@ -5402,6 +5406,17 @@ func parseAgentRunFlags(arg string) (dryRun bool, focus string) {
 
 // ── Collection commands ──────────────────────────────────────────────────────
 
+// cmdCollectionReload re-fetches the full collections list from disk.
+func (m *Model) cmdCollectionReload() tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
+	m.collectionsLoaded = false
+	m.statusMsg = "reloading collections…"
+	return loadCollectionsTree(m.svc)
+}
+
 // cmdDeleteCollection deletes the selected collection after confirmation.
 func (m *Model) cmdDeleteCollection() tea.Cmd {
 	col := m.selectedCollection()
@@ -6290,6 +6305,7 @@ var helpGroups = []struct {
 	{"collection", []cmdCompletion{
 		{"/search", "<query>", "filter collections by name/slug"},
 		{"/clear", "", "clear active filter"},
+		{"/reload", "", "refresh collections list from disk"},
 		{"/delete", "", "delete current collection"},
 		{"arc collections create", "<slug>", "create a new collection  (CLI only)"},
 		{"arc collections add", "<article> <slug>", "add article to collection  (CLI only)"},

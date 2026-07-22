@@ -642,6 +642,7 @@ var collectionCommands = []cmdCompletion{
 	{"/search", "<query>", "filter collections by name/slug"},
 	{"/clear", "", "clear active filter"},
 	{"/delete", "[slug]", "delete collection (selected or by name)"},
+	{"/reload", "", "refresh collections list from disk"},
 }
 
 // workspaceCommands are available when the Workspaces sub-tab is active.
