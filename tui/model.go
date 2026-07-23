@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1848,7 +1847,6 @@ func (m Model) SaveState() {
 				s.WsExpandedCol = row.colSlug // non-empty only when article is inside a collection
 			}
 		}
-		slog.Debug("SaveState: workspace", "name", s.Workspace, "expanded", s.WsExpanded, "expandedCol", s.WsExpandedCol, "wsArticle", s.WsArticle)
 	}
 	// Store currently selected article slug.
 	if m.navCursor >= 0 && m.navCursor < len(m.navItems) {
@@ -1863,7 +1861,6 @@ func (m Model) SaveState() {
 			if row.expanded {
 				s.ExpandedCollection = row.colSlug
 			}
-			slog.Debug("SaveState: cursor on collection", "slug", row.colSlug, "expanded", row.expanded)
 		case rowArticle:
 			if row.indented {
 				// Walk back to find the parent collection header.
@@ -1878,10 +1875,8 @@ func (m Model) SaveState() {
 					s.NavArticle = row.item.id
 				}
 			}
-			slog.Debug("SaveState: cursor on article", "article", s.NavArticle, "expandedCol", s.ExpandedCollection)
 		}
 	}
-	slog.Debug("SaveState: persisting", "collection", s.Collection, "expandedCollection", s.ExpandedCollection, "navArticle", s.NavArticle)
 	saveTUIState(m.cfg.DataRoot, s)
 }
 
