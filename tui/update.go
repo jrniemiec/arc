@@ -1134,16 +1134,31 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.acceptCompletion()
 			return nil
 		}
-		// Tab toggles Nav ↔ Content; from anywhere else, go to Nav.
-		if m.focus == paneNav {
+		// Tab cycles forward: Nav → Content → Split (if open) → Nav.
+		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen
+		switch {
+		case m.focus == paneNav:
 			m.setFocusPane(paneContent)
-		} else {
+		case m.focus == paneContent && !m.splitPaneFocused() && splitOpen:
+			clog.Debugf("tab: content → split pane")
+			m.focusSplitPane()
+		default:
 			m.setFocusPane(paneNav)
 		}
 		return nil
 	case key.Matches(msg, keys.PanePrev):
-		// Shift+Tab always jumps to Nav.
-		m.setFocusPane(paneNav)
+		// Shift+Tab cycles backward: Nav → Split (if open) → Content → Nav.
+		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen
+		switch {
+		case m.focus == paneNav && splitOpen:
+			clog.Debugf("shift-tab: nav → split pane")
+			m.focusSplitPane()
+		case m.focus == paneContent && m.splitPaneFocused():
+			clog.Debugf("shift-tab: split pane → content")
+			m.unfocusSplitPane()
+		default:
+			m.setFocusPane(paneNav)
+		}
 		return nil
 	}
 
@@ -1195,6 +1210,33 @@ func (m *Model) setFocusPane(p focusPane) {
 			m.achatBoxCursor = n - 1
 		}
 	}
+}
+
+// splitPaneFocused reports whether the currently visible split pane has focus.
+func (m *Model) splitPaneFocused() bool {
+	return m.previewFocused || m.scratchFocused || m.askxFocused
+}
+
+// focusSplitPane gives focus to whichever split pane is currently open.
+// Assumes at least one split pane is open (mutually exclusive in practice).
+func (m *Model) focusSplitPane() {
+	m.focus = paneContent
+	switch {
+	case m.previewOpen:
+		m.previewFocused = true
+	case m.scratchOpen:
+		m.scratchFocused = true
+	case m.askxOpen:
+		m.askxFocused = true
+	}
+}
+
+// unfocusSplitPane clears split-pane focus, leaving focus on paneContent (main area).
+func (m *Model) unfocusSplitPane() {
+	m.previewFocused = false
+	m.scratchFocused = false
+	m.askxFocused = false
+	// m.focus stays paneContent — main content area retains keyboard focus.
 }
 
 // handleTabBarKey handles keys when the top tab bar has focus.
