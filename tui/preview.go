@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jrniemiec/arc/internal/clog"
 	storefs "github.com/jrniemiec/arc/store/fs"
 )
 
@@ -20,14 +21,17 @@ import (
 //   - Open, not focused   → focus
 //   - Open, focused       → close
 func (m *Model) togglePreview() {
+	clog.Debugf("togglePreview: open=%v focused=%v focus=%v", m.previewOpen, m.previewFocused, m.focus)
 	if m.previewOpen {
 		if !m.previewFocused {
 			// Already open but unfocused — just focus it.
+			clog.Debugf("togglePreview: refocusing preview")
 			m.previewFocused = true
 			m.focus = paneContent
 			return
 		}
 		// Open and focused — close.
+		clog.Debugf("togglePreview: closing preview")
 		m.closePreview()
 		return
 	}

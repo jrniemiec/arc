@@ -19,6 +19,7 @@ import (
 
 	agentpkg "github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/internal/clog"
 	"github.com/jrniemiec/arc/service"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
@@ -1169,10 +1170,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // setFocusPane switches focus to the given pane and resets related state.
 func (m *Model) setFocusPane(p focusPane) {
+	clog.Debugf("setFocusPane: %v → %v (previewFocused=%v scratchFocused=%v)", m.focus, p, m.previewFocused, m.scratchFocused)
 	m.focus = p
 	m.scratchFocused = false
 	m.askxFocused = false
 	m.achatFocused = false
+	m.previewFocused = false
 	if p == paneCommand {
 		m.cursorVisible = true
 	}
@@ -7079,12 +7082,14 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					}
 					m.activeTab = t
 					m.focus = paneTabBar
+					m.previewFocused = false
 				}
 				return nil
 			}
 			// Click on nav sub-tab bar (first row of main area = topBarHeight).
 			subTabRow := topBarHeight
 			if msg.Y == subTabRow && msg.X < m.dividerCol() {
+				m.previewFocused = false
 				switch m.activeTab {
 				case tabLibrary:
 					if sub := navSubTabHitTest(msg.X); sub >= 0 {
@@ -7108,6 +7113,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			cmdRow := m.height - hintBarHeight - m.completionCount() - statusSepHeight - cmdBarHeight
 			if msg.Y == cmdRow {
 				m.focus = paneCommand
+				m.previewFocused = false
 				m.cursorVisible = true
 				return nil
 			}
@@ -7119,8 +7125,10 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			// Click in nav pane (left of divider) — focus nav, update cursor row.
 			if msg.X < divCol {
+				clog.Debugf("mouse: nav click, clearing previewFocused=%v", m.previewFocused)
 				m.focus = paneNav
 				m.scratchFocused = false
+				m.previewFocused = false
 				if cmd := m.clickNavRow(msg.Y); cmd != nil {
 					return cmd
 				}
