@@ -722,7 +722,7 @@ func (m Model) renderNavCollections(maxLines int) []string {
 				idTag = fmt.Sprintf("%d ", row.item.numID)
 				idTagLen = len(idTag)
 			}
-			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot)-idTagLen)
+			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot)-idTagLen-1)
 			if selected {
 				line = m.navSelected(prefix + idTag + dot + title)
 			} else if row.item.favorite {
@@ -1050,7 +1050,7 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 		if m.achatHasChat[item.id] {
 			chatSuffix = " 💬"
 		}
-		title := truncate(oneLine(item.title), m.navWidth()-idWidth-4-lipgloss.Width(chatSuffix)) + chatSuffix
+		title := truncate(oneLine(item.title), m.navWidth()-len(prefix)-idWidth-1-len(chatSuffix)) + chatSuffix
 		var line string
 		if i == m.navCursor {
 			line = m.navSelected(idStr + prefix + title)
