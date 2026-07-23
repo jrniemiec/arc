@@ -15,6 +15,7 @@ import (
 
 	"github.com/jrniemiec/arc/chat"
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/internal/clog"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
 	"github.com/jrniemiec/llm"
@@ -24,6 +25,7 @@ import (
 
 // toggleAskX toggles the global askX pane (Ctrl+X). Pre-fills input with "/AskX ".
 func (m *Model) toggleAskX() {
+	clog.Debugf("toggleAskX: askxOpen=%v chatMode=%v chatWorkspace=%q wsCursor=%d", m.askxOpen, m.chatMode, m.chatWorkspace, m.wsCursor)
 	if m.askxOpen {
 		m.closeAskX()
 		m.clearAskXInput()
@@ -277,6 +279,7 @@ func expandHome(path string) string {
 // cmdAskX handles /askX <prompt>. Empty prompt toggles pane; non-empty sends query.
 // global=true targets the global askX context; global=false uses workspace-local.
 func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
+	clog.Debugf("cmdAskX: prompt=%q global=%v askxOpen=%v chatMode=%v chatWorkspace=%q", prompt, global, m.askxOpen, m.chatMode, m.chatWorkspace)
 	if prompt == "" {
 		// Toggle pane visibility.
 		if m.askxOpen {
