@@ -1050,7 +1050,7 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 		if m.achatHasChat[item.id] {
 			chatSuffix = " 💬"
 		}
-		title := truncate(oneLine(item.title), m.navWidth()-len(prefix)-idWidth-1-len(chatSuffix)) + chatSuffix
+		title := truncate(oneLine(item.title), m.navWidth()-idWidth-4-lipgloss.Width(chatSuffix)) + chatSuffix
 		var line string
 		if i == m.navCursor {
 			line = m.navSelected(idStr + prefix + title)
