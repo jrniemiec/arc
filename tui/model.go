@@ -206,6 +206,32 @@ func (a agentSubTab) String() string {
 	}
 }
 
+// statsSubTab identifies the active sub-tab inside the Stats nav pane.
+type statsSubTab int
+
+const (
+	statsSubTabOverview  statsSubTab = iota
+	statsSubTabCost
+	statsSubTabTokens
+	statsSubTabRequests
+	statsSubTabCount
+)
+
+func (s statsSubTab) String() string {
+	switch s {
+	case statsSubTabOverview:
+		return "Overview"
+	case statsSubTabCost:
+		return "Cost"
+	case statsSubTabTokens:
+		return "Tokens"
+	case statsSubTabRequests:
+		return "Requests"
+	default:
+		return "?"
+	}
+}
+
 // navRowKind distinguishes collection header rows from article rows.
 type navRowKind int
 
@@ -357,6 +383,9 @@ type Model struct {
 
 	// Agent nav — sub-tab
 	agentSubTab agentSubTab
+
+	// Stats nav — sub-tab
+	statsSubTab statsSubTab
 
 	// Agent nav — Runs sub-tab
 	agentRuns       []agentpkg.RunRecord
@@ -1703,6 +1732,7 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		activeTab:          tabFromString(restored.ActiveTab),
 		navSubTab:          subTabFromString(restored.SubTab),
 		agentSubTab:        agentSubTabFromString(restored.AgentSubTab),
+		statsSubTab:        statsSubTabFromString(restored.StatsSubTab),
 		agentContentCursor: restored.AgentContentCursor,
 		focus:           paneNav,
 		themeMode:       themeMode,
@@ -1742,6 +1772,7 @@ func (m Model) SaveState() {
 		ActiveTab:          tabToString(m.activeTab),
 		SubTab:             subTabToString(m.navSubTab),
 		AgentSubTab:        agentSubTabToString(m.agentSubTab),
+		StatsSubTab:        statsSubTabToString(m.statsSubTab),
 		AgentContentCursor: m.agentContentCursor,
 		WsFocus:            m.wsFocusName,
 	}

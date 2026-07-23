@@ -124,6 +124,8 @@ Examples:
 			month := colorize(fmt.Sprintf("$%.4f", stats.CostThisMonth), costColor(stats.CostThisMonth), tty)
 			total := colorize(fmt.Sprintf("$%.4f", stats.CostTotal), costColor(stats.CostTotal), tty)
 			fmt.Fprintf(w, "Cost:        %s this month  (%s total)\n", month, total)
+			fmt.Fprintf(w, "  today:     $%.4f\n", stats.CostToday)
+			fmt.Fprintf(w, "  7d:        $%.4f\n", stats.CostThisWeek)
 
 			if len(stats.CostByModel) > 0 {
 				fmt.Fprintf(w, "Cost by model:\n")
@@ -141,10 +143,113 @@ Examples:
 					fmt.Fprintf(w, "  %s  $%.4f\n", label, p.usd)
 				}
 			}
+
+			if len(stats.CostByType) > 0 {
+				fmt.Fprintf(w, "Cost by operation:\n")
+				type kv struct {
+					op  string
+					usd float64
+				}
+				var pairs []kv
+				for op, u := range stats.CostByType {
+					pairs = append(pairs, kv{op, u})
+				}
+				sort.Slice(pairs, func(i, j int) bool { return pairs[i].usd > pairs[j].usd })
+				for _, p := range pairs {
+					fmt.Fprintf(w, "  %-40s  $%.4f\n", p.op, p.usd)
+				}
+			}
+
+			if stats.AvgCostPerIngest > 0 || stats.AvgCostPerChatTurn > 0 || stats.AvgCostPerAskX > 0 {
+				fmt.Fprintf(w, "Efficiency:\n")
+				if stats.AvgCostPerIngest > 0 {
+					fmt.Fprintf(w, "  avg per ingest:      $%.4f\n", stats.AvgCostPerIngest)
+				}
+				if stats.AvgCostPerChatTurn > 0 {
+					fmt.Fprintf(w, "  avg per chat turn:   $%.4f\n", stats.AvgCostPerChatTurn)
+				}
+				if stats.AvgCostPerAskX > 0 {
+					fmt.Fprintf(w, "  avg per askx:        $%.4f\n", stats.AvgCostPerAskX)
+				}
+			}
+		}
+
+		// Token usage
+		if stats.TotalInputTokens > 0 || stats.TotalOutputTokens > 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "Tokens:      %s in  %s out\n",
+				fmtTokens(stats.TotalInputTokens), fmtTokens(stats.TotalOutputTokens))
+			if len(stats.TokensByModel) > 0 {
+				fmt.Fprintf(w, "Tokens by model:\n")
+				type kv struct {
+					model  string
+					in, out int
+				}
+				var pairs []kv
+				for m, t := range stats.TokensByModel {
+					pairs = append(pairs, kv{m, t[0], t[1]})
+				}
+				sort.Slice(pairs, func(i, j int) bool { return pairs[i].in+pairs[i].out > pairs[j].in+pairs[j].out })
+				for _, p := range pairs {
+					label := colorize(fmt.Sprintf("%-40s", p.model), tierByModel[p.model], tty)
+					fmt.Fprintf(w, "  %s  %s in  %s out\n", label, fmtTokens(p.in), fmtTokens(p.out))
+				}
+			}
+		}
+
+		// Request counts
+		if stats.TotalRequests > 0 {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "Requests:    %d\n", stats.TotalRequests)
+			if len(stats.RequestsByType) > 0 {
+				fmt.Fprintf(w, "Requests by operation:\n")
+				type kv struct {
+					op    string
+					count int
+				}
+				var pairs []kv
+				for op, c := range stats.RequestsByType {
+					pairs = append(pairs, kv{op, c})
+				}
+				sort.Slice(pairs, func(i, j int) bool { return pairs[i].count > pairs[j].count })
+				for _, p := range pairs {
+					fmt.Fprintf(w, "  %-40s  %d\n", p.op, p.count)
+				}
+			}
+			if len(stats.RequestsByModel) > 0 {
+				fmt.Fprintf(w, "Requests by model:\n")
+				type kv struct {
+					model string
+					count int
+				}
+				var pairs []kv
+				for m, c := range stats.RequestsByModel {
+					pairs = append(pairs, kv{m, c})
+				}
+				sort.Slice(pairs, func(i, j int) bool { return pairs[i].count > pairs[j].count })
+				for _, p := range pairs {
+					label := colorize(fmt.Sprintf("%-40s", p.model), tierByModel[p.model], tty)
+					fmt.Fprintf(w, "  %s  %d\n", label, p.count)
+				}
+			}
 		}
 
 		return nil
 	},
+}
+
+// fmtTokens renders a token count with K/M suffix for CLI output.
+func fmtTokens(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 // sortedKeys returns map keys sorted alphabetically.

@@ -462,22 +462,17 @@ func (m Model) renderNavPane(height int) []string {
 		case agentSubTabFeeds:
 			lines = append(lines, m.renderNavAgentFeeds(height-2)...)
 		}
+	case tabStats:
+		lines = append(lines, m.renderStatsNavSubTabBar())
+		lines = append(lines, "")
+		lines = append(lines, m.renderNavStats(height-2)...)
 	default:
 		// Other tabs keep a single label header.
-		var headerLabel string
-		switch m.activeTab {
-		case tabStats:
-			headerLabel = "Overview"
-		default:
-			headerLabel = m.activeTab.String()
-		}
+		headerLabel := m.activeTab.String()
 		if m.focus == paneNav {
 			lines = append(lines, fgBold(t.NavGroup, headerLabel))
 		} else {
 			lines = append(lines, fg(t.NavDimmed, headerLabel))
-		}
-		if m.activeTab == tabStats {
-			lines = append(lines, fg(t.NavDimmed, "(stats)"))
 		}
 	}
 
@@ -1657,6 +1652,143 @@ func agentNavSubTabHitTest(x int) agentSubTab {
 	return -1
 }
 
+// renderStatsNavSubTabBar renders the Overview / Cost / Tokens / Requests sub-tab row.
+func (m Model) renderStatsNavSubTabBar() string {
+	t := ActiveTheme
+	w := m.navWidth()
+	var parts []string
+	visibleWidth := 0
+	for i := statsSubTab(0); i < statsSubTabCount; i++ {
+		label := i.String()
+		text := " " + label + " "
+		if i == m.statsSubTab {
+			text = "[" + label + "]"
+		}
+		textWidth := len([]rune(text))
+		if visibleWidth+textWidth > w {
+			break
+		}
+		if i == m.statsSubTab {
+			if m.focus == paneNavSubTab {
+				parts = append(parts, fgBold(t.Accent, text))
+			} else {
+				parts = append(parts, fgBold(t.TabActive, text))
+			}
+		} else {
+			parts = append(parts, fg(t.TabInactive, text))
+		}
+		visibleWidth += textWidth
+		if int(i) < int(statsSubTabCount)-1 {
+			sep := "  "
+			if visibleWidth+len(sep) > w {
+				break
+			}
+			parts = append(parts, fg(t.Dimmed, sep))
+			visibleWidth += len(sep)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// statsNavSubTabHitTest returns the statsSubTab at column x, or -1 if none.
+func statsNavSubTabHitTest(x int) statsSubTab {
+	col := 0
+	for i := statsSubTab(0); i < statsSubTabCount; i++ {
+		label := i.String()
+		width := len(label) + 2
+		if x >= col && x < col+width {
+			return i
+		}
+		col += width
+		if int(i) < int(statsSubTabCount)-1 {
+			col += 2
+		}
+	}
+	return -1
+}
+
+// renderNavStats renders the compact nav-pane summary for the active stats sub-tab.
+func (m Model) renderNavStats(maxLines int) []string {
+	t := ActiveTheme
+	if !m.statsLoaded {
+		return []string{fg(t.NavDimmed, "  loading…")}
+	}
+	s := m.stats
+	w := m.navWidth()
+	row := func(label, val string) string {
+		full := "  " + label
+		pad := w - len([]rune(full)) - len([]rune(val)) - 1
+		if pad < 2 {
+			pad = 2
+		}
+		return fg(t.NavDimmed, full) + strings.Repeat(" ", pad) + fg(t.NavText, val)
+	}
+
+	var lines []string
+	switch m.statsSubTab {
+	case statsSubTabOverview:
+		lines = append(lines, row("Articles", fmt.Sprintf("%d", s.TotalArticles)))
+		lines = append(lines, row("Unread", fmt.Sprintf("%d", s.Unread)))
+		lines = append(lines, row("Unplayed", fmt.Sprintf("%d", s.Unplayed)))
+		lines = append(lines, row("Collections", fmt.Sprintf("%d", s.TotalCollections)))
+		lines = append(lines, row("Tags", fmt.Sprintf("%d", s.TotalTags)))
+		lines = append(lines, row("With embedding", fmt.Sprintf("%d", s.EmbedCoverage)))
+
+	case statsSubTabCost:
+		lines = append(lines, fg(t.NavDimmed, "  Summary"))
+		lines = append(lines, row("  today", formatUSD(s.CostToday)))
+		lines = append(lines, row("  7d", formatUSD(s.CostThisWeek)))
+		lines = append(lines, row("  30d", formatUSD(s.CostThisMonth)))
+		lines = append(lines, row("  total", formatUSD(s.CostTotal)))
+		if len(s.CostByModel) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, fg(t.NavDimmed, "  By model"))
+			for _, mc := range sortedModelCosts(s.CostByModel) {
+				lines = append(lines, row("  "+mc.model, formatUSD(mc.usd)))
+			}
+		}
+
+	case statsSubTabTokens:
+		lines = append(lines, fg(t.NavDimmed, "  Summary"))
+		lines = append(lines, row("  in", formatTokenCount(s.TotalInputTokens)))
+		lines = append(lines, row("  out", formatTokenCount(s.TotalOutputTokens)))
+		if s.TotalOutputTokens > 0 {
+			ratio := float64(s.TotalInputTokens) / float64(s.TotalOutputTokens)
+			lines = append(lines, row("  ratio", fmt.Sprintf("%.1f:1", ratio)))
+		}
+		if len(s.TokensByModel) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, fg(t.NavDimmed, "  By model"))
+			for _, mt := range sortedModelTokens(s.TokensByModel) {
+				lines = append(lines, row("  "+mt.model,
+					formatTokenCount(mt.in)+" / "+formatTokenCount(mt.out)))
+			}
+		}
+
+	case statsSubTabRequests:
+		lines = append(lines, row("Total", fmt.Sprintf("%d", s.TotalRequests)))
+		if len(s.RequestsByType) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, fg(t.NavDimmed, "  By type"))
+			for _, rt := range sortedRequestTypes(s.RequestsByType) {
+				lines = append(lines, row("  "+rt.opType, fmt.Sprintf("%d", rt.count)))
+			}
+		}
+		if len(s.RequestsByModel) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, fg(t.NavDimmed, "  By model"))
+			for _, rm := range sortedRequestModels(s.RequestsByModel) {
+				lines = append(lines, row("  "+rm.model, fmt.Sprintf("%d", rm.count)))
+			}
+		}
+	}
+
+	for len(lines) < maxLines {
+		lines = append(lines, "")
+	}
+	return lines[:maxLines]
+}
+
 // renderNavAgentRuns renders the runs list in the Agent nav pane.
 func (m Model) renderNavAgentRuns(maxLines int) []string {
 	t := ActiveTheme
@@ -2144,63 +2276,219 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 
 func (m Model) renderContentStats(height, width int) []string {
 	t := ActiveTheme
-	var lines []string
-
-	lines = append(lines, fgBold(t.ContentTitle, "Knowledge Base Stats"))
-	lines = append(lines, "")
-
 	if !m.statsLoaded {
-		lines = append(lines, fg(t.ContentDimmed, "Loading…"))
-	} else {
-		s := m.stats
-		row := func(label string, val string) string {
-			return fg(t.ContentDimmed, fmt.Sprintf("  %-20s", label)) + fg(t.ContentText, val)
-		}
-		lines = append(lines, row("Articles", fmt.Sprintf("%d", s.TotalArticles)))
-		lines = append(lines, row("Unread", fmt.Sprintf("%d", s.Unread)))
-		lines = append(lines, row("Collections", fmt.Sprintf("%d", s.TotalCollections)))
-		lines = append(lines, row("With embedding", fmt.Sprintf("%d", s.EmbedCoverage)))
-		lines = append(lines, "")
-		lines = append(lines, row("Cost today", formatUSD(s.CostToday)))
-		lines = append(lines, row("Cost 7d", formatUSD(s.CostThisWeek)))
-		lines = append(lines, row("Cost 30d", formatUSD(s.CostThisMonth)))
-		lines = append(lines, row("Cost total", formatUSD(s.CostTotal)))
-
-		// Per-model spend, sorted descending, skipping zero.
-		type modelCost struct {
-			model string
-			usd   float64
-		}
-		var mc []modelCost
-		for model, usd := range s.CostByModel {
-			if usd > 0 {
-				mc = append(mc, modelCost{model, usd})
-			}
-		}
-		sort.Slice(mc, func(i, j int) bool { return mc[i].usd > mc[j].usd })
-		if len(mc) > 0 {
+		lines := []string{fgBold(t.ContentTitle, m.statsSubTab.String()), "", fg(t.ContentDimmed, "Loading…")}
+		for len(lines) < height {
 			lines = append(lines, "")
-			lines = append(lines, fg(t.ContentDimmed, "  Spend by model"))
-			// Compute column width from longest model name.
-			maxModelW := 0
-			for _, entry := range mc {
-				if len(entry.model) > maxModelW {
-					maxModelW = len(entry.model)
-				}
-			}
-			modelRow := func(model, val string) string {
-				return fg(t.ContentDimmed, fmt.Sprintf("    %-*s", maxModelW+2, model)) + fg(t.ContentText, val)
-			}
-			for _, entry := range mc {
-				lines = append(lines, modelRow(entry.model, formatUSD(entry.usd)))
-			}
 		}
+		return lines[:height]
+	}
+
+	contentW := width
+	var lines []string
+	switch m.statsSubTab {
+	case statsSubTabOverview:
+		lines = m.renderContentStatsOverview(contentW)
+	case statsSubTabCost:
+		lines = m.renderContentStatsCost(contentW)
+	case statsSubTabTokens:
+		lines = m.renderContentStatsTokens(contentW)
+	case statsSubTabRequests:
+		lines = m.renderContentStatsRequests(contentW)
 	}
 
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
 	return lines[:height]
+}
+
+func (m Model) renderContentStatsOverview(w int) []string {
+	t := ActiveTheme
+	s := m.stats
+	row := statsRow(t, w)
+
+	var lines []string
+	lines = append(lines, fgBold(t.ContentTitle, "Knowledge Base"))
+	lines = append(lines, "")
+	lines = append(lines, row("Articles", fmt.Sprintf("%d", s.TotalArticles)))
+	lines = append(lines, row("Unread", fmt.Sprintf("%d", s.Unread)))
+	lines = append(lines, row("Unplayed", fmt.Sprintf("%d", s.Unplayed)))
+	lines = append(lines, row("Collections", fmt.Sprintf("%d", s.TotalCollections)))
+	lines = append(lines, row("Tags", fmt.Sprintf("%d", s.TotalTags)))
+	embedPct := 0
+	if s.TotalArticles > 0 {
+		embedPct = s.EmbedCoverage * 100 / s.TotalArticles
+	}
+	lines = append(lines, row("With embedding", fmt.Sprintf("%d/%d %d%%", s.EmbedCoverage, s.TotalArticles, embedPct)))
+
+	// Articles by collection
+	if len(s.ArticlesByCollection) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  Articles by Collection"))
+		type colRow struct {
+			name  string
+			count int
+			embed int
+		}
+		var rows []colRow
+		var uncollected *colRow
+		for name, count := range s.ArticlesByCollection {
+			r := colRow{name, count, s.EmbedByCollection[name]}
+			if name == "(uncollected)" {
+				uc := r
+				uncollected = &uc
+			} else {
+				rows = append(rows, r)
+			}
+		}
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].count != rows[j].count {
+				return rows[i].count > rows[j].count
+			}
+			return rows[i].name < rows[j].name
+		})
+		if uncollected != nil {
+			rows = append(rows, *uncollected)
+		}
+		maxNameW := 0
+		for _, r := range rows {
+			if len(r.name) > maxNameW {
+				maxNameW = len(r.name)
+			}
+		}
+		for _, r := range rows {
+			pct := 0
+			if r.count > 0 {
+				pct = r.embed * 100 / r.count
+			}
+			label := fmt.Sprintf("    %-*s  %3d", maxNameW+2, r.name, r.count)
+			detail := fmt.Sprintf("  (embedded: %d/%d %d%%)", r.embed, r.count, pct)
+			lines = append(lines, fg(t.ContentDimmed, label)+fg(t.ContentText, detail))
+		}
+	}
+
+	// Articles by model
+	if len(s.ArticlesByModel) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  Articles by Model"))
+		for _, k := range sortedKeysByValue(s.ArticlesByModel) {
+			lines = append(lines, row("    "+k.key, fmt.Sprintf("%d", k.val)))
+		}
+	}
+
+	// Articles by style
+	if len(s.ArticlesByStyle) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  Articles by Style"))
+		for _, k := range sortedKeysByValue(s.ArticlesByStyle) {
+			lines = append(lines, row("    "+k.key, fmt.Sprintf("%d", k.val)))
+		}
+	}
+
+	return lines
+}
+
+func (m Model) renderContentStatsCost(w int) []string {
+	t := ActiveTheme
+	s := m.stats
+	row := statsRow(t, w)
+
+	var lines []string
+	lines = append(lines, fgBold(t.ContentTitle, "Cost"))
+	lines = append(lines, "")
+	lines = append(lines, fg(t.ContentDimmed, "  By Time"))
+	lines = append(lines, row("    Today", formatUSD(s.CostToday)))
+	lines = append(lines, row("    7d", formatUSD(s.CostThisWeek)))
+	lines = append(lines, row("    30d", formatUSD(s.CostThisMonth)))
+	lines = append(lines, row("    Total", formatUSD(s.CostTotal)))
+
+	if len(s.CostByModel) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  By Model"))
+		for _, mc := range sortedModelCosts(s.CostByModel) {
+			lines = append(lines, row("    "+mc.model, formatUSD(mc.usd)))
+		}
+	}
+
+	if len(s.CostByType) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  By Operation"))
+		for _, ot := range sortedOpCosts(s.CostByType) {
+			lines = append(lines, row("    "+statsOpLabel(ot.opType), formatUSD(ot.usd)))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, fg(t.ContentDimmed, "  Efficiency"))
+	if s.AvgCostPerIngest > 0 {
+		lines = append(lines, row("    Avg per ingest", formatUSD(s.AvgCostPerIngest)))
+	}
+	if s.AvgCostPerChatTurn > 0 {
+		lines = append(lines, row("    Avg per chat turn", formatUSD(s.AvgCostPerChatTurn)))
+	}
+	if s.AvgCostPerAskX > 0 {
+		lines = append(lines, row("    Avg per askx", formatUSD(s.AvgCostPerAskX)))
+	}
+
+	return lines
+}
+
+func (m Model) renderContentStatsTokens(w int) []string {
+	t := ActiveTheme
+	s := m.stats
+	row := statsRow(t, w)
+
+	var lines []string
+	lines = append(lines, fgBold(t.ContentTitle, "Tokens"))
+	lines = append(lines, "")
+	lines = append(lines, fg(t.ContentDimmed, "  Total"))
+	lines = append(lines, row("    Input", formatTokenCount(s.TotalInputTokens)))
+	lines = append(lines, row("    Output", formatTokenCount(s.TotalOutputTokens)))
+	if s.TotalOutputTokens > 0 {
+		ratio := float64(s.TotalInputTokens) / float64(s.TotalOutputTokens)
+		lines = append(lines, row("    Ratio", fmt.Sprintf("%.1f:1", ratio)))
+	}
+
+	if len(s.TokensByModel) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  By Model"))
+		for _, mt := range sortedModelTokens(s.TokensByModel) {
+			lines = append(lines, row("    "+mt.model,
+				formatTokenCount(mt.in)+" in    "+formatTokenCount(mt.out)+" out"))
+		}
+	}
+
+	return lines
+}
+
+func (m Model) renderContentStatsRequests(w int) []string {
+	t := ActiveTheme
+	s := m.stats
+	row := statsRow(t, w)
+
+	var lines []string
+	lines = append(lines, fgBold(t.ContentTitle, "Requests"))
+	lines = append(lines, "")
+	lines = append(lines, row("Total", fmt.Sprintf("%d", s.TotalRequests)))
+
+	if len(s.RequestsByType) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  By Operation"))
+		for _, rt := range sortedRequestTypes(s.RequestsByType) {
+			lines = append(lines, row("    "+statsOpLabel(rt.opType), fmt.Sprintf("%d", rt.count)))
+		}
+	}
+
+	if len(s.RequestsByModel) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, fg(t.ContentDimmed, "  By Model"))
+		for _, rm := range sortedRequestModels(s.RequestsByModel) {
+			lines = append(lines, row("    "+rm.model, fmt.Sprintf("%d", rm.count)))
+		}
+	}
+
+	return lines
 }
 
 func (m Model) renderContentPlaceholder(height, width int) []string {
@@ -2224,6 +2512,149 @@ func formatUSD(v float64) string {
 		return fmt.Sprintf("$%.4f", v)
 	}
 	return fmt.Sprintf("$%.2f", v)
+}
+
+// statsRow returns a row renderer for content stats panes. Labels are left-aligned
+// with a fixed column width capped so values don't float to the far right on wide terminals.
+func statsRow(t Theme, paneW int) func(label, val string) string {
+	colW := 38 // label column width (including leading indent)
+	if paneW < 60 {
+		colW = paneW / 2
+	}
+	return func(label, val string) string {
+		full := "  " + label
+		pad := colW - len([]rune(full))
+		if pad < 2 {
+			pad = 2
+		}
+		return fg(t.ContentDimmed, full) + strings.Repeat(" ", pad) + fg(t.ContentText, val)
+	}
+}
+
+// formatTokenCount renders a token count with K/M suffix.
+func formatTokenCount(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+// statsOpLabel converts internal event type names to display labels.
+func statsOpLabel(opType string) string {
+	switch opType {
+	case "ingest":
+		return "Ingest"
+	case "chat":
+		return "Chat"
+	case "askx_call":
+		return "AskX"
+	case "collection_suggest":
+		return "Col. suggest"
+	case "collection_assign":
+		return "Col. assign"
+	default:
+		return opType
+	}
+}
+
+type modelCostEntry struct {
+	model string
+	usd   float64
+}
+
+func sortedModelCosts(m map[string]float64) []modelCostEntry {
+	var out []modelCostEntry
+	for model, usd := range m {
+		if usd > 0 {
+			out = append(out, modelCostEntry{model, usd})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].usd > out[j].usd })
+	return out
+}
+
+type modelTokenEntry struct {
+	model  string
+	in, out int
+}
+
+func sortedModelTokens(m map[string][2]int) []modelTokenEntry {
+	var out []modelTokenEntry
+	for model, t := range m {
+		if t[0] > 0 || t[1] > 0 {
+			out = append(out, modelTokenEntry{model, t[0], t[1]})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].in+out[i].out > out[j].in+out[j].out })
+	return out
+}
+
+type opCostEntry struct {
+	opType string
+	usd    float64
+}
+
+func sortedOpCosts(m map[string]float64) []opCostEntry {
+	var out []opCostEntry
+	for op, usd := range m {
+		if usd > 0 {
+			out = append(out, opCostEntry{op, usd})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].usd > out[j].usd })
+	return out
+}
+
+type requestTypeEntry struct {
+	opType string
+	count  int
+}
+
+func sortedRequestTypes(m map[string]int) []requestTypeEntry {
+	var out []requestTypeEntry
+	for op, count := range m {
+		if count > 0 {
+			out = append(out, requestTypeEntry{op, count})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].count > out[j].count })
+	return out
+}
+
+type requestModelEntry struct {
+	model string
+	count int
+}
+
+func sortedRequestModels(m map[string]int) []requestModelEntry {
+	var out []requestModelEntry
+	for model, count := range m {
+		if count > 0 {
+			out = append(out, requestModelEntry{model, count})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].count > out[j].count })
+	return out
+}
+
+type keyValEntry struct {
+	key string
+	val int
+}
+
+func sortedKeysByValue(m map[string]int) []keyValEntry {
+	var out []keyValEntry
+	for k, v := range m {
+		out = append(out, keyValEntry{k, v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].val > out[j].val })
+	return out
 }
 
 // wordWrap splits text into lines of at most maxWidth visible characters.

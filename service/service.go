@@ -1226,8 +1226,20 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		}
 	}
 
-	// Cost from events.jsonl
-	costToday, costWeek, costMonth, costTotal, costByModel := s.aggregateCosts()
+	// Aggregated stats from events.jsonl
+	ea := s.aggregateEventStats()
+
+	// Efficiency averages
+	var avgIngest, avgChat, avgAskX float64
+	if n := ea.RequestsByType["ingest"]; n > 0 {
+		avgIngest = ea.CostByType["ingest"] / float64(n)
+	}
+	if n := ea.RequestsByType["chat"]; n > 0 {
+		avgChat = ea.CostByType["chat"] / float64(n)
+	}
+	if n := ea.RequestsByType["askx_call"]; n > 0 {
+		avgAskX = ea.CostByType["askx_call"] / float64(n)
+	}
 
 	return Stats{
 		TotalArticles:        len(articles),
@@ -1236,15 +1248,25 @@ func (s *Service) Stats(ctx context.Context) (Stats, error) {
 		Unread:               unread,
 		Unplayed:             unplayed,
 		EmbedCoverage:        embedCoverage,
-		CostToday:            costToday,
-		CostThisWeek:         costWeek,
-		CostThisMonth:        costMonth,
-		CostTotal:            costTotal,
-		CostByModel:          costByModel,
+		CostToday:            ea.CostToday,
+		CostThisWeek:         ea.CostThisWeek,
+		CostThisMonth:        ea.CostThisMonth,
+		CostTotal:            ea.CostTotal,
+		CostByModel:          ea.CostByModel,
 		ArticlesByModel:      byModel,
 		ArticlesByStyle:      byStyle,
 		ArticlesByCollection: byCollection,
 		EmbedByCollection:    embedByCollection,
+		TotalInputTokens:     ea.TotalInputTokens,
+		TotalOutputTokens:    ea.TotalOutputTokens,
+		TokensByModel:        ea.TokensByModel,
+		TotalRequests:        ea.TotalRequests,
+		RequestsByModel:      ea.RequestsByModel,
+		RequestsByType:       ea.RequestsByType,
+		CostByType:           ea.CostByType,
+		AvgCostPerIngest:     avgIngest,
+		AvgCostPerChatTurn:   avgChat,
+		AvgCostPerAskX:       avgAskX,
 	}, nil
 }
 
@@ -1598,14 +1620,30 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 	}, nil
 }
 
-// aggregateCosts reads events.jsonl and sums up costs across all event types
-// (ingest pipeline events and chat turn events).
-// Returns today, thisWeek, thisMonth, total, and a per-model USD breakdown.
-func (s *Service) aggregateCosts() (today, thisWeek, thisMonth, total float64, byModel map[string]float64) {
-	byModel = make(map[string]float64)
+// eventAggregates holds all aggregated stats from events.jsonl.
+type eventAggregates struct {
+	CostToday, CostThisWeek, CostThisMonth, CostTotal float64
+	CostByModel                                        map[string]float64
+	CostByType                                         map[string]float64
+	TotalInputTokens, TotalOutputTokens                int
+	TokensByModel                                      map[string][2]int // [input, output]
+	TotalRequests                                      int
+	RequestsByModel                                    map[string]int
+	RequestsByType                                     map[string]int
+}
+
+// aggregateEventStats reads events.jsonl and computes cost, token, and request aggregates.
+func (s *Service) aggregateEventStats() eventAggregates {
+	a := eventAggregates{
+		CostByModel:     make(map[string]float64),
+		CostByType:      make(map[string]float64),
+		TokensByModel:   make(map[string][2]int),
+		RequestsByModel: make(map[string]int),
+		RequestsByType:  make(map[string]int),
+	}
 	data, err := os.ReadFile(s.cfg.EventsPath)
 	if err != nil {
-		return
+		return a
 	}
 
 	now := time.Now()
@@ -1613,10 +1651,38 @@ func (s *Service) aggregateCosts() (today, thisWeek, thisMonth, total float64, b
 	weekStart := now.AddDate(0, 0, -7)
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
 
-	// chatEvent is a minimal struct to extract cost from chat_api_call / chat_turn_complete events.
+	// addTimeBuckets adds USD to the appropriate time-window buckets.
+	addTimeBuckets := func(ts time.Time, usd float64) {
+		a.CostTotal += usd
+		if ts.After(todayStart) {
+			a.CostToday += usd
+		}
+		if ts.After(weekStart) {
+			a.CostThisWeek += usd
+		}
+		if ts.After(monthStart) {
+			a.CostThisMonth += usd
+		}
+	}
+
+	// addTokens records token counts for a model.
+	addTokens := func(model string, in, out int) {
+		a.TotalInputTokens += in
+		a.TotalOutputTokens += out
+		if model != "" {
+			t := a.TokensByModel[model]
+			t[0] += in
+			t[1] += out
+			a.TokensByModel[model] = t
+		}
+	}
+
+	// chatCost is a minimal struct to extract cost from non-ingest events.
 	type chatCost struct {
-		CostUSD float64 `json:"cost_usd"`
-		Model   string  `json:"model"`
+		CostUSD      float64 `json:"cost_usd"`
+		Model        string  `json:"model"`
+		InputTokens  int     `json:"input_tokens"`
+		OutputTokens int     `json:"output_tokens"`
 	}
 	type chatEvent struct {
 		TS    time.Time `json:"ts"`
@@ -1632,31 +1698,30 @@ func (s *Service) aggregateCosts() (today, thisWeek, thisMonth, total float64, b
 		}
 
 		// Try ingest event first (has store.CostRecord under "cost").
+		// Ingest events have a CostRecord with TotalUSD > 0; non-ingest events
+		// unmarshal into CostRecord but all fields stay zero.
 		var e store.Event
-		if err := parseEventLine(line, &e); err == nil && e.Cost != nil {
+		if err := parseEventLine(line, &e); err == nil && e.Cost != nil && e.Cost.TotalUSD > 0 {
 			usd := e.Cost.TotalUSD
-			total += usd
-			if e.TS.After(todayStart) {
-				today += usd
-			}
-			if e.TS.After(weekStart) {
-				thisWeek += usd
-			}
-			if e.TS.After(monthStart) {
-				thisMonth += usd
-			}
+			addTimeBuckets(e.TS, usd)
+			a.CostByType["ingest"] += usd
+			a.TotalRequests++
+			a.RequestsByType["ingest"]++
 			for _, entry := range []store.CostEntry{e.Cost.Summary, e.Cost.Flash, e.Cost.Flashcards} {
 				if entry.Model != "" {
-					byModel[entry.Model] += entry.USD
+					a.CostByModel[entry.Model] += entry.USD
+					a.RequestsByModel[entry.Model]++
+					addTokens(entry.Model, entry.InputTokens, entry.OutputTokens)
 				}
 			}
 			if e.Cost.Embed.Model != "" {
-				byModel[e.Cost.Embed.Model] += e.Cost.Embed.USD
+				a.CostByModel[e.Cost.Embed.Model] += e.Cost.Embed.USD
+				addTokens(e.Cost.Embed.Model, e.Cost.Embed.Tokens, 0)
 			}
 			continue
 		}
 
-		// Try chat event (chat_api_call, chat_turn_complete, askx_call).
+		// Try chat/askx/collection events.
 		var ce chatEvent
 		if err := json.Unmarshal([]byte(line), &ce); err != nil {
 			continue
@@ -1669,19 +1734,23 @@ func (s *Service) aggregateCosts() (today, thisWeek, thisMonth, total float64, b
 			continue
 		}
 		usd := ce.Cost.CostUSD
-		total += usd
-		if ce.TS.After(todayStart) {
-			today += usd
+		addTimeBuckets(ce.TS, usd)
+
+		// Normalize type for grouping: chat_turn_complete → "chat".
+		opType := ce.Type
+		switch opType {
+		case "chat_turn_complete":
+			opType = "chat"
 		}
-		if ce.TS.After(weekStart) {
-			thisWeek += usd
-		}
-		if ce.TS.After(monthStart) {
-			thisMonth += usd
-		}
+		a.CostByType[opType] += usd
+		a.TotalRequests++
+		a.RequestsByType[opType]++
+
 		if ce.Model != "" {
-			byModel[ce.Model] += usd
+			a.CostByModel[ce.Model] += usd
+			a.RequestsByModel[ce.Model]++
 		}
+		addTokens(ce.Model, ce.Cost.InputTokens, ce.Cost.OutputTokens)
 	}
-	return
+	return a
 }

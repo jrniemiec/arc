@@ -14,6 +14,7 @@ type tuiState struct {
 	ActiveTab          string `json:"active_tab,omitempty"`
 	SubTab             string `json:"sub_tab,omitempty"`
 	AgentSubTab        string `json:"agent_sub_tab,omitempty"`
+	StatsSubTab        string `json:"stats_sub_tab,omitempty"`
 	AgentRunID         string `json:"agent_run_id,omitempty"`
 	AgentContentCursor int    `json:"agent_content_cursor,omitempty"`
 	Workspace          string `json:"workspace,omitempty"`
@@ -119,5 +120,31 @@ func agentSubTabToString(t agentSubTab) string {
 		return "feeds"
 	default:
 		return "runs"
+	}
+}
+
+func statsSubTabFromString(s string) statsSubTab {
+	switch s {
+	case "cost":
+		return statsSubTabCost
+	case "tokens":
+		return statsSubTabTokens
+	case "requests":
+		return statsSubTabRequests
+	default:
+		return statsSubTabOverview
+	}
+}
+
+func statsSubTabToString(t statsSubTab) string {
+	switch t {
+	case statsSubTabCost:
+		return "cost"
+	case statsSubTabTokens:
+		return "tokens"
+	case statsSubTabRequests:
+		return "requests"
+	default:
+		return "overview"
 	}
 }

@@ -1509,8 +1509,10 @@ func parseCollectionAssignments(resp string) ([]CollectionAssignResult, error) {
 
 func appendCollectionEvent(eventsPath, eventType, model string, inputTokens, outputTokens int, costUSD float64) {
 	type costBlock struct {
-		CostUSD float64 `json:"cost_usd"`
-		Model   string  `json:"model"`
+		CostUSD      float64 `json:"cost_usd"`
+		Model        string  `json:"model"`
+		InputTokens  int     `json:"input_tokens,omitempty"`
+		OutputTokens int     `json:"output_tokens,omitempty"`
 	}
 	ev := struct {
 		TS    time.Time `json:"ts"`
@@ -1522,8 +1524,10 @@ func appendCollectionEvent(eventsPath, eventType, model string, inputTokens, out
 		Type:  eventType,
 		Model: model,
 		Cost: costBlock{
-			CostUSD: costUSD,
-			Model:   model,
+			CostUSD:      costUSD,
+			Model:        model,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
 		},
 	}
 	data, err := json.Marshal(ev)

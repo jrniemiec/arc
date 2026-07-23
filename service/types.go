@@ -249,11 +249,29 @@ type Stats struct {
 	CostTotal        float64
 
 	// Breakdowns
-	CostByModel           map[string]float64 // total USD spent per model (all operations)
-	ArticlesByModel       map[string]int     // article count by summary model
-	ArticlesByStyle       map[string]int     // article count by summary style
-	ArticlesByCollection  map[string]int     // article count by collection (+ "(uncollected)")
-	EmbedByCollection     map[string]int     // embedded article count by collection
+	CostByModel          map[string]float64 // total USD spent per model (all operations)
+	ArticlesByModel      map[string]int     // article count by summary model
+	ArticlesByStyle      map[string]int     // article count by summary style
+	ArticlesByCollection map[string]int     // article count by collection (+ "(uncollected)")
+	EmbedByCollection    map[string]int     // embedded article count by collection
+
+	// Token usage
+	TotalInputTokens  int
+	TotalOutputTokens int
+	TokensByModel     map[string][2]int // [input, output] per model
+
+	// Request counts
+	TotalRequests   int
+	RequestsByModel map[string]int
+	RequestsByType  map[string]int // "ingest", "chat", "askx", "collection_suggest", "collection_assign"
+
+	// Per-operation-type cost
+	CostByType map[string]float64
+
+	// Efficiency (averages)
+	AvgCostPerIngest   float64
+	AvgCostPerChatTurn float64
+	AvgCostPerAskX     float64
 }
 
 // PopulateRequest describes a workspace populate operation.

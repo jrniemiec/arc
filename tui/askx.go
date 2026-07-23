@@ -443,8 +443,10 @@ func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 // appendAskXEvent writes a cost event for an AskX call to events.jsonl.
 func appendAskXEvent(eventsPath, model string, inputTokens, outputTokens int, costUSD float64) {
 	type askxCost struct {
-		CostUSD float64 `json:"cost_usd,omitempty"`
-		Model   string  `json:"model"`
+		CostUSD      float64 `json:"cost_usd,omitempty"`
+		Model        string  `json:"model"`
+		InputTokens  int     `json:"input_tokens,omitempty"`
+		OutputTokens int     `json:"output_tokens,omitempty"`
 	}
 	ev := struct {
 		TS    time.Time `json:"ts"`
@@ -456,8 +458,10 @@ func appendAskXEvent(eventsPath, model string, inputTokens, outputTokens int, co
 		Type:  "askx_call",
 		Model: model,
 		Cost: askxCost{
-			CostUSD: costUSD,
-			Model:   model,
+			CostUSD:      costUSD,
+			Model:        model,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
 		},
 	}
 	data, err := json.Marshal(ev)

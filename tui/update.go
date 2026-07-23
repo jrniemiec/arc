@@ -1278,6 +1278,9 @@ func (m *Model) navLeft() tea.Cmd {
 	case tabAgent:
 		m.agentSubTab = (m.agentSubTab - 1 + agentSubTabCount) % agentSubTabCount
 		return nil
+	case tabStats:
+		m.statsSubTab = (m.statsSubTab - 1 + statsSubTabCount) % statsSubTabCount
+		return nil
 	default:
 		if m.chatMode {
 			m.exitChatMode()
@@ -1294,6 +1297,9 @@ func (m *Model) navRight() tea.Cmd {
 		return m.switchNavSubTab((m.navSubTab + 1) % navSubTabCount)
 	case tabAgent:
 		m.agentSubTab = (m.agentSubTab + 1) % agentSubTabCount
+		return nil
+	case tabStats:
+		m.statsSubTab = (m.statsSubTab + 1) % statsSubTabCount
 		return nil
 	default:
 		if m.chatMode {
@@ -6711,6 +6717,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					if sub := agentNavSubTabHitTest(msg.X); sub >= 0 {
 						m.focus = paneNav
 						m.agentSubTab = sub
+					}
+				case tabStats:
+					if sub := statsNavSubTabHitTest(msg.X); sub >= 0 {
+						m.focus = paneNav
+						m.statsSubTab = sub
 					}
 				}
 				return nil
