@@ -72,6 +72,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/jrniemiec/brief v0.8.0 h1:gAdE1Mhny8Iwo3YoCiNW+oaPNHE9BdbjcJK4OUIGDfw=
 github.com/jrniemiec/brief v0.8.0/go.mod h1:jsFHaJPQJpH6Qo8Sx/d36WOJvHzmYiDpXJp8MDPzDrs=
+github.com/jrniemiec/llm v0.1.2 h1:bHKjgTTI1rezVWnLveaFdi6RFZxpE9SciTTG+7vlYu8=
+github.com/jrniemiec/llm v0.1.2/go.mod h1:sqTkf5Fuh6dzQe5pBoeo4hADcAwyLZO2zfZwiRRmuKw=
 github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/klauspost/compress v1.18.2 h1:iiPHWW0YrcFgpBYhsA6D1+fqHssJscY/Tm/y2Uqnapk=
