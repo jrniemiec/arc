@@ -17,7 +17,6 @@ import (
 	"github.com/jrniemiec/arc/chat"
 	chatengine "github.com/jrniemiec/arc/chat/engine"
 	"github.com/jrniemiec/arc/config"
-	"github.com/jrniemiec/arc/internal/clog"
 	"github.com/jrniemiec/arc/service"
 	"github.com/jrniemiec/arc/store"
 	storefs "github.com/jrniemiec/arc/store/fs"
@@ -1849,8 +1848,6 @@ func (m Model) SaveState() {
 			}
 		}
 	}
-	clog.Debugf("SaveState: wsCursor=%d wsRows=%d Workspace=%q WsExpanded=%v WsArticle=%q WsExpandedCol=%q WsFocus=%q",
-		m.wsCursor, len(m.wsRows), s.Workspace, s.WsExpanded, s.WsArticle, s.WsExpandedCol, s.WsFocus)
 	// Store currently selected article slug.
 	if m.navCursor >= 0 && m.navCursor < len(m.navItems) {
 		s.Article = m.navItems[m.navCursor].id

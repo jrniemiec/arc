@@ -19,7 +19,6 @@ import (
 
 	agentpkg "github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/config"
-	"github.com/jrniemiec/arc/internal/clog"
 	"github.com/jrniemiec/arc/service"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
@@ -108,12 +107,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Rebuild wsRows now that article titles are available.
 			if m.workspacesLoaded {
 				m.wsRows = m.buildWsRows()
-				clog.Debugf("navLoadedMsg: rebuilt wsRows (%d rows), pending ws cursor restore=%q", len(m.wsRows), m.restoredState.Workspace)
 				// Apply deferred workspace cursor restore now that articles are loaded.
 				if m.restoredState.Workspace != "" {
 					cmds = append(cmds, m.applyWsCursorRestore())
-					clog.Debugf("navLoadedMsg post-restore: wsCursor=%d chatMode=%v chatWorkspace=%q askxOpen=%v",
-						m.wsCursor, m.chatMode, m.chatWorkspace, m.askxOpen)
 				}
 			}
 		}
@@ -277,11 +273,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case workspacesLoadedMsg:
-		clog.Debugf("workspacesLoadedMsg: %d items, err=%q restoredState={Workspace:%q WsExpanded:%v WsArticle:%q WsExpandedCol:%q WsFocus:%q}",
-			len(msg.items), msg.err,
-			m.restoredState.Workspace, m.restoredState.WsExpanded,
-			m.restoredState.WsArticle, m.restoredState.WsExpandedCol,
-			m.restoredState.WsFocus)
 		if msg.err != "" {
 			m.workspacesErr = msg.err
 		} else {
@@ -324,7 +315,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if name := m.restoredState.Workspace; name != "" && m.restoredState.WsExpanded {
 				for i := range m.workspaceItems {
 					if m.workspaceItems[i].name == name {
-						clog.Debugf("ws restore: expanding workspace[%d] %q col=%q", i, name, m.restoredState.WsExpandedCol)
 						m.workspaceItems[i].expanded = true
 						if col := m.restoredState.WsExpandedCol; col != "" {
 							if m.workspaceItems[i].expandedCols == nil {
@@ -337,14 +327,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.wsRows = m.buildWsRows()
-			clog.Debugf("ws restore (workspacesLoaded): built %d wsRows, navLoaded=%v", len(m.wsRows), m.navLoaded)
 			// Attempt cursor restore now. If nav isn't loaded yet, article rows
 			// are missing from wsRows — defer to navLoadedMsg which rebuilds wsRows.
 			if m.restoredState.Workspace != "" {
 				if m.navLoaded {
 					cmds = append(cmds, m.applyWsCursorRestore())
-				} else {
-					clog.Debugf("ws restore: nav not loaded yet, deferring cursor restore for %q", m.restoredState.Workspace)
 				}
 			}
 			if m.wsCursor >= len(m.wsRows) {
@@ -764,8 +751,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.contentLoading = false
 
 	case chatHistoryLoadedMsg:
-		clog.Debugf("chatHistoryLoadedMsg: workspace=%q focus=%v msgs=%d chatMode=%v askxOpen=%v wsCursor=%d",
-			msg.workspace, msg.focus, len(msg.msgs), m.chatMode, m.askxOpen, m.wsCursor)
 		if msg.err != "" {
 			m.statusMsg = "✗ " + msg.err
 		} else {
@@ -1138,7 +1123,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case m.focus == paneNav:
 			m.setFocusPane(paneContent)
 		case m.focus == paneContent && !m.splitPaneFocused() && splitOpen:
-			clog.Debugf("tab: content → split pane")
 			m.focusSplitPane()
 		default:
 			m.setFocusPane(paneNav)
@@ -1149,10 +1133,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen
 		switch {
 		case m.focus == paneNav && splitOpen:
-			clog.Debugf("shift-tab: nav → split pane")
 			m.focusSplitPane()
 		case m.focus == paneContent && m.splitPaneFocused():
-			clog.Debugf("shift-tab: split pane → content")
 			m.unfocusSplitPane()
 		default:
 			m.setFocusPane(paneNav)
@@ -1183,7 +1165,6 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 // setFocusPane switches focus to the given pane and resets related state.
 func (m *Model) setFocusPane(p focusPane) {
-	clog.Debugf("setFocusPane: %v → %v (previewFocused=%v scratchFocused=%v)", m.focus, p, m.previewFocused, m.scratchFocused)
 	m.focus = p
 	m.scratchFocused = false
 	m.askxFocused = false
@@ -1219,29 +1200,24 @@ func (m *Model) applyWsCursorRestore() tea.Cmd {
 	name := m.restoredState.Workspace
 	articleSlug := m.restoredState.WsArticle
 	colSlug := m.restoredState.WsExpandedCol
-	clog.Debugf("applyWsCursorRestore: workspace=%q articleSlug=%q colSlug=%q wsRows=%d", name, articleSlug, colSlug, len(m.wsRows))
 	for i, row := range m.wsRows {
 		wsIdx := row.wsIdx
 		if wsIdx < 0 || wsIdx >= len(m.workspaceItems) || m.workspaceItems[wsIdx].name != name {
 			continue
 		}
 		if articleSlug != "" && row.kind == wsRowArticle && row.slug == articleSlug {
-			clog.Debugf("applyWsCursorRestore: matched article row=%d", i)
 			m.wsCursor = i
 			break
 		}
 		if articleSlug == "" && colSlug != "" && row.kind == wsRowCollection && row.colSlug == colSlug {
-			clog.Debugf("applyWsCursorRestore: matched collection row=%d", i)
 			m.wsCursor = i
 			break
 		}
 		if articleSlug == "" && colSlug == "" && row.kind == wsRowWorkspace {
-			clog.Debugf("applyWsCursorRestore: matched workspace row=%d", i)
 			m.wsCursor = i
 			break
 		}
 	}
-	clog.Debugf("applyWsCursorRestore: final wsCursor=%d", m.wsCursor)
 	if m.wsCursor >= len(m.wsRows) {
 		m.wsCursor = len(m.wsRows) - 1
 	}
@@ -1257,7 +1233,6 @@ func (m *Model) applyWsCursorRestore() tea.Cmd {
 		row := m.wsRows[m.wsCursor]
 		if row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
 			wsName := m.workspaceItems[row.wsIdx].name
-			clog.Debugf("applyWsCursorRestore: loading chat for workspace=%q", wsName)
 			return m.loadChatHistoryCmd(wsName, false)
 		}
 	}
@@ -2384,19 +2359,16 @@ func (m *Model) collapseCollection(rowIdx int) tea.Cmd {
 // triggerWorkspaceChatLoad loads chat history if cursor is on a workspace row.
 func (m *Model) triggerWorkspaceChatLoad() tea.Cmd {
 	if m.wsCursor < 0 || m.wsCursor >= len(m.wsRows) {
-		clog.Debugf("triggerWorkspaceChatLoad: wsCursor=%d out of range (wsRows=%d)", m.wsCursor, len(m.wsRows))
 		return nil
 	}
 	row := m.wsRows[m.wsCursor]
 	if row.kind != wsRowWorkspace {
-		clog.Debugf("triggerWorkspaceChatLoad: cursor row kind=%v (not workspace), skip", row.kind)
 		return nil
 	}
 	if row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
 		return nil
 	}
 	name := m.workspaceItems[row.wsIdx].name
-	clog.Debugf("triggerWorkspaceChatLoad: loading chat for workspace=%q (wsCursor=%d)", name, m.wsCursor)
 	return m.loadChatHistoryCmd(name, false)
 }
 
@@ -7223,7 +7195,6 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			// Click in nav pane (left of divider) — focus nav, update cursor row.
 			if msg.X < divCol {
-				clog.Debugf("mouse: nav click, clearing previewFocused=%v", m.previewFocused)
 				m.focus = paneNav
 				m.scratchFocused = false
 				m.previewFocused = false
