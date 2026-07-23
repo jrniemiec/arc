@@ -562,6 +562,15 @@ type Model struct {
 	askxSharedBuf       *streamBuf         // goroutine-safe buffer written by streaming goroutine
 	askxCancelStream    context.CancelFunc // cancels the in-flight askX request
 	askxResolvedProfile string             // profile name used for current/last askX query
+	// per-call stats (populated on stream done)
+	askxLastInputTokens  int
+	askxLastOutputTokens int
+	askxLastElapsed      time.Duration
+	// session totals (persist for TUI lifetime)
+	askxSessionQueries      int
+	askxSessionInputTokens  int
+	askxSessionOutputTokens int
+	askxSessionCostUSD      float64
 
 	// Resource overlay (active when focus == paneResource)
 	resourceLines    []string // file content split into lines
@@ -873,10 +882,12 @@ type chatWorkspaceStatsMsg struct {
 
 // askxStreamDoneMsg signals that the askX streaming response is complete.
 type askxStreamDoneMsg struct {
-	fullText string // complete response text
-	err      string
-	costUSD  float64
-	elapsed  time.Duration
+	fullText     string // complete response text
+	err          string
+	costUSD      float64
+	elapsed      time.Duration
+	inputTokens  int
+	outputTokens int
 }
 
 // correctionDoneMsg is returned by doCorrection when the LLM call completes.

@@ -2517,10 +2517,6 @@ func (m Model) renderStatusLine() string {
 		spin := frames[m.spinnerFrame%len(frames)]
 		return fg(t.StreamingText, " "+spin+" "+m.ingestLabel)
 	}
-	if m.askxStreaming && !m.selectionMode {
-		label := "askX streaming · " + m.askxResolvedProfile
-		return renderWaveIndicatorLeading(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
-	}
 	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
 		// On the Workspaces sub-tab with nothing active, fall through to show
 		// "Workspaces · N total" consistently with Articles/Collections tabs.
@@ -2528,6 +2524,9 @@ func (m Model) renderStatusLine() string {
 			m.chatStreaming || m.ttsPlayer.Playing() || m.statusMsg != "" {
 			return m.renderChatStatusLine()
 		}
+	}
+	if (m.askxOpen || m.askxStreaming) && !m.selectionMode {
+		return m.renderAskXStatusLine()
 	}
 	if m.ttsPlayer.Playing() && m.contentTTSText != "" && !m.selectionMode {
 		rate := m.cfg.TTSRate

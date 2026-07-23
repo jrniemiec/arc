@@ -436,7 +436,7 @@ func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 		}
 		costUSD := cfg.CalcCost(prof.Model, usage.InputTokens, usage.OutputTokens)
 		appendAskXEvent(cfg.EventsPath, prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
-		return askxStreamDoneMsg{fullText: fullText, costUSD: costUSD, elapsed: elapsed}
+		return askxStreamDoneMsg{fullText: fullText, costUSD: costUSD, elapsed: elapsed, inputTokens: usage.InputTokens, outputTokens: usage.OutputTokens}
 	}
 }
 
@@ -497,6 +497,15 @@ func (m *Model) handleAskXStreamDone(msg askxStreamDoneMsg) {
 			Time:    time.Now(),
 		})
 		m.saveAskXHistory()
+		// per-call stats
+		m.askxLastInputTokens = msg.inputTokens
+		m.askxLastOutputTokens = msg.outputTokens
+		m.askxLastElapsed = msg.elapsed
+		// session totals
+		m.askxSessionQueries++
+		m.askxSessionInputTokens += msg.inputTokens
+		m.askxSessionOutputTokens += msg.outputTokens
+		m.askxSessionCostUSD += msg.costUSD
 		cost := formatUSD(msg.costUSD)
 		if msg.costUSD == 0 {
 			cost = "free"
@@ -1044,6 +1053,56 @@ func (m Model) buildAskXVLines() []chatVLine {
 }
 
 // ── Rendering ───────────────────────────────────────────────────────────────
+
+// renderAskXStatusLine renders the three-section status bar for askX mode,
+// mirroring renderChatStatusLine: left=streaming/status, center=per-call stats, right=session totals.
+func (m Model) renderAskXStatusLine() string {
+	t := ActiveTheme
+	w := m.width
+
+	// Left: streaming indicator > status message.
+	var left string
+	if m.askxStreaming {
+		label := "askX streaming · " + m.askxResolvedProfile
+		left = renderWaveIndicatorLeading(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
+	} else if m.statusMsg != "" {
+		if m.statusErr || strings.HasPrefix(m.statusMsg, "✗") {
+			left = fgBold(t.StatusError, " "+m.statusMsg)
+		} else {
+			left = fg(t.StatusText, " "+m.statusMsg)
+		}
+	}
+
+	// Center: per-call token stats (available after first response).
+	var center string
+	if m.askxLastInputTokens > 0 || m.askxLastOutputTokens > 0 {
+		center = fg(t.ContentDimmed, fmt.Sprintf("in:%d out:%d  %.1fs",
+			m.askxLastInputTokens, m.askxLastOutputTokens, m.askxLastElapsed.Seconds()))
+	}
+
+	// Right: session totals.
+	var right string
+	if m.askxSessionQueries > 0 {
+		right = fg(t.ContentDimmed, fmt.Sprintf("%d queries · %dk in · %dk out · %s",
+			m.askxSessionQueries,
+			(m.askxSessionInputTokens+500)/1000,
+			(m.askxSessionOutputTokens+500)/1000,
+			formatUSD(m.askxSessionCostUSD)))
+	}
+
+	// Compose: left | center (padded) | right
+	leftW := lipgloss.Width(left)
+	rightW := lipgloss.Width(right)
+	centerW := lipgloss.Width(center)
+	gap := w - leftW - rightW - centerW
+	if gap < 2 {
+		gap = 2
+	}
+	leftGap := gap / 2
+	rightGap := gap - leftGap
+
+	return left + strings.Repeat(" ", leftGap) + center + strings.Repeat(" ", rightGap) + right
+}
 
 // renderAskXPane renders the askX split pane content.
 func (m Model) renderAskXPane(height, width int) []string {
