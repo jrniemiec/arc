@@ -20,7 +20,12 @@ type tuiState struct {
 	Workspace          string `json:"workspace,omitempty"`
 	Article            string `json:"article,omitempty"`
 	Collection         string `json:"collection,omitempty"`
-	WsFocus            string `json:"ws_focus,omitempty"` // solo-mode workspace name
+	ExpandedCollection string `json:"expanded_collection,omitempty"` // collection that was unfolded
+	NavArticle         string `json:"nav_article,omitempty"`         // selected article inside expanded collection
+	WsFocus            string `json:"ws_focus,omitempty"`            // solo-mode workspace name
+	WsExpanded         bool   `json:"ws_expanded,omitempty"`         // selected workspace was expanded
+	WsExpandedCol      string `json:"ws_expanded_col,omitempty"`     // collection slug expanded within workspace
+	WsArticle          string `json:"ws_article,omitempty"`          // selected article slug within workspace
 }
 
 func statePath(dataRoot string) string {

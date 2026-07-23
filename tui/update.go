@@ -123,6 +123,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.contentLoading = true
 			cmds = append(cmds, loadContent(m.navItems[m.navCursor].root, m.cfg.PreferredStyles, m.cfg.PreferredModels))
 		}
+		// Deferred expand: collections loaded before articles — trigger now.
+		if slug := m.pendingExpandSlug; slug != "" && m.collectionsLoaded {
+			for i, r := range m.navRows {
+				if r.kind == rowCollection && r.colSlug == slug {
+					cmds = append(cmds, m.expandCollection(i))
+					slog.Debug("navLoadedMsg: triggering deferred expand", "slug", slug, "row", i)
+					break
+				}
+			}
+			m.pendingExpandSlug = ""
+		}
 
 	case achatScanDoneMsg:
 		m.achatHasChat = msg.hasChat
@@ -150,14 +161,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.navRowCursor = 0
 			m.navRowScroll = 0
 			// Restore collection cursor from saved state.
+			slog.Debug("collectionsLoadedMsg: restored state", "collection", m.restoredState.Collection, "expandedCollection", m.restoredState.ExpandedCollection, "navArticle", m.restoredState.NavArticle)
 			if slug := m.restoredState.Collection; slug != "" {
 				for i, r := range m.navRows {
 					if r.kind == rowCollection && r.colSlug == slug {
 						m.navRowCursor = i
+						slog.Debug("collectionsLoadedMsg: cursor restored", "slug", slug, "row", i)
 						break
 					}
 				}
 				m.restoredState.Collection = ""
+			}
+			// Restore expanded collection (triggers async article load).
+			// Must wait until navItemsAll is populated; if not ready, defer to navLoadedMsg.
+			if slug := m.restoredState.ExpandedCollection; slug != "" {
+				if m.navLoaded {
+					triggered := false
+					for i, r := range m.navRows {
+						if r.kind == rowCollection && r.colSlug == slug {
+							cmds = append(cmds, m.expandCollection(i))
+							triggered = true
+							slog.Debug("collectionsLoadedMsg: triggering expand (navLoaded)", "slug", slug, "row", i)
+							break
+						}
+					}
+					if !triggered {
+						slog.Debug("collectionsLoadedMsg: expandedCollection not found in rows", "slug", slug)
+					}
+				} else {
+					// Articles not yet loaded; defer expand to navLoadedMsg.
+					m.pendingExpandSlug = slug
+					slog.Debug("collectionsLoadedMsg: deferring expand until navLoaded", "slug", slug)
+				}
+				// ExpandedCollection/NavArticle cleared after articles load.
 			}
 		}
 		m.collectionsLoaded = true
@@ -222,6 +258,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				after := make([]navRow, len(m.navRows)-(headerIdx+1))
 				copy(after, m.navRows[headerIdx+1:])
 				m.navRows = append(append(before, children...), after...)
+				// Restore article cursor within the expanded collection.
+				slog.Debug("collectionArticlesLoadedMsg: inserted children", "slug", msg.slug, "count", len(children), "restoredNavArticle", m.restoredState.NavArticle, "restoredExpandedCol", m.restoredState.ExpandedCollection)
+				if articleSlug := m.restoredState.NavArticle; articleSlug != "" && m.restoredState.ExpandedCollection == msg.slug {
+					found := false
+					for i := headerIdx + 1; i < len(m.navRows); i++ {
+						r := m.navRows[i]
+						if r.kind != rowArticle || !r.indented {
+							break
+						}
+						if r.item != nil && r.item.id == articleSlug {
+							m.navRowCursor = i
+							found = true
+							slog.Debug("collectionArticlesLoadedMsg: article cursor restored", "article", articleSlug, "row", i)
+							break
+						}
+					}
+					if !found {
+						slog.Debug("collectionArticlesLoadedMsg: article not found in children", "article", articleSlug)
+					}
+					m.restoredState.NavArticle = ""
+					m.restoredState.ExpandedCollection = ""
+				}
 				m.clampNavRowScroll()
 				m.statusMsg = ""
 			}
@@ -266,16 +324,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.workspaceItems = msg.items
 			}
-			m.wsRows = m.buildWsRows()
-			// Restore workspace cursor from saved state, or clamp to bounds.
-			if name := m.restoredState.Workspace; name != "" {
-				for i, row := range m.wsRows {
-					if row.kind == wsRowWorkspace && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) && m.workspaceItems[row.wsIdx].name == name {
-						m.wsCursor = i
+			// Restore workspace expand state before buildWsRows so expanded rows are present.
+			slog.Debug("workspacesLoadedMsg: restored state", "workspace", m.restoredState.Workspace, "wsExpanded", m.restoredState.WsExpanded, "wsExpandedCol", m.restoredState.WsExpandedCol, "wsArticle", m.restoredState.WsArticle)
+			if name := m.restoredState.Workspace; name != "" && m.restoredState.WsExpanded {
+				for i := range m.workspaceItems {
+					if m.workspaceItems[i].name == name {
+						m.workspaceItems[i].expanded = true
+						if col := m.restoredState.WsExpandedCol; col != "" {
+							if m.workspaceItems[i].expandedCols == nil {
+								m.workspaceItems[i].expandedCols = make(map[string]bool)
+							}
+							m.workspaceItems[i].expandedCols[col] = true
+						}
+						slog.Debug("workspacesLoadedMsg: expanded workspace", "name", name, "expandedCol", m.restoredState.WsExpandedCol)
 						break
 					}
 				}
+			}
+			m.wsRows = m.buildWsRows()
+			// Restore workspace cursor from saved state, or clamp to bounds.
+			if name := m.restoredState.Workspace; name != "" {
+				articleSlug := m.restoredState.WsArticle
+				colSlug := m.restoredState.WsExpandedCol
+				restored := false
+				for i, row := range m.wsRows {
+					wsIdx := row.wsIdx
+					if wsIdx < 0 || wsIdx >= len(m.workspaceItems) || m.workspaceItems[wsIdx].name != name {
+						continue
+					}
+					if articleSlug != "" && row.kind == wsRowArticle && row.slug == articleSlug {
+						m.wsCursor = i
+						restored = true
+						slog.Debug("workspacesLoadedMsg: cursor restored to article", "article", articleSlug, "row", i)
+						break
+					}
+					if articleSlug == "" && colSlug != "" && row.kind == wsRowCollection && row.colSlug == colSlug {
+						m.wsCursor = i
+						restored = true
+						slog.Debug("workspacesLoadedMsg: cursor restored to collection", "col", colSlug, "row", i)
+						break
+					}
+					if articleSlug == "" && colSlug == "" && row.kind == wsRowWorkspace {
+						m.wsCursor = i
+						restored = true
+						slog.Debug("workspacesLoadedMsg: cursor restored to workspace", "name", name, "row", i)
+						break
+					}
+				}
+				if !restored {
+					slog.Debug("workspacesLoadedMsg: cursor target not found", "name", name, "article", articleSlug, "col", colSlug)
+				}
 				m.restoredState.Workspace = ""
+				m.restoredState.WsExpanded = false
+				m.restoredState.WsExpandedCol = ""
+				m.restoredState.WsArticle = ""
 			}
 			if m.wsCursor >= len(m.wsRows) {
 				m.wsCursor = len(m.wsRows) - 1

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,6 +436,9 @@ type Model struct {
 	navRowScroll      int
 	collectionsLoaded bool
 	collectionsErr    string
+	// pendingExpandSlug is set during state restore when collections load before
+	// articles (navItemsAll is empty). The expand is deferred to navLoadedMsg.
+	pendingExpandSlug string
 
 	// Library nav — Workspaces sub-tab
 	workspaceItems    []workspaceItem    // current (possibly filtered) list
@@ -1828,23 +1832,56 @@ func (m Model) SaveState() {
 	if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
 		s.AgentRunID = m.agentRuns[m.agentRunsCursor].RunID
 	}
-// Store currently selected workspace name.
+// Store currently selected workspace and its expand state.
 	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
-		wsIdx := m.wsRows[m.wsCursor].wsIdx
+		row := m.wsRows[m.wsCursor]
+		wsIdx := row.wsIdx
 		if wsIdx >= 0 && wsIdx < len(m.workspaceItems) {
-			s.Workspace = m.workspaceItems[wsIdx].name
+			ws := m.workspaceItems[wsIdx]
+			s.Workspace = ws.name
+			s.WsExpanded = ws.expanded
+			switch row.kind {
+			case wsRowCollection:
+				s.WsExpandedCol = row.colSlug
+			case wsRowArticle:
+				s.WsArticle = row.slug
+				s.WsExpandedCol = row.colSlug // non-empty only when article is inside a collection
+			}
 		}
+		slog.Debug("SaveState: workspace", "name", s.Workspace, "expanded", s.WsExpanded, "expandedCol", s.WsExpandedCol, "wsArticle", s.WsArticle)
 	}
 	// Store currently selected article slug.
 	if m.navCursor >= 0 && m.navCursor < len(m.navItems) {
 		s.Article = m.navItems[m.navCursor].id
 	}
-	// Store currently selected collection slug.
+	// Store currently selected collection / expanded collection / nav article.
 	if m.navRowCursor >= 0 && m.navRowCursor < len(m.navRows) {
-		if m.navRows[m.navRowCursor].kind == rowCollection {
-			s.Collection = m.navRows[m.navRowCursor].colSlug
+		row := m.navRows[m.navRowCursor]
+		switch row.kind {
+		case rowCollection:
+			s.Collection = row.colSlug
+			if row.expanded {
+				s.ExpandedCollection = row.colSlug
+			}
+			slog.Debug("SaveState: cursor on collection", "slug", row.colSlug, "expanded", row.expanded)
+		case rowArticle:
+			if row.indented {
+				// Walk back to find the parent collection header.
+				for i := m.navRowCursor - 1; i >= 0; i-- {
+					if m.navRows[i].kind == rowCollection {
+						s.ExpandedCollection = m.navRows[i].colSlug
+						s.Collection = m.navRows[i].colSlug
+						break
+					}
+				}
+				if row.item != nil {
+					s.NavArticle = row.item.id
+				}
+			}
+			slog.Debug("SaveState: cursor on article", "article", s.NavArticle, "expandedCol", s.ExpandedCollection)
 		}
 	}
+	slog.Debug("SaveState: persisting", "collection", s.Collection, "expandedCollection", s.ExpandedCollection, "navArticle", s.NavArticle)
 	saveTUIState(m.cfg.DataRoot, s)
 }
 
