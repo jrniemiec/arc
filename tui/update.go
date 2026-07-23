@@ -78,6 +78,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rebuildAskXLines()
 			m.askxScrollToBottom()
 		}
+		if m.achatMode && m.achatStreaming && m.achatSharedBuf != nil {
+			m.achatStreamBuf = m.achatSharedBuf.Get()
+			m.rebuildArticleChatLines(m.achatBuildWidth())
+			viewH := m.achatViewHeight()
+			m.achatAutoScrollToBottom(viewH)
+		}
 		cmds = append(cmds, spinnerTick())
 
 	case navLoadedMsg:
@@ -104,11 +110,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.navLoaded = true
+		// Scan for article chat indicators.
+		if len(m.navItemsAll) > 0 {
+			slugs := make([]string, len(m.navItemsAll))
+			for i, it := range m.navItemsAll {
+				slugs[i] = it.id
+			}
+			cmds = append(cmds, scanArticleChatsCmd(m.cfg.ArticlesRoot, slugs))
+		}
 		// Trigger content load for the selected item.
 		if m.navCursor >= 0 && m.navCursor < len(m.navItems) && m.navItems[m.navCursor].root != "" {
 			m.contentLoading = true
 			cmds = append(cmds, loadContent(m.navItems[m.navCursor].root, m.cfg.PreferredStyles, m.cfg.PreferredModels))
 		}
+
+	case achatScanDoneMsg:
+		m.achatHasChat = msg.hasChat
 
 	case collectionsLoadedMsg:
 		if msg.err != "" {
@@ -781,6 +798,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatWorkspaceStatsMsg:
 		m.chatWorkspaceStats = msg.stats
 
+	case achatHistoryLoadedMsg:
+		if msg.err != "" {
+			m.statusMsg = "✗ " + msg.err
+			m.statusErr = true
+		} else if m.achatMode && m.achatSlug == msg.slug {
+			m.achatRawMsgs = msg.msgs
+			m.achatProfile = msg.profile
+			if m.achatProfile == "" {
+				m.achatProfile = m.cfg.ArticleChatProfileName()
+			}
+			m.focus = paneCommand
+			m.cursorVisible = true
+			m.syncInputPrompt()
+			m.rebuildArticleChatLines(m.achatBuildWidth())
+			m.collapseAllArticleChatBoxes()
+			viewH := m.achatViewHeight()
+			m.achatAutoScrollToBottom(viewH)
+			m.achatBoxCursor = 0
+			m.statusMsg = ""
+		}
+
+	case achatReadyMsg:
+		if msg.err != "" {
+			if m.achatMode && m.achatSlug == msg.slug {
+				m.statusMsg = "✗ chat: " + msg.err
+			}
+		} else if m.achatMode && m.achatSlug == msg.slug {
+			m.achatEngine = msg.engine
+			m.achatRawMsgs = msg.engine.History().Msgs
+			m.rebuildArticleChatLines(m.achatBuildWidth())
+			m.statusMsg = ""
+			// If a prompt was queued, send it now.
+			if m.achatPendingPrompt != "" {
+				prompt := m.achatPendingPrompt
+				m.achatPendingPrompt = ""
+				cmds = append(cmds, m.sendArticleChatMsg(prompt))
+			}
+		}
+
+	case achatStreamDoneMsg:
+		m.achatStreaming = false
+		m.achatStreamBuf = ""
+		m.achatSharedBuf = nil
+		if m.achatCancelStream != nil {
+			m.achatCancelStream = nil
+		}
+		if msg.err != "" {
+			m.statusMsg = "✗ " + msg.err
+		} else {
+			usage := msg.usage
+			m.achatLastUsage = &usage
+			m.achatLastElapsed = msg.elapsed
+			m.achatSessionIn += usage.InputTokens
+			m.achatSessionOut += usage.OutputTokens
+			m.achatSessionTurns++
+			profile := ""
+			if m.achatEngine != nil {
+				profile = m.achatEngine.Profile().Model
+			}
+			m.achatSessionCost += m.cfg.CalcCost(profile, usage.InputTokens, usage.OutputTokens)
+			cost := formatUSD(m.cfg.CalcCost(profile, usage.InputTokens, usage.OutputTokens))
+			m.statusMsg = "✓ " + profile + " · " + cost + fmt.Sprintf("  %.1fs", msg.elapsed.Seconds())
+		}
+		m.rebuildArticleChatLines(m.achatBuildWidth())
+		if n := m.achatBoxCount(); n > 0 {
+			if m.achatAutoScroll {
+				m.achatBoxCursor = n - 1
+			}
+		}
+		viewH := m.achatViewHeight()
+		m.achatAutoScrollToBottom(viewH)
+		// Mark article as having chat.
+		if m.achatHasChat == nil {
+			m.achatHasChat = map[string]bool{}
+		}
+		m.achatHasChat[m.achatSlug] = true
+
 	case askxStreamDoneMsg:
 		m.handleAskXStreamDone(msg)
 		if msg.costUSD > 0 {
@@ -863,8 +957,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.removeReviewing = false
 			m.statusMsg = "remove review cancelled"
 		}
+		// Article chat: Esc with empty input exits article chat mode.
+		if m.achatMode && m.input.Value() == "" && m.focus == paneCommand {
+			m.exitArticleChat()
+			m.syncInputPrompt()
+			m.setFocusPane(paneNav)
+			return nil
+		}
 		// If input is already empty and not in chat mode, move focus to nav.
-		if m.input.Value() == "" && !m.chatMode && m.focus == paneCommand {
+		if m.input.Value() == "" && !m.chatMode && !m.achatMode && m.focus == paneCommand {
 			m.setFocusPane(paneNav)
 			return nil
 		}
@@ -998,6 +1099,7 @@ func (m *Model) setFocusPane(p focusPane) {
 	m.focus = p
 	m.scratchFocused = false
 	m.askxFocused = false
+	m.achatFocused = false
 	if p == paneCommand {
 		m.cursorVisible = true
 	}
@@ -1010,6 +1112,13 @@ func (m *Model) setFocusPane(p focusPane) {
 			m.chatScroll = m.chatTotalLines()
 		}
 	}
+	if m.achatMode && p == paneContent {
+		m.achatFocused = true
+		m.rebuildArticleChatLines(m.achatBuildWidth())
+		if n := m.achatBoxCount(); n > 0 {
+			m.achatBoxCursor = n - 1
+		}
+	}
 }
 
 // handleTabBarKey handles keys when the top tab bar has focus.
@@ -1018,11 +1127,17 @@ func (m *Model) setFocusPane(p focusPane) {
 func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case key.Matches(msg, keys.ContentTabPrev):
+		if m.achatMode {
+			m.exitArticleChat()
+		}
 		if m.chatMode {
 			m.exitChatMode()
 		}
 		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
 	case key.Matches(msg, keys.ContentTabNext):
+		if m.achatMode {
+			m.exitArticleChat()
+		}
 		if m.chatMode {
 			m.exitChatMode()
 		}
@@ -1257,6 +1372,10 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		if m.navSubTab == navSubTabWorkspaces {
 			m.wsToggleFocus()
 			return nil
+		}
+	case msg.String() == "c":
+		if m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections {
+			return m.cmdArticleChat()
 		}
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
@@ -2033,6 +2152,9 @@ func (m *Model) navSelect() tea.Cmd {
 
 // switchNavSubTab switches to the given Library nav sub-tab.
 func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
+	if m.achatMode {
+		m.exitArticleChat()
+	}
 	if m.chatMode && sub != navSubTabWorkspaces {
 		m.exitChatMode()
 	}
@@ -2646,6 +2768,9 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	if m.previewOpen && m.previewFocused {
 		return m.handlePreviewKey(msg)
 	}
+	if m.achatMode && m.achatFocused {
+		return m.handleArticleChatContentKey(msg)
+	}
 	if m.chatMode {
 		return m.handleChatContentKey(msg)
 	}
@@ -3052,6 +3177,56 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			return m.handleRemoveReviewInput(val)
 		}
 		if val != "" {
+			if m.achatMode {
+				// "//" prefix → note.
+				if strings.HasPrefix(val, "//") {
+					raw := strings.TrimSpace(val[2:])
+					return m.cmdArticleChatAddNote(raw)
+				}
+				if strings.HasPrefix(val, "!") {
+					shellCmd := strings.TrimSpace(val[1:])
+					if shellCmd != "" {
+						return runShellCmd(shellCmd)
+					}
+				}
+				if strings.HasPrefix(val, "/") {
+					parts := strings.Fields(val)
+					cmd := parts[0]
+					arg := ""
+					if len(parts) > 1 {
+						arg = strings.TrimSpace(val[len(cmd)+1:])
+					}
+					handled, c := m.dispatchArticleChatCommand(cmd, arg)
+					if handled {
+						return c
+					}
+					// Unknown command — fall through to global dispatch.
+					return m.dispatchCommand(val)
+				}
+				if m.achatStreaming {
+					m.statusMsg = "waiting for response…"
+					return nil
+				}
+				// Resolve implicit @b/@s/@f markers (article-specific shorthand).
+				val = m.resolveArticleChatAtRefs(val)
+				// Resolve @<numID> references.
+				if atRefPattern.MatchString(val) {
+					resolved, err := m.resolveAtRefs(val)
+					if err != nil {
+						m.setStatusError(err.Error())
+						return nil
+					}
+					val = resolved
+				}
+				if m.achatEngine == nil {
+					// Lazy init: start engine, send prompt when ready.
+					m.achatPendingPrompt = val
+					m.statusMsg = "initializing…"
+					m.achatAutoScroll = true
+					return m.startArticleChatCmd(m.achatSlug, m.achatProfile)
+				}
+				return m.sendArticleChatMsg(val)
+			}
 			if m.chatMode {
 				// "//" prefix → note: stored in history, never sent to LLM.
 				// Must be checked before the "/" command prefix.
@@ -3304,6 +3479,10 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 	if item == nil || item.root == "" {
 		return nil
 	}
+	// Close article chat if we've navigated to a different article.
+	if m.achatMode && item.id != m.achatSlug {
+		m.exitArticleChat()
+	}
 	m.contentLoading = true
 	m.contentLines = nil
 	m.contentLineCursor = 0
@@ -3467,6 +3646,26 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		}
 		return items
 
+	case "/collection-add":
+		var items []cmdCompletion
+		for _, r := range m.navRows {
+			if r.kind == rowCollection {
+				items = append(items, cmdCompletion{cmd: r.colSlug, desc: fmt.Sprintf("%d articles", r.colCount)})
+			}
+		}
+		return items
+
+	case "/collection-remove":
+		sel := m.selectedNavItem()
+		if sel == nil {
+			return nil
+		}
+		var items []cmdCompletion
+		for _, slug := range sel.collections {
+			items = append(items, cmdCompletion{cmd: slug})
+		}
+		return items
+
 	case "/delete":
 		sub := m.navSubTab
 		if m.activeTab != tabLibrary {
@@ -3555,12 +3754,9 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			{cmd: "open", desc: "no grounding — general LLM knowledge"},
 		}
 
-	case "/profile":
+	case "/profile", "/model":
 		var items []cmdCompletion
 		for name, p := range m.cfg.Profiles {
-			if p.Provider != "anthropic" {
-				continue // tool calling only supported for Anthropic
-			}
 			items = append(items, cmdCompletion{cmd: name, desc: p.Model})
 		}
 		return items
@@ -3904,12 +4100,41 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 		return m.cmdMarkUnread()
 
+	case "/chat":
+		if sub != navSubTabArticles && sub != navSubTabCollections {
+			m.statusMsg = "✗ /chat requires an article selected"
+			return nil
+		}
+		return m.cmdArticleChat()
+
 	case "/reprocess":
 		if sub != navSubTabArticles {
 			m.statusMsg = "✗ /reprocess is only available in Articles context"
 			return nil
 		}
 		return m.cmdReprocess()
+
+	case "/collection-add":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /collection-add is only available in Articles context"
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "usage: /collection-add <slug>"
+			return nil
+		}
+		return m.cmdCollectionAdd(arg)
+
+	case "/collection-remove":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /collection-remove is only available in Articles context"
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "usage: /collection-remove <slug>"
+			return nil
+		}
+		return m.cmdCollectionRemove(arg)
 
 	case "/ingest":
 		if arg == "" {
@@ -3971,7 +4196,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		m.statusMsg = "grounding mode → " + arg
 		return nil
 
-	case "/profile":
+	case "/profile", "/model":
 		if !m.chatMode {
 			m.statusMsg = "✗ /profile is only available in workspace chat"
 			return nil
@@ -3990,13 +4215,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			}
 			return nil
 		}
-		p, ok := m.cfg.Profiles[arg]
-		if !ok {
+		if _, ok := m.cfg.Profiles[arg]; !ok {
 			m.statusMsg = "✗ unknown profile: " + arg
-			return nil
-		}
-		if p.Provider != "anthropic" {
-			m.statusMsg = "✗ " + arg + ": tool calling requires an Anthropic profile"
 			return nil
 		}
 		// Persist to workspace chat/chat.json.
@@ -4362,6 +4582,88 @@ func (m *Model) cmdMarkUnread() tea.Cmd {
 	svc := m.svc
 	return func() tea.Msg {
 		_ = svc.MarkUnread(context.Background(), id)
+		return nil
+	}
+}
+
+// cmdCollectionAdd adds the current article to the named collection.
+func (m *Model) cmdCollectionAdd(collSlug string) tea.Cmd {
+	item := m.selectedNavItem()
+	if item == nil {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	articleSlug := item.id
+	// Check not already a member.
+	for _, c := range item.collections {
+		if c == collSlug {
+			m.statusMsg = "✗ already in collection: " + collSlug
+			return nil
+		}
+	}
+	// Update in-memory.
+	for i, ni := range m.navItemsAll {
+		if ni.id == articleSlug {
+			m.navItemsAll[i].collections = append(m.navItemsAll[i].collections, collSlug)
+			break
+		}
+	}
+	m.statusMsg = "✓ added to collection: " + collSlug
+	if m.svc == nil {
+		return nil
+	}
+	svc := m.svc
+	return func() tea.Msg {
+		if err := svc.AddToCollection(context.Background(), articleSlug, collSlug); err != nil {
+			slog.Error("AddToCollection", "err", err)
+		}
+		return nil
+	}
+}
+
+// cmdCollectionRemove removes the current article from the named collection.
+func (m *Model) cmdCollectionRemove(collSlug string) tea.Cmd {
+	item := m.selectedNavItem()
+	if item == nil {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	articleSlug := item.id
+	// Check is a member.
+	found := false
+	for _, c := range item.collections {
+		if c == collSlug {
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.statusMsg = "✗ not in collection: " + collSlug
+		return nil
+	}
+	// Update in-memory.
+	for i, ni := range m.navItemsAll {
+		if ni.id == articleSlug {
+			cols := m.navItemsAll[i].collections
+			out := cols[:0]
+			for _, c := range cols {
+				if c != collSlug {
+					out = append(out, c)
+				}
+			}
+			m.navItemsAll[i].collections = out
+			break
+		}
+	}
+	m.statusMsg = "✓ removed from collection: " + collSlug
+	if m.svc == nil {
+		return nil
+	}
+	svc := m.svc
+	return func() tea.Msg {
+		if err := svc.RemoveFromCollection(context.Background(), articleSlug, collSlug); err != nil {
+			slog.Error("RemoveFromCollection", "err", err)
+		}
 		return nil
 	}
 }
@@ -6304,6 +6606,9 @@ var helpGroups = []struct {
 		{"/read", "", "mark as read"},
 		{"/unread", "", "mark as unread"},
 		{"/favorite", "", "toggle favorite"},
+		{"/collection-add", "<slug>", "add article to a collection (picker in status pane)"},
+		{"/collection-remove", "<slug>", "remove article from a collection (picker in status pane)"},
+		{"/chat", "", "open article chat pane (or press c in nav)"},
 		{"/delete", "", "delete current article"},
 		{"/reprocess", "", "regenerate summary/flash"},
 		{"/ingest", "<url> [--profile <name>] [--style <name>]", "add a new article — use /article ingest from any tab"},
@@ -6312,10 +6617,9 @@ var helpGroups = []struct {
 		{"/search", "<query>", "filter collections by name/slug"},
 		{"/clear", "", "clear active filter"},
 		{"/reload", "", "refresh collections list from disk"},
+		{"/chat", "", "open article chat pane (or press c in nav)"},
 		{"/delete", "", "delete current collection"},
 		{"arc collections create", "<slug>", "create a new collection  (CLI only)"},
-		{"arc collections add", "<article> <slug>", "add article to collection  (CLI only)"},
-		{"arc collections remove", "<article> <slug>", "remove article  (CLI only)"},
 		{"arc collections rename", "<old> <new>", "rename  (CLI only)"},
 		{"arc collections describe", "<slug> <desc>", "set description  (CLI only)"},
 		{"arc collections suggest", "[--apply]", "AI-suggest collections  (CLI only)"},
@@ -6351,6 +6655,7 @@ var helpGroups = []struct {
 		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
 		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
 		{"h / ←", "", "previous content tab"},
+		{"c", "", "open article chat (Articles / Collections nav)"},
 		{"r", "", "mark article as read"},
 		{"u", "", "mark article as unread"},
 		{"f/*", "", "toggle favorite"},
@@ -6751,7 +7056,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click in content pane.
 			m.focus = paneContent
 			// Check if click is in the scratch or askX region.
-			splitOpen := m.scratchOpen || m.askxOpen || m.previewOpen
+			splitOpen := m.scratchOpen || m.askxOpen || m.previewOpen || m.achatMode
 			if splitOpen {
 				splitStartRow := m.splitPaneStartRow()
 				if msg.Y >= splitStartRow {
@@ -6763,6 +7068,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					}
 					if m.previewOpen {
 						m.previewFocused = true
+					}
+					if m.achatMode {
+						m.achatFocused = true
 					}
 					return nil
 				}

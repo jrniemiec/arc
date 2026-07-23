@@ -184,6 +184,61 @@ func New(cfg config.Config, workspaceName, profileName string) (*Engine, error) 
 	}, nil
 }
 
+// NewArticleChat creates an Engine for per-article chat.
+// Unlike workspace chat, there is no corpus map, no tools, and no grounding mode.
+// The system prompt is provided directly (already assembled with the article summary).
+func NewArticleChat(cfg config.Config, articlesRoot, slug, profileName, systemPrompt string) (*Engine, error) {
+	// Build a ChatConfig from the global ArticleChat defaults.
+	chatCfg := config.ChatConfig{
+		Strategy:        cfg.ArticleChat.Strategy,
+		MaxUserMessages: cfg.ArticleChat.MaxUserMessages,
+		MaxOutputTokens: cfg.ArticleChat.MaxOutputTokens,
+	}
+	chatCfg = chatCfgWithDefaults(chatCfg)
+
+	// Resolve profile.
+	resolved := profileName
+	if resolved == "" {
+		resolved = cfg.ArticleChatProfileName()
+	}
+	prof, ok := cfg.Profiles[resolved]
+	if !ok {
+		for name, p := range cfg.Profiles {
+			prof = p
+			resolved = name
+			break
+		}
+		if resolved == "" {
+			return nil, fmt.Errorf("no profiles configured")
+		}
+	}
+
+	prov, err := provider.New(prof, chatCfg.MaxOutputTokens)
+	if err != nil {
+		return nil, fmt.Errorf("init provider for profile %q: %w", resolved, err)
+	}
+
+	st := chat.NewArticleChatStore(articlesRoot, slug)
+
+	history, err := st.LoadHistory()
+	if err != nil {
+		return nil, fmt.Errorf("load history: %w", err)
+	}
+
+	return &Engine{
+		cfg:           cfg,
+		workspaceName: slug, // reuse field for identification
+		profileName:   resolved,
+		profile:       prof,
+		chatCfg:       chatCfg,
+		prov:          prov,
+		st:            st,
+		history:       history,
+		systemPrompt:  systemPrompt,
+		groundingMode: "open", // no grounding — plain conversation
+	}, nil
+}
+
 // Chat sends prompt to the provider with the tool loop, applies the context
 // strategy, and (unless SkipHistory) persists the exchange to history.
 // onDelta is called for each streaming token; pass nil to suppress streaming.
@@ -233,6 +288,23 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 		"mode", e.groundingMode,
 		"turn", e.turnID,
 		"context_msgs", len(workingMsgs))
+
+	// Debug: log system prompt and all messages sent to the LLM.
+	slog.Debug("chat LLM request",
+		"system_prompt", e.systemPrompt,
+		"user_prompt", userPrompt)
+	for i, msg := range workingMsgs {
+		content := msg.Content
+		if len(content) > 500 {
+			content = content[:500] + "…[truncated]"
+		}
+		slog.Debug("chat LLM context msg",
+			"idx", i,
+			"role", msg.Role,
+			"content", content,
+			"tool_calls", len(msg.ToolCalls),
+			"commented", msg.Commented)
+	}
 
 	// --- 3. Tool loop ---
 	var turnUsage chat.Usage
@@ -431,7 +503,12 @@ func execTool(ctx context.Context, cfg config.Config, workspaceName string, call
 }
 
 // refreshCorpusMap checks the corpus map fingerprint and rebuilds if changed.
+// Skipped for article chat engines (no corpus map, no workspace).
 func (e *Engine) refreshCorpusMap() error {
+	if e.corpusMap.Fingerprint == "" && e.mapFingerprint == "" {
+		// No corpus map was ever set (e.g. article chat) — nothing to refresh.
+		return nil
+	}
 	fp, err := corpusmap.ComputeFingerprint(e.cfg, e.workspaceName)
 	if err != nil {
 		return err
@@ -528,6 +605,20 @@ func (e *Engine) ProfileName() string { return e.profileName }
 
 // Profile returns the active profile config.
 func (e *Engine) Profile() config.Profile { return e.profile }
+
+// SetProfile switches the LLM profile for subsequent calls.
+func (e *Engine) SetProfile(name string, prof config.Profile) error {
+	prov, err := provider.New(prof, e.chatCfg.MaxOutputTokens)
+	if err != nil {
+		return fmt.Errorf("init provider for profile %q: %w", name, err)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.profileName = name
+	e.profile = prof
+	e.prov = prov
+	return nil
+}
 
 // WorkspaceName returns the workspace name.
 func (e *Engine) WorkspaceName() string { return e.workspaceName }

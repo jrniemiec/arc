@@ -528,6 +528,31 @@ type Model struct {
 	chatCollapsed      map[int]bool          // set of collapsed box indices
 	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
 
+	// Article chat mode (per-article conversational chat in askX pane area)
+	achatMode          bool                  // true when article chat is active
+	achatSlug          string                // article slug being chatted with
+	achatEngine        *chatengine.Engine    // nil until first message
+	achatProfile       string                // resolved profile name
+	achatDisplayLines  []chatLine            // rendered conversation lines
+	achatScroll        int                   // scroll offset into achatDisplayLines
+	achatStreaming      bool                  // true while LLM response is in flight
+	achatStreamBuf     string                // accumulated streaming response text
+	achatSharedBuf     *streamBuf            // goroutine-safe buffer
+	achatCancelStream  context.CancelFunc    // cancels in-flight request
+	achatLastUsage     *chat.Usage           // per-turn token counts
+	achatLastElapsed   time.Duration         // per-turn elapsed time
+	achatAutoScroll    bool                  // auto-scroll to bottom
+	achatRawMsgs       []chat.Message        // history for display before engine ready
+	achatBoxCursor     int                   // selected box index
+	achatCollapsed     map[int]bool          // collapsed box indices
+	achatPendingPrompt string                // prompt queued before engine ready
+	achatFocused       bool                  // true when chat split has focus (within paneContent)
+	achatHasChat       map[string]bool       // cached: slug → has chat history
+	achatSessionTurns  int                   // session turn count
+	achatSessionIn     int                   // session input tokens
+	achatSessionOut    int                   // session output tokens
+	achatSessionCost   float64               // session cost USD
+
 	// Scratch pane (split at bottom of content pane)
 	scratchOpen        bool           // true when scratch split is visible
 	scratchFocused     bool           // true when scratch region has focus (within paneContent)
@@ -670,6 +695,9 @@ var articleCommands = []cmdCompletion{
 	{"/read", "", "mark as read"},
 	{"/unread", "", "mark as unread"},
 	{"/favorite", "", "toggle favorite"},
+	{"/chat", "", "open article chat session"},
+	{"/collection-add", "<slug>", "add article to a collection"},
+	{"/collection-remove", "<slug>", "remove article from a collection"},
 	{"/delete", "[slug]", "delete article (selected or by name)"},
 	{"/reprocess", "", "regenerate summary/flash"},
 	{"/ingest", "<url>", "add a new article"},
@@ -704,11 +732,22 @@ var feedCommands = []cmdCompletion{
 	{"/feed-delete", "", "delete selected feed (with confirmation)"},
 }
 
+// achatCommands are available when article chat mode is active.
+var achatCommands = []cmdCompletion{
+	{"/clear", "", "clear conversation history"},
+	{"/profile", "[name]", "show or switch LLM profile"},
+	{"/model", "[name]", "alias for /profile"},
+	{"/stats", "", "show session token usage and cost"},
+	{"/system", "", "print system prompt"},
+	{"/help", "", "show article chat commands"},
+}
+
 // chatCommands are available when workspace chat mode is active.
 var chatCommands = []cmdCompletion{
 	{"/clear", "", "clear conversation history"},
 	{"/mode", "[corpus-only|corpus-first|open]", "show or switch grounding mode"},
 	{"/profile", "[name]", "show or switch LLM profile for this session"},
+	{"/model", "[name]", "alias for /profile"},
 	{"/reload", "", "rebuild corpus map to pick up article changes"},
 	{"/stats", "", "show session token usage and cost"},
 	{"/system", "", "print system prompt"},
@@ -748,6 +787,9 @@ var chatCommands = []cmdCompletion{
 
 // allCommands returns global commands plus context-specific commands for the active sub-tab.
 func (m *Model) allCommands() []cmdCompletion {
+	if m.achatMode {
+		return achatCommands
+	}
 	if m.chatMode {
 		return chatCommands
 	}
@@ -792,6 +834,10 @@ type spinnerTickMsg struct{}
 type navLoadedMsg struct {
 	items []navItem
 	err   string
+}
+
+type achatScanDoneMsg struct {
+	hasChat map[string]bool
 }
 
 type statsLoadedMsg struct {
@@ -1454,6 +1500,9 @@ func (m Model) inputPrompt() string {
 	if m.removeReviewing && m.removeReviewIdx < len(m.removeReviewItems) {
 		n := len(m.removeReviewItems)
 		return fmt.Sprintf(" [%d/%d] Enter=remove  n=keep  q=done > ", m.removeReviewIdx+1, n)
+	}
+	if m.achatMode {
+		return m.achatPromptPrefix()
 	}
 	if m.chatMode {
 		if m.chatProfileOverride != "" {

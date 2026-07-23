@@ -1046,7 +1046,11 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 				prefix = "• "
 			}
 		}
-		title := truncate(oneLine(item.title), m.navWidth()-len(prefix)-idWidth-1)
+		chatSuffix := ""
+		if m.achatHasChat[item.id] {
+			chatSuffix = " 💬"
+		}
+		title := truncate(oneLine(item.title), m.navWidth()-len(prefix)-idWidth-1-len(chatSuffix)) + chatSuffix
 		var line string
 		if i == m.navCursor {
 			line = m.navSelected(idStr + prefix + title)
@@ -1085,8 +1089,12 @@ func (m Model) renderContentPane(height, width int) []string {
 	// Calculate scratch/askX split if open (mutually exclusive).
 	splitH := 0
 	contentH := height
-	if m.scratchOpen || m.askxOpen || m.previewOpen {
-		splitH = height / 3
+	if m.scratchOpen || m.askxOpen || m.previewOpen || m.achatMode {
+		if m.achatMode {
+			splitH = height / 2
+		} else {
+			splitH = height / 3
+		}
 		if splitH < 3 {
 			splitH = 3
 		}
@@ -1118,8 +1126,10 @@ func (m Model) renderContentPane(height, width int) []string {
 	}
 	lines = lines[:contentH]
 
-	// Append scratch or askX pane if open.
-	if m.scratchOpen && splitH > 0 {
+	// Append split pane if open (mutually exclusive).
+	if m.achatMode && splitH > 0 {
+		lines = append(lines, m.renderArticleChatPane(splitH, width)...)
+	} else if m.scratchOpen && splitH > 0 {
 		lines = append(lines, m.renderScratchPane(splitH, width)...)
 	} else if m.askxOpen && splitH > 0 {
 		lines = append(lines, m.renderAskXPane(splitH, width)...)
@@ -2958,6 +2968,9 @@ func (m Model) renderStatusLine() string {
 	}
 	if (m.askxOpen || m.askxStreaming) && !m.selectionMode {
 		return m.renderAskXStatusLine()
+	}
+	if (m.achatMode || m.achatStreaming) && !m.selectionMode {
+		return m.renderArticleChatStatusLine()
 	}
 	if m.ttsPlayer.Playing() && m.contentTTSText != "" && !m.selectionMode {
 		rate := m.cfg.TTSRate

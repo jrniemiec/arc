@@ -673,12 +673,7 @@ func (s *Service) ReadCollection(ctx context.Context, slug string, req ReadReque
 
 // GetArticle returns a single article by ID with Files populated from disk.
 func (s *Service) GetArticle(ctx context.Context, id string) (store.Article, error) {
-	a, err := s.lib.Get(ctx, id)
-	if err != nil {
-		return store.Article{}, err
-	}
-	a.Files = fs.ProbeFiles(filepath.Join(s.cfg.ArticlesRoot, id))
-	return a, nil
+	return s.lib.Get(ctx, id)
 }
 
 // GetArticleByNumID returns an article by its numeric ID with files resolved.

@@ -19,8 +19,9 @@ import (
 //
 // See local/CHAT_ARCHITECTURE.md for full details on how these files are used.
 type ChatStore struct {
-	dataRoot      string
-	workspaceName string
+	dataRoot        string
+	workspaceName   string
+	chatDirOverride string // when set, chatDir() returns this directly (for article chat)
 }
 
 // NewChatStore creates a ChatStore for the given workspace.
@@ -28,11 +29,24 @@ func NewChatStore(dataRoot, workspaceName string) *ChatStore {
 	return &ChatStore{dataRoot: dataRoot, workspaceName: workspaceName}
 }
 
+// NewArticleChatStore creates a ChatStore for an article's chat directory.
+// The chatDir is set directly to <articlesRoot>/<slug>/chat/.
+func NewArticleChatStore(articlesRoot, slug string) *ChatStore {
+	return &ChatStore{
+		dataRoot:      articlesRoot, // not used when chatDirOverride is set
+		workspaceName: slug,         // not used when chatDirOverride is set
+		chatDirOverride: filepath.Join(articlesRoot, slug, "chat"),
+	}
+}
+
 func (s *ChatStore) workspaceDir() string {
 	return filepath.Join(s.dataRoot, "workspaces", s.workspaceName)
 }
 
 func (s *ChatStore) chatDir() string {
+	if s.chatDirOverride != "" {
+		return s.chatDirOverride
+	}
 	return filepath.Join(s.workspaceDir(), "chat")
 }
 

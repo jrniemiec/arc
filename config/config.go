@@ -58,6 +58,9 @@ type Config struct {
 	// AskX (single-shot LLM query pane in TUI)
 	AskX AskXConfig `json:"askx"`
 
+	// ArticleChat holds defaults for per-article chat sessions.
+	ArticleChat ArticleChatConfig `json:"article_chat"`
+
 	// WorkspacePopulate controls LLM-assisted workspace population.
 	WorkspacePopulate WorkspacePopulateConfig `json:"workspace_populate"`
 
@@ -194,6 +197,28 @@ type FlashcardStyleConfig struct {
 	SystemPrompt string `json:"system_prompt"`
 }
 
+// ArticleChatConfig holds defaults for per-article chat sessions.
+type ArticleChatConfig struct {
+	// Profile is the default arc profile name for article chat.
+	// Empty falls back to askx.profile, then "haiku".
+	Profile string `json:"profile"`
+
+	// Strategy controls how conversation history is trimmed.
+	// Options: "tail", "token-budget", "summarize". Default: "tail".
+	Strategy string `json:"strategy"`
+
+	// MaxUserMessages is the number of past user turns kept by the tail strategy.
+	// Default: 50.
+	MaxUserMessages int `json:"max_user_messages"`
+
+	// MaxOutputTokens caps the response length. 0 uses the provider default.
+	MaxOutputTokens int `json:"max_output_tokens"`
+
+	// SystemPrompt is the system prompt template. Use {summary} as a placeholder
+	// for the article summary. Leave empty to use the built-in default.
+	SystemPrompt string `json:"system_prompt,omitempty"`
+}
+
 // AskXConfig holds configuration for the /askX single-shot LLM query pane.
 type AskXConfig struct {
 	// Profile is the arc profile name used for askX queries.
@@ -236,6 +261,16 @@ Estimated cost per run:
   Sonnet 4:   ~$0.11
   Opus 4:     ~$0.56
 Haiku is the recommended default — this is classification, not generation.`
+
+// DefaultArticleChatSystemPrompt is the built-in system prompt for per-article chat.
+// {summary} is replaced with the article's summary at runtime.
+const DefaultArticleChatSystemPrompt = `You are a knowledgeable tutor helping the user understand what they are reading. The article they are reading is summarized below — use it as context for the conversation.
+
+--- Article Summary ---
+{summary}
+---
+
+Answer questions freely using your broader knowledge. You are not limited to the article — extend, contrast, and connect ideas as needed. Be clear and concise. Use plain text — no markdown formatting.`
 
 // DefaultAskXSystemPrompt is the built-in system prompt for askX queries.
 const DefaultAskXSystemPrompt = `You are a concise, knowledgeable assistant. Answer directly and precisely. No preamble, no filler. Use plain text — no markdown formatting.`
@@ -420,6 +455,25 @@ func (c *Config) CollectionSuggestProfileName() string {
 		return c.Ingest.CollectionSuggestProfile
 	}
 	return c.Ingest.FlashProfile
+}
+
+// ArticleChatProfileName returns the effective profile name for article chat.
+func (c *Config) ArticleChatProfileName() string {
+	if c.ArticleChat.Profile != "" {
+		return c.ArticleChat.Profile
+	}
+	if c.AskX.Profile != "" {
+		return c.AskX.Profile
+	}
+	return "haiku"
+}
+
+// ArticleChatSystemPrompt returns the effective system prompt for article chat.
+func (c *Config) ArticleChatSystemPrompt() string {
+	if c.ArticleChat.SystemPrompt != "" {
+		return c.ArticleChat.SystemPrompt
+	}
+	return DefaultArticleChatSystemPrompt
 }
 
 // WorkspacePopulateProfileName returns the effective profile name for workspace populate.
@@ -681,6 +735,11 @@ func Default() Config {
 			SystemPrompt:    DefaultAskXSystemPrompt,
 			MaxOutputTokens: 4096,
 		},
+		ArticleChat: ArticleChatConfig{
+			Profile:         "haiku",
+			Strategy:        "tail",
+			MaxUserMessages: 50,
+		},
 		WorkspacePopulate: WorkspacePopulateConfig{
 			Profile:                    "haiku",
 			Pass1Prompt:                DefaultPopulatePass1Prompt,
@@ -732,6 +791,7 @@ func Load(path string) (Config, error) {
 		CookieJars      map[string]string  `json:"cookie_jars"`
 		Chat               ChatConfig               `json:"chat"`
 		AskX               AskXConfig               `json:"askx"`
+		ArticleChat        ArticleChatConfig         `json:"article_chat"`
 		WorkspacePopulate  WorkspacePopulateConfig   `json:"workspace_populate"`
 		LogPath            string                    `json:"log_path"`
 		LogLevel           string                    `json:"log_level"`
@@ -870,6 +930,21 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.AskX.MaxOutputTokens != 0 {
 		cfg.AskX.MaxOutputTokens = overlay.AskX.MaxOutputTokens
+	}
+	if overlay.ArticleChat.Profile != "" {
+		cfg.ArticleChat.Profile = overlay.ArticleChat.Profile
+	}
+	if overlay.ArticleChat.Strategy != "" {
+		cfg.ArticleChat.Strategy = overlay.ArticleChat.Strategy
+	}
+	if overlay.ArticleChat.MaxUserMessages != 0 {
+		cfg.ArticleChat.MaxUserMessages = overlay.ArticleChat.MaxUserMessages
+	}
+	if overlay.ArticleChat.MaxOutputTokens != 0 {
+		cfg.ArticleChat.MaxOutputTokens = overlay.ArticleChat.MaxOutputTokens
+	}
+	if overlay.ArticleChat.SystemPrompt != "" {
+		cfg.ArticleChat.SystemPrompt = overlay.ArticleChat.SystemPrompt
 	}
 	if overlay.WorkspacePopulate.Profile != "" {
 		cfg.WorkspacePopulate.Profile = overlay.WorkspacePopulate.Profile

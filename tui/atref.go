@@ -10,6 +10,53 @@ import (
 	"github.com/jrniemiec/arc/store"
 )
 
+// achatAtRefPattern matches bare @b, @s, @f markers used in article chat
+// (article ID is implicit from the current article chat slug).
+var achatAtRefPattern = regexp.MustCompile(`@(b|s|f)\b`)
+
+// resolveArticleChatAtRefs expands bare @b/@s/@f markers using the current
+// article chat slug. The article is looked up by slug (not numID).
+func (m *Model) resolveArticleChatAtRefs(input string) string {
+	if !m.achatMode || m.achatSlug == "" {
+		return input
+	}
+	if !achatAtRefPattern.MatchString(input) {
+		return input
+	}
+
+	ctx := context.Background()
+	a, err := m.svc.GetArticle(ctx, m.achatSlug)
+	if err != nil {
+		return input
+	}
+
+	return achatAtRefPattern.ReplaceAllStringFunc(input, func(match string) string {
+		suffix := match[1:] // "b", "s", or "f"
+		switch suffix {
+		case "b":
+			text, err := m.svc.ReadBody(a)
+			if err != nil {
+				return match
+			}
+			return fmt.Sprintf("--- %s (body) ---\n%s\n---\n", a.Title, text)
+		case "s":
+			text, err := m.svc.ReadSummary(a)
+			if err != nil {
+				return match
+			}
+			return fmt.Sprintf("--- %s (summary) ---\n%s\n---\n", a.Title, text)
+		case "f":
+			text, err := m.svc.ReadFlash(a)
+			if err != nil {
+				return match
+			}
+			return fmt.Sprintf("--- %s (flash) ---\n%s\n---\n", a.Title, text)
+		default:
+			return match
+		}
+	})
+}
+
 // atRefPattern matches @<numID> or @<numID>-<suffix>.
 // Suffix options: flash/f, summ/s, body/b, meta/m
 var atRefPattern = regexp.MustCompile(`@(\d+)(?:-(flash|f|summ|s|body|b|meta|m))?`)
