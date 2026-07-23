@@ -183,6 +183,9 @@ type IngestConfig struct {
 	// Collection suggestion
 	CollectionSuggestProfile  string `json:"collection_suggest_profile"`  // profile for arc collections suggest; default: flash_profile
 	CollectionSuggestPrompt   string `json:"collection_suggest_prompt"`   // system prompt override for collection suggestion
+	CollectionAssignProfile   string `json:"collection_assign_profile"`   // profile for arc collections assign; default: collection_suggest_profile
+	CollectionAssignPrompt    string `json:"collection_assign_prompt"`    // system prompt override for collection assignment
+	CollectionAssignBatch     int    `json:"collection_assign_batch"`     // articles per LLM call (default 50)
 	CollectionDescribePrompt  string `json:"collection_describe_prompt"`  // system prompt override for collection description generation
 }
 
@@ -338,6 +341,54 @@ func (c *Config) CollectionSuggestPrompt() string {
 		return c.Ingest.CollectionSuggestPrompt
 	}
 	return DefaultCollectionSuggestPrompt
+}
+
+// DefaultCollectionAssignPrompt is the built-in system prompt for batch
+// collection assignment. Given article titles and existing collections,
+// the LLM assigns each article to its best-fit collection.
+const DefaultCollectionAssignPrompt = `You are organizing a personal knowledge base.
+
+Given a batch of articles (slug + title) and a list of existing collections (slug + description),
+assign each article to the single best-fitting collection.
+
+Rules:
+- Every article must be assigned to exactly one collection
+- If no collection is a good fit, assign to "uncollected"
+- Use the exact collection slug from the list — do not invent new ones
+- Use the exact article slug as provided — do not modify it
+- Return JSON only, no prose
+
+Return a JSON array with one entry per article:
+[
+  {"slug": "20260101-building-ai-agents", "collection": "ai-agents"},
+  {"slug": "20260102-some-random-article", "collection": "uncollected"}
+]`
+
+// CollectionAssignPrompt returns the effective system prompt for batch
+// collection assignment, preferring user config over built-in default.
+func (c *Config) CollectionAssignPrompt() string {
+	if c.Ingest.CollectionAssignPrompt != "" {
+		return c.Ingest.CollectionAssignPrompt
+	}
+	return DefaultCollectionAssignPrompt
+}
+
+// CollectionAssignProfileName returns the effective profile name for collection
+// assignment, falling back to CollectionSuggestProfileName if not explicitly set.
+func (c *Config) CollectionAssignProfileName() string {
+	if c.Ingest.CollectionAssignProfile != "" {
+		return c.Ingest.CollectionAssignProfile
+	}
+	return c.CollectionSuggestProfileName()
+}
+
+// CollectionAssignBatchSize returns the effective batch size for collection
+// assignment, defaulting to 50.
+func (c *Config) CollectionAssignBatchSize() int {
+	if c.Ingest.CollectionAssignBatch > 0 {
+		return c.Ingest.CollectionAssignBatch
+	}
+	return 50
 }
 
 // DefaultCollectionDescribePrompt is the system prompt for generating a
@@ -756,6 +807,15 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Ingest.CollectionSuggestPrompt != "" {
 		cfg.Ingest.CollectionSuggestPrompt = overlay.Ingest.CollectionSuggestPrompt
+	}
+	if overlay.Ingest.CollectionAssignProfile != "" {
+		cfg.Ingest.CollectionAssignProfile = overlay.Ingest.CollectionAssignProfile
+	}
+	if overlay.Ingest.CollectionAssignPrompt != "" {
+		cfg.Ingest.CollectionAssignPrompt = overlay.Ingest.CollectionAssignPrompt
+	}
+	if overlay.Ingest.CollectionAssignBatch > 0 {
+		cfg.Ingest.CollectionAssignBatch = overlay.Ingest.CollectionAssignBatch
 	}
 	if overlay.Ingest.CollectionDescribePrompt != "" {
 		cfg.Ingest.CollectionDescribePrompt = overlay.Ingest.CollectionDescribePrompt

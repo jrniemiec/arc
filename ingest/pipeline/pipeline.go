@@ -1137,7 +1137,7 @@ func CollectionSuggest(ctx context.Context, cfg config.Config, req CollectionSug
 		"output_tokens", usage.OutputTokens,
 		"cost_usd", costUSD,
 	)
-	appendCollectionSuggestEvent(cfg.EventsPath, prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
+	appendCollectionEvent(cfg.EventsPath, "collection_suggest", prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
 
 	return parseCollectionSuggestions(resp)
 }
@@ -1359,7 +1359,155 @@ func parseCollectionMatches(resp string) ([]CollectionArticleMatchResult, error)
 	return out, nil
 }
 
-func appendCollectionSuggestEvent(eventsPath, model string, inputTokens, outputTokens int, costUSD float64) {
+// CollectionAssignArticle is one article entry for the assignment prompt.
+type CollectionAssignArticle struct {
+	Slug  string
+	Title string
+}
+
+// CollectionAssignRequest describes a batch collection assignment call.
+type CollectionAssignRequest struct {
+	Articles    []CollectionAssignArticle    // articles to assign (slug + title)
+	Collections []CollectionSuggestCollection // existing collections (slug + description)
+	Profile     string                       // profile name override
+	Progress    func(string)
+}
+
+// CollectionAssignResult is one article-to-collection assignment.
+type CollectionAssignResult struct {
+	Slug       string
+	Collection string
+}
+
+// CollectionAssign calls the LLM to assign articles to existing collections
+// in batches of 50. Returns all assignments across all batches.
+func CollectionAssign(ctx context.Context, cfg config.Config, req CollectionAssignRequest) ([]CollectionAssignResult, error) {
+	profileName := req.Profile
+	if profileName == "" {
+		profileName = cfg.CollectionAssignProfileName()
+	}
+	prof, err := lookupProfile(cfg, profileName)
+	if err != nil {
+		return nil, fmt.Errorf("profile: %w", err)
+	}
+	p, err := llm.New(llm.ProviderConfig{
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           false,
+		MaxOutputTokens: 16384,
+		Timeout:         5 * time.Minute,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("llm provider: %w", err)
+	}
+
+	systemPrompt := cfg.CollectionAssignPrompt()
+
+	// Build collections list (same for all batches)
+	var colSB strings.Builder
+	colSB.WriteString("Collections:\n")
+	for _, c := range req.Collections {
+		if c.Description != "" {
+			colSB.WriteString(fmt.Sprintf("- %s: %s\n", c.Slug, c.Description))
+		} else {
+			colSB.WriteString(fmt.Sprintf("- %s\n", c.Slug))
+		}
+	}
+	colList := colSB.String()
+
+	// Process in batches
+	batchSize := cfg.CollectionAssignBatchSize()
+	var allResults []CollectionAssignResult
+
+	for i := 0; i < len(req.Articles); i += batchSize {
+		end := i + batchSize
+		if end > len(req.Articles) {
+			end = len(req.Articles)
+		}
+		batch := req.Articles[i:end]
+		batchNum := (i / batchSize) + 1
+		totalBatches := (len(req.Articles) + batchSize - 1) / batchSize
+
+		if req.Progress != nil {
+			req.Progress(fmt.Sprintf("batch %d/%d: assigning %d articles (model: %s)...", batchNum, totalBatches, len(batch), prof.Model))
+		}
+
+		var sb strings.Builder
+		sb.WriteString(colList)
+		sb.WriteString("\nArticles:\n")
+		for _, a := range batch {
+			sb.WriteString(fmt.Sprintf("- slug: %s | title: %s\n", a.Slug, a.Title))
+		}
+		userMsg := sb.String()
+
+		slog.Info("collection assign batch",
+			"batch", batchNum,
+			"total_batches", totalBatches,
+			"articles", len(batch),
+			"profile", profileName,
+			"model", prof.Model,
+		)
+
+		resp, usage, err := p.Chat(ctx, systemPrompt, []llm.Message{
+			{Role: llm.RoleUser, Content: userMsg},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("llm batch %d: %w", batchNum, err)
+		}
+
+		costUSD := cfg.CalcCost(prof.Model, usage.InputTokens, usage.OutputTokens)
+		slog.Info("collection assign batch done",
+			"batch", batchNum,
+			"model", prof.Model,
+			"input_tokens", usage.InputTokens,
+			"output_tokens", usage.OutputTokens,
+			"cost_usd", costUSD,
+		)
+		appendCollectionEvent(cfg.EventsPath, "collection_assign", prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
+
+		results, err := parseCollectionAssignments(resp)
+		if err != nil {
+			return nil, fmt.Errorf("batch %d: %w", batchNum, err)
+		}
+		allResults = append(allResults, results...)
+	}
+
+	return allResults, nil
+}
+
+// parseCollectionAssignments parses the LLM JSON response for batch assignment.
+func parseCollectionAssignments(resp string) ([]CollectionAssignResult, error) {
+	resp = strings.TrimSpace(resp)
+	if i := strings.Index(resp, "["); i > 0 {
+		resp = resp[i:]
+	}
+	if i := strings.LastIndex(resp, "]"); i >= 0 {
+		resp = resp[:i+1]
+	}
+
+	var raw []struct {
+		Slug       string `json:"slug"`
+		Collection string `json:"collection"`
+	}
+	if err := json.Unmarshal([]byte(resp), &raw); err != nil {
+		return nil, fmt.Errorf("parse collection assignments: %w\nresponse: %s", err, resp)
+	}
+	out := make([]CollectionAssignResult, 0, len(raw))
+	for _, r := range raw {
+		if r.Slug == "" || r.Collection == "" {
+			continue
+		}
+		out = append(out, CollectionAssignResult{
+			Slug:       r.Slug,
+			Collection: r.Collection,
+		})
+	}
+	return out, nil
+}
+
+func appendCollectionEvent(eventsPath, eventType, model string, inputTokens, outputTokens int, costUSD float64) {
 	type costBlock struct {
 		CostUSD float64 `json:"cost_usd"`
 		Model   string  `json:"model"`
@@ -1371,7 +1519,7 @@ func appendCollectionSuggestEvent(eventsPath, model string, inputTokens, outputT
 		Cost  costBlock `json:"cost"`
 	}{
 		TS:    time.Now().UTC(),
-		Type:  "collection_suggest",
+		Type:  eventType,
 		Model: model,
 		Cost: costBlock{
 			CostUSD: costUSD,

@@ -98,7 +98,8 @@ type Filter struct {
 	Before     *time.Time
 	Unread     bool
 	Unplayed   bool
-	Uncollected bool   // only articles that belong to no collection
+	Uncollected      bool // only articles not in any real collection (uncollected collection doesn't count)
+	UncollectedFresh bool // only articles not in any collection at all (including uncollected)
 	AgentOnly   bool   // only articles ingested by the feed agent (agent_run_id IS NOT NULL)
 	AgentRunID  string // only articles from this specific agent run
 	Slugs      []string // restrict to these article slugs (empty = no restriction)

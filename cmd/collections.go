@@ -26,6 +26,7 @@ func init() {
 	collectionsCmd.AddCommand(collectionsGenerateDescriptionCmd)
 	collectionsCmd.AddCommand(collectionsGenerateDescriptionAllCmd)
 	collectionsCmd.AddCommand(collectionsSuggestCmd)
+	collectionsCmd.AddCommand(collectionsAssignCmd)
 	collectionsCmd.AddCommand(collectionsSearchCmd)
 	collectionsCmd.AddCommand(collectionsReadCmd)
 	collectionsCmd.AddCommand(collectionsDeleteCmd)
@@ -56,6 +57,12 @@ func init() {
 	collectionsSuggestCmd.Flags().Int("count", 0, "target number of collections (0 = let the model decide)")
 	collectionsSuggestCmd.Flags().Int("min", 0, "minimum articles per collection (0 = no constraint)")
 	collectionsSuggestCmd.Flags().Int("limit", 0, "with --uncollected: process at most N articles (0 = no limit)")
+
+	collectionsAssignCmd.Flags().String("profile", "", "LLM profile override")
+	collectionsAssignCmd.Flags().Bool("apply", false, "create symlinks (default: dry-run)")
+	collectionsAssignCmd.Flags().Bool("all", false, "with --apply: skip confirmation")
+	collectionsAssignCmd.Flags().Int("limit", 0, "process at most N articles (0 = no limit)")
+	collectionsAssignCmd.Flags().Bool("uncollected-fresh", false, "only assign articles not in any collection at all")
 
 	collectionsReadCmd.Flags().Bool("flash", false, "read flash summaries (default)")
 	collectionsReadCmd.Flags().Bool("summary", false, "read full summaries")
@@ -736,6 +743,85 @@ func suggestForArticle(cmd *cobra.Command, svc *service.Service, articleSlug, pr
 		}
 	}
 	return nil
+}
+
+var collectionsAssignCmd = &cobra.Command{
+	Use:   "assign",
+	Short: "Assign uncollected articles to existing collections using AI",
+	Long: `Assigns uncollected articles to existing collections in batches of 50.
+Each batch is one LLM call. Articles that don't fit any collection go to "uncollected".
+
+By default only prints assignments — nothing is linked.
+Use --apply to create symlinks.
+
+Examples:
+  arc collections assign                     # dry-run, print assignments
+  arc collections assign --apply             # interactive: confirm per batch
+  arc collections assign --apply --all       # apply all without prompting
+  arc collections assign --limit 50          # process at most 50 articles
+  arc collections assign --profile haiku     # use a specific model`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		svc := svcFrom(cmd)
+		profile, _ := cmd.Flags().GetString("profile")
+		apply, _ := cmd.Flags().GetBool("apply")
+		acceptAll, _ := cmd.Flags().GetBool("all")
+		limit, _ := cmd.Flags().GetInt("limit")
+		tty := isTTY(os.Stdout)
+
+		progress := func(msg string) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
+		}
+
+		fresh, _ := cmd.Flags().GetBool("uncollected-fresh")
+		assignments, err := svc.AssignCollections(cmd.Context(), profile, limit, fresh, progress)
+		if err != nil {
+			return fmt.Errorf("assign collections: %w", err)
+		}
+		if len(assignments) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "no assignments")
+			return nil
+		}
+
+		// Group by collection for display
+		byCollection := make(map[string][]string)
+		for _, a := range assignments {
+			byCollection[a.CollectionSlug] = append(byCollection[a.CollectionSlug], a.ArticleSlug)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "\n%d assignments across %d collections:\n\n", len(assignments), len(byCollection))
+		for col, slugs := range byCollection {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s  (%d articles)\n", bold(col, tty), len(slugs))
+			for _, s := range slugs {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", s)
+			}
+			fmt.Fprintln(cmd.OutOrStdout())
+		}
+
+		if !apply {
+			fmt.Fprintln(cmd.ErrOrStderr(), dim("dry-run — use --apply to create symlinks", tty))
+			return nil
+		}
+
+		if !acceptAll {
+			if !promptYN(cmd, "Apply all assignments? [Y/n] ") {
+				fmt.Fprintln(cmd.OutOrStdout(), "aborted")
+				return nil
+			}
+		}
+
+		linked := 0
+		skipped := 0
+		for _, a := range assignments {
+			if err := svc.AddToCollection(cmd.Context(), a.ArticleSlug, a.CollectionSlug); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  skip %s → %s: %v\n", a.ArticleSlug, a.CollectionSlug, err)
+				skipped++
+				continue
+			}
+			linked++
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "linked %d articles, skipped %d\n", linked, skipped)
+		return nil
+	},
 }
 
 var collectionsDeleteCmd = &cobra.Command{

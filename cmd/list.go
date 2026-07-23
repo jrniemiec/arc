@@ -17,8 +17,9 @@ var (
 	listTag        string
 	listUnread     bool
 	listUnplayed   bool
-	listUncollected bool
-	listAgent       bool
+	listUncollected      bool
+	listUncollectedFresh bool
+	listAgent            bool
 	listAgentRun    string
 	listSlugs       bool
 )
@@ -29,6 +30,7 @@ func init() {
 	listCmd.Flags().BoolVar(&listUnread, "unread", false, "show only unread articles")
 	listCmd.Flags().BoolVar(&listUnplayed, "unplayed", false, "show only unplayed articles")
 	listCmd.Flags().BoolVar(&listUncollected, "uncollected", false, "show only articles not in any collection")
+	listCmd.Flags().BoolVar(&listUncollectedFresh, "uncollected-fresh", false, "show only articles not in any collection at all (excludes uncollected collection)")
 	listCmd.Flags().BoolVar(&listSlugs, "slugs", false, "print one slug per line (for scripting)")
 	listCmd.Flags().BoolVar(&listAgent, "agent", false, "show only articles ingested by the feed agent")
 	listCmd.Flags().StringVar(&listAgentRun, "agent-run", "", "show only articles from a specific agent run ID")
@@ -52,7 +54,8 @@ Filtering:
   --tag           show only articles with the given tag
   --unread        show only articles not yet marked as read
   --unplayed      show only articles not yet marked as played
-  --uncollected   show only articles not in any collection
+  --uncollected         show only articles not in any collection (treats "uncollected" collection as uncollected)
+  --uncollected-fresh   show only articles not in any collection at all
 
 Examples:
   arc list
@@ -69,13 +72,14 @@ Examples:
 		}
 
 		f := store.Filter{
-			Collection:  listCollection,
-			Uncollected: listUncollected,
-			Tags:        tags,
-			Unread:      listUnread,
-			Unplayed:    listUnplayed,
-			AgentOnly:   listAgent,
-			AgentRunID:  listAgentRun,
+			Collection:       listCollection,
+			Uncollected:      listUncollected,
+			UncollectedFresh: listUncollectedFresh,
+			Tags:             tags,
+			Unread:           listUnread,
+			Unplayed:         listUnplayed,
+			AgentOnly:        listAgent,
+			AgentRunID:       listAgentRun,
 		}
 
 		articles, err := svc.List(cmd.Context(), f)

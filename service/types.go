@@ -185,6 +185,12 @@ type CollectionSuggestion struct {
 	EstimatedCount int
 }
 
+// CollectionAssignment is a single article-to-collection assignment from batch assign.
+type CollectionAssignment struct {
+	ArticleSlug    string
+	CollectionSlug string
+}
+
 // CollectionMatch is a ranked suggestion for which collection an article fits.
 // If Slug is empty, NewSlug/NewDescription propose a new collection to create.
 type CollectionMatch struct {
