@@ -752,6 +752,9 @@ var achatCommands = []cmdCompletion{
 	{"/chat-model", "[name]", "alias for /chat-profile"},
 	{"/stats", "", "show session token usage and cost"},
 	{"/system", "", "print system prompt"},
+	{"/chats-archive", "", "archive pending AskX + article chat messages"},
+	{"/chats-history", "", "browse archived chat sessions (overlay)"},
+	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
 	{"/help", "", "show article chat commands"},
 }
 
@@ -795,6 +798,9 @@ var chatCommands = []cmdCompletion{
 	{"/config-chat-view", "", "view workspace chat/config.jsonc in overlay"},
 	{"/config-chat-edit", "", "open workspace chat/config.jsonc in $EDITOR"},
 	{"/models", "", "list available LLM profiles"},
+	{"/chats-archive", "", "archive pending AskX + article chat messages"},
+	{"/chats-history", "", "browse archived chat sessions (overlay)"},
+	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
 	{"/help", "", "show chat commands"},
 }
 
