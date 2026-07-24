@@ -45,7 +45,15 @@ func (m *Model) cmdChatsHistory() {
 		last = 0
 	}
 	m.resourceCursor = last
-	m.resourceScroll = last
+	contentH := m.height - 4
+	if contentH < 1 {
+		contentH = 1
+	}
+	scroll := last - contentH + 1
+	if scroll < 0 {
+		scroll = 0
+	}
+	m.resourceScroll = scroll
 }
 
 // cmdChatsExport renders the archive to a file and opens it in $EDITOR.
