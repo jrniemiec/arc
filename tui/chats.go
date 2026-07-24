@@ -26,7 +26,7 @@ func (m *Model) cmdChatsArchive() {
 	)})
 }
 
-// cmdChatsHistory opens the full-screen archive viewer overlay.
+// cmdChatsHistory opens the full-screen archive viewer overlay, scrolled to the bottom.
 func (m *Model) cmdChatsHistory() {
 	entries, err := storefs.ReadAllArchiveEntries(m.cfg.DataRoot)
 	if err != nil {
@@ -39,6 +39,13 @@ func (m *Model) cmdChatsHistory() {
 	}
 	lines := renderArchiveLines(entries)
 	m.openResourceOverlay("chat archive", strings.Join(lines, "\n"))
+	// Scroll to bottom so the most recent content is visible.
+	last := len(m.resourceLines) - 1
+	if last < 0 {
+		last = 0
+	}
+	m.resourceCursor = last
+	m.resourceScroll = last
 }
 
 // cmdChatsExport renders the archive to a file and opens it in $EDITOR.
@@ -111,7 +118,7 @@ func renderArchiveLines(entries []storefs.ArchiveEntry) []string {
 			case "assistant":
 				lines = append(lines, "Assistant: "+msg.Content, "")
 			case "note":
-				lines = append(lines, "Note: "+msg.Content, "")
+				lines = append(lines, "📌 "+msg.Content, "")
 			}
 		}
 	}
@@ -137,7 +144,7 @@ func renderArchiveText(entries []storefs.ArchiveEntry, dateStr string) string {
 			case "assistant":
 				sb.WriteString("Assistant: " + msg.Content + "\n\n")
 			case "note":
-				sb.WriteString("Note: " + msg.Content + "\n\n")
+				sb.WriteString("📌 " + msg.Content + "\n\n")
 			}
 		}
 	}
@@ -163,7 +170,7 @@ func renderArchiveMarkdown(entries []storefs.ArchiveEntry, dateStr string) strin
 			case "assistant":
 				sb.WriteString("**Assistant:** " + msg.Content + "\n\n")
 			case "note":
-				sb.WriteString("> **Note:** " + msg.Content + "\n\n")
+				sb.WriteString("> 📌 " + msg.Content + "\n\n")
 			}
 		}
 		sb.WriteString("---\n")
