@@ -49,7 +49,8 @@ func (m *Model) cmdChatsHistory() {
 	if contentH < 1 {
 		contentH = 1
 	}
-	scroll := last - contentH + 1
+	// Position cursor at ~2/3 down the viewport so there's context above it.
+	scroll := last - (contentH * 2 / 3)
 	if scroll < 0 {
 		scroll = 0
 	}
