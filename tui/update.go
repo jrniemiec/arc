@@ -855,11 +855,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chatWorkspaceStatsMsg:
 		m.chatWorkspaceStats = msg.stats
 
+	case achatWorkspaceStatsMsg:
+		m.achatWorkspaceStats = msg.stats
+
 	case achatHistoryLoadedMsg:
 		if msg.err != "" {
 			m.statusMsg = "✗ " + msg.err
 			m.statusErr = true
 		} else if m.achatMode && m.achatSlug == msg.slug {
+			m.achatWorkspaceStats = msg.workspaceStats
 			m.achatRawMsgs = msg.msgs
 			m.achatProfile = msg.profile
 			if m.achatProfile == "" {
@@ -931,6 +935,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.achatHasChat = map[string]bool{}
 		}
 		m.achatHasChat[m.achatSlug] = true
+		cmds = append(cmds, m.loadAchatWorkspaceStatsCmd())
 
 	case askxStreamDoneMsg:
 		m.handleAskXStreamDone(msg)

@@ -1084,14 +1084,25 @@ func (m Model) renderAskXStatusLine() string {
 			m.askxLastInputTokens, m.askxLastOutputTokens, m.askxLastElapsed.Seconds()))
 	}
 
-	// Right: session totals.
+	// Right: query count (all-time from loaded history) + session tokens/cost.
+	// historyQueries comes from loaded messages; sessionQueries accumulates in-session.
+	// Show session detail (tokens/cost) only once session has activity.
+	historyQueries := len(m.askxBoxInfos())
+	totalQueries := historyQueries
+	if m.askxSessionQueries > totalQueries {
+		totalQueries = m.askxSessionQueries
+	}
 	var right string
-	if m.askxSessionQueries > 0 {
-		right = fg(t.ContentDimmed, fmt.Sprintf("%d queries · %dk in · %dk out · %s",
-			m.askxSessionQueries,
-			(m.askxSessionInputTokens+500)/1000,
-			(m.askxSessionOutputTokens+500)/1000,
-			formatUSD(m.askxSessionCostUSD)))
+	if totalQueries > 0 {
+		if m.askxSessionQueries > 0 {
+			right = fg(t.ContentDimmed, fmt.Sprintf("%d queries · %dk in · %dk out · %s",
+				totalQueries,
+				(m.askxSessionInputTokens+500)/1000,
+				(m.askxSessionOutputTokens+500)/1000,
+				formatUSD(m.askxSessionCostUSD)))
+		} else {
+			right = fg(t.ContentDimmed, fmt.Sprintf("%d queries", totalQueries))
+		}
 	}
 
 	// Compose: left | center (padded) | right

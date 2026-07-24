@@ -551,10 +551,11 @@ type Model struct {
 	achatPendingPrompt string                // prompt queued before engine ready
 	achatFocused       bool                  // true when chat split has focus (within paneContent)
 	achatHasChat       map[string]bool       // cached: slug → has chat history
-	achatSessionTurns  int                   // session turn count
-	achatSessionIn     int                   // session input tokens
-	achatSessionOut    int                   // session output tokens
-	achatSessionCost   float64               // session cost USD
+	achatWorkspaceStats chatengine.WorkspaceStats // lifetime stats from events.jsonl
+	achatSessionTurns  int                       // session turn count
+	achatSessionIn     int                       // session input tokens
+	achatSessionOut    int                       // session output tokens
+	achatSessionCost   float64                   // session cost USD
 
 	// Scratch pane (split at bottom of content pane)
 	scratchOpen        bool           // true when scratch split is visible

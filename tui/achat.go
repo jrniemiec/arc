@@ -34,10 +34,16 @@ func scanArticleChatsCmd(articlesRoot string, slugs []string) tea.Cmd {
 // ── Message types ──────────────────────────────────────────────────────────
 
 type achatHistoryLoadedMsg struct {
-	slug    string
-	msgs    []chat.Message
-	profile string
-	err     string
+	slug           string
+	msgs           []chat.Message
+	profile        string
+	err            string
+	workspaceStats chatengine.WorkspaceStats // lifetime stats from events.jsonl
+}
+
+// achatWorkspaceStatsMsg carries refreshed lifetime stats for the current article.
+type achatWorkspaceStatsMsg struct {
+	stats chatengine.WorkspaceStats
 }
 
 type achatReadyMsg struct {
@@ -54,17 +60,28 @@ type achatStreamDoneMsg struct {
 
 // ── Async commands ─────────────────────────────────────────────────────────
 
-// loadArticleChatHistoryCmd loads chat history for an article from disk.
+// loadArticleChatHistoryCmd loads chat history and lifetime stats for an article from disk.
 func (m *Model) loadArticleChatHistoryCmd(slug string) tea.Cmd {
 	cfg := m.cfg
 	return func() tea.Msg {
 		st := chat.NewArticleChatStore(cfg.ArticlesRoot, slug)
 		history, err := st.LoadHistory()
 		achatCfg, _ := storefs.ReadArticleChatConfig(cfg.ArticlesRoot, slug)
+		wsStats, _ := chatengine.LoadWorkspaceStats(cfg.EventsPath, slug)
 		if err != nil {
-			return achatHistoryLoadedMsg{slug: slug, err: err.Error(), profile: achatCfg.Profile}
+			return achatHistoryLoadedMsg{slug: slug, err: err.Error(), profile: achatCfg.Profile, workspaceStats: wsStats}
 		}
-		return achatHistoryLoadedMsg{slug: slug, msgs: history.Msgs, profile: achatCfg.Profile}
+		return achatHistoryLoadedMsg{slug: slug, msgs: history.Msgs, profile: achatCfg.Profile, workspaceStats: wsStats}
+	}
+}
+
+// loadAchatWorkspaceStatsCmd reloads lifetime stats for the current article from events.jsonl.
+func (m *Model) loadAchatWorkspaceStatsCmd() tea.Cmd {
+	eventsPath := m.cfg.EventsPath
+	slug := m.achatSlug
+	return func() tea.Msg {
+		stats, _ := chatengine.LoadWorkspaceStats(eventsPath, slug)
+		return achatWorkspaceStatsMsg{stats: stats}
 	}
 }
 
@@ -169,6 +186,7 @@ func (m *Model) exitArticleChat() {
 	m.achatStreaming = false
 	m.achatStreamBuf = ""
 	m.achatSharedBuf = nil
+	m.achatWorkspaceStats = chatengine.WorkspaceStats{}
 	m.achatSessionTurns = 0
 	m.achatLastUsage = nil
 	m.achatLastElapsed = 0
@@ -732,14 +750,15 @@ func (m Model) renderArticleChatStatusLine() string {
 		center = fg(t.ContentDimmed, fmt.Sprintf("in:%d out:%d  %.1fs", u.InputTokens, u.OutputTokens, m.achatLastElapsed.Seconds()))
 	}
 
-	// Right: session totals.
+	// Right: lifetime stats from events.jsonl (mirrors workspace chat).
+	ws := m.achatWorkspaceStats
 	var right string
-	if m.achatSessionTurns > 0 {
+	if ws.Turns > 0 {
 		right = fg(t.ContentDimmed, fmt.Sprintf("%d turns · %dk in · %dk out · %s",
-			m.achatSessionTurns,
-			(m.achatSessionIn+500)/1000,
-			(m.achatSessionOut+500)/1000,
-			formatUSD(m.achatSessionCost)))
+			ws.Turns,
+			(ws.InputTokens+500)/1000,
+			(ws.OutputTokens+500)/1000,
+			formatUSD(ws.CostUSD)))
 	}
 
 	// Compose: left | center (padded) | right.
