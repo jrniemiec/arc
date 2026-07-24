@@ -858,6 +858,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case achatWorkspaceStatsMsg:
 		m.achatWorkspaceStats = msg.stats
 
+	case askxLifetimeStatsMsg:
+		m.askxLifetimeStats = msg.stats
+
 	case achatHistoryLoadedMsg:
 		if msg.err != "" {
 			m.statusMsg = "✗ " + msg.err
@@ -943,6 +946,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case askxStreamDoneMsg:
 		m.handleAskXStreamDone(msg)
+		cmds = append(cmds, m.loadAskXLifetimeStatsCmd())
 		if msg.costUSD > 0 {
 			cmds = append(cmds, loadStats(m.svc))
 		}
@@ -1050,8 +1054,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.toggleScratch()
 		return nil
 	case key.Matches(msg, keys.AskX):
-		m.toggleAskX()
-		return nil
+		return m.toggleAskX()
 	case key.Matches(msg, keys.Preview):
 		m.togglePreview()
 		return nil

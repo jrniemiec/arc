@@ -14,7 +14,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jrniemiec/arc/chat"
+	chatengine "github.com/jrniemiec/arc/chat/engine"
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/internal/clog"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
 	"github.com/jrniemiec/llm"
@@ -23,11 +25,11 @@ import (
 // ── Toggle & lifecycle ──────────────────────────────────────────────────────
 
 // toggleAskX toggles the global askX pane (Ctrl+X). Pre-fills input with "/AskX ".
-func (m *Model) toggleAskX() {
+func (m *Model) toggleAskX() tea.Cmd {
 	if m.askxOpen {
 		m.closeAskX()
 		m.clearAskXInput()
-		return
+		return nil
 	}
 	// Mutual exclusion: close scratch and preview if open.
 	if m.scratchOpen {
@@ -51,6 +53,7 @@ func (m *Model) toggleAskX() {
 	m.cmdCompleteIdx = -1
 	m.paramItems = nil
 	m.paramIdx = -1
+	return m.loadAskXLifetimeStatsCmd()
 }
 
 // closeAskX tears down the askX pane state.
@@ -293,6 +296,7 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 			m.askxOpen = true
 			m.loadAskXHistory()
 			m.rebuildAskXLines()
+			return m.loadAskXLifetimeStatsCmd()
 		}
 		return nil
 	}
@@ -367,7 +371,7 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 	m.askxScrollToBottom()
 
 	// Fire the streaming LLM call.
-	return m.sendAskXQuery(llmPrompt, parsed.profileOverride)
+	return tea.Batch(m.sendAskXQuery(llmPrompt, parsed.profileOverride), m.loadAskXLifetimeStatsCmd())
 }
 
 // ── Streaming ───────────────────────────────────────────────────────────────
@@ -474,6 +478,17 @@ func appendAskXEvent(eventsPath, model string, inputTokens, outputTokens int, co
 	}
 	defer f.Close()
 	_, _ = f.Write(append(data, '\n'))
+}
+
+// loadAskXLifetimeStatsCmd reloads lifetime stats for askX from events.jsonl.
+func (m *Model) loadAskXLifetimeStatsCmd() tea.Cmd {
+	eventsPath := m.cfg.EventsPath
+	return func() tea.Msg {
+		stats, err := chatengine.LoadAskXStats(eventsPath)
+		clog.Debugf("[askx] loadAskXLifetimeStats: turns=%d in=%d out=%d cost=%.4f err=%v",
+			stats.Turns, stats.InputTokens, stats.OutputTokens, stats.CostUSD, err)
+		return askxLifetimeStatsMsg{stats: stats}
+	}
 }
 
 // handleAskXStreamDone processes the completion of an askX streaming response.
@@ -1084,25 +1099,15 @@ func (m Model) renderAskXStatusLine() string {
 			m.askxLastInputTokens, m.askxLastOutputTokens, m.askxLastElapsed.Seconds()))
 	}
 
-	// Right: query count (all-time from loaded history) + session tokens/cost.
-	// historyQueries comes from loaded messages; sessionQueries accumulates in-session.
-	// Show session detail (tokens/cost) only once session has activity.
-	historyQueries := len(m.askxBoxInfos())
-	totalQueries := historyQueries
-	if m.askxSessionQueries > totalQueries {
-		totalQueries = m.askxSessionQueries
-	}
+	// Right: lifetime stats from events.jsonl (mirrors article chat).
+	ls := m.askxLifetimeStats
 	var right string
-	if totalQueries > 0 {
-		if m.askxSessionQueries > 0 {
-			right = fg(t.ContentDimmed, fmt.Sprintf("%d queries · %dk in · %dk out · %s",
-				totalQueries,
-				(m.askxSessionInputTokens+500)/1000,
-				(m.askxSessionOutputTokens+500)/1000,
-				formatUSD(m.askxSessionCostUSD)))
-		} else {
-			right = fg(t.ContentDimmed, fmt.Sprintf("%d queries", totalQueries))
-		}
+	if ls.Turns > 0 {
+		right = fg(t.ContentDimmed, fmt.Sprintf("%d queries · %dk in · %dk out · %s",
+			ls.Turns,
+			(ls.InputTokens+500)/1000,
+			(ls.OutputTokens+500)/1000,
+			formatUSD(ls.CostUSD)))
 	}
 
 	// Compose: left | center (padded) | right

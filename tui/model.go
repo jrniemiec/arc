@@ -629,6 +629,8 @@ type Model struct {
 	askxSessionInputTokens  int
 	askxSessionOutputTokens int
 	askxSessionCostUSD      float64
+	// lifetime totals from events.jsonl
+	askxLifetimeStats chatengine.WorkspaceStats
 
 	// Resource overlay (active when focus == paneResource)
 	resourceLines    []string // file content split into lines
@@ -967,6 +969,11 @@ type askxStreamDoneMsg struct {
 	elapsed      time.Duration
 	inputTokens  int
 	outputTokens int
+}
+
+// askxLifetimeStatsMsg carries refreshed lifetime stats for askX.
+type askxLifetimeStatsMsg struct {
+	stats chatengine.WorkspaceStats
 }
 
 // correctionDoneMsg is returned by doCorrection when the LLM call completes.

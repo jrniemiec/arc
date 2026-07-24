@@ -817,3 +817,42 @@ func LoadWorkspaceStats(eventsPath, workspaceName string) (WorkspaceStats, error
 	}
 	return stats, nil
 }
+
+// LoadAskXStats scans events.jsonl and returns lifetime stats for all askX calls.
+// Turns in the returned struct represents total query count.
+func LoadAskXStats(eventsPath string) (WorkspaceStats, error) {
+	f, err := os.Open(eventsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return WorkspaceStats{}, nil
+		}
+		return WorkspaceStats{}, err
+	}
+	defer f.Close()
+
+	type askxEvent struct {
+		Type string `json:"type"`
+		Cost struct {
+			InputTokens  int     `json:"input_tokens"`
+			OutputTokens int     `json:"output_tokens"`
+			CostUSD      float64 `json:"cost_usd"`
+		} `json:"cost"`
+	}
+
+	var stats WorkspaceStats
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var ev askxEvent
+		if err := dec.Decode(&ev); err != nil {
+			continue
+		}
+		if ev.Type != "askx_call" {
+			continue
+		}
+		stats.Turns++
+		stats.InputTokens += ev.Cost.InputTokens
+		stats.OutputTokens += ev.Cost.OutputTokens
+		stats.CostUSD += ev.Cost.CostUSD
+	}
+	return stats, nil
+}
