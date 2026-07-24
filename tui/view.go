@@ -1105,7 +1105,7 @@ func (m Model) renderContentPane(height, width int) []string {
 	}
 
 	var lines []string
-	if m.chatMode && m.activeTab == tabLibrary {
+	if m.chatMode && m.activeTab == tabLibrary && m.navSubTab == navSubTabWorkspaces {
 		lines = m.renderChatPane(contentH, width)
 	} else {
 		switch m.activeTab {
