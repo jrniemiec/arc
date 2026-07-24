@@ -3915,7 +3915,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			{cmd: "open", desc: "no grounding — general LLM knowledge"},
 		}
 
-	case "/profile", "/model":
+	case "/profile", "/model", "/chat-profile", "/chat-model":
 		var items []cmdCompletion
 		for name, p := range m.cfg.Profiles {
 			items = append(items, cmdCompletion{cmd: name, desc: p.Model})
@@ -4050,6 +4050,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	case "/models", "/profiles":
 		m.setStatusLines(m.cmdModelsLines())
 		return nil
+	case "/chat-profile", "/chat-model":
+		return m.cmdChatProfile(arg)
 	case "/log", "/logs":
 		return m.cmdLog()
 	case "/help":
@@ -5333,6 +5335,25 @@ func (m *Model) cmdStats() tea.Cmd {
 		lines = append(lines, fmt.Sprintf("  %-40s %s", entry.model, formatUSD(entry.usd)))
 	}
 	m.setStatusLines(lines)
+	return nil
+}
+
+// cmdChatProfile shows or sets the global default article chat profile.
+func (m *Model) cmdChatProfile(arg string) tea.Cmd {
+	if arg == "" {
+		m.statusMsg = "article chat profile: " + m.cfg.ArticleChatProfileName()
+		return nil
+	}
+	if _, ok := m.cfg.Profiles[arg]; !ok {
+		m.setStatusError("✗ unknown profile: " + arg)
+		return nil
+	}
+	if err := config.SaveArticleChatProfile(m.cfg.DataRoot, arg); err != nil {
+		m.setStatusError("✗ save profile: " + err.Error())
+		return nil
+	}
+	m.cfg.ArticleChat.Profile = arg
+	m.statusMsg = "article chat profile → " + arg
 	return nil
 }
 
@@ -6845,6 +6866,7 @@ var helpGroups = []struct {
 		{"/askX", "[--profile <name>] <prompt>", "workspace-local LLM query"},
 		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
 		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
+		{"/chat-profile", "[name]", "show or set global article chat profile (alias: /chat-model)"},
 		{"/config", "", "show resolved configuration"},
 		{"/config-view", "", "view config.jsonc in overlay"},
 		{"/config-edit", "", "open config.jsonc in $EDITOR"},

@@ -968,7 +968,47 @@ func Load(path string) (Config, error) {
 		cfg.LogLevel = overlay.LogLevel
 	}
 
+	// Apply machine-managed article_chat.json override (written by /chat-profile TUI command).
+	// Loaded after the user overlay so runtime changes persist across restarts.
+	if ac, err := loadArticleChatOverride(cfg.DataRoot); err == nil && ac.Profile != "" {
+		cfg.ArticleChat.Profile = ac.Profile
+	}
+
 	return cfg, nil
+}
+
+// loadArticleChatOverride reads the machine-managed article_chat.json from dataRoot.
+// Returns zero-value config and no error if the file doesn't exist.
+func loadArticleChatOverride(dataRoot string) (ArticleChatConfig, error) {
+	data, err := os.ReadFile(filepath.Join(dataRoot, "article_chat.json"))
+	if os.IsNotExist(err) {
+		return ArticleChatConfig{}, nil
+	}
+	if err != nil {
+		return ArticleChatConfig{}, fmt.Errorf("read article_chat override: %w", err)
+	}
+	var ac ArticleChatConfig
+	if err := json.Unmarshal(data, &ac); err != nil {
+		return ArticleChatConfig{}, fmt.Errorf("decode article_chat override: %w", err)
+	}
+	return ac, nil
+}
+
+// SaveArticleChatProfile writes the default article chat profile to the machine-managed
+// article_chat.json override file in dataRoot. Preserves other fields in the file.
+func SaveArticleChatProfile(dataRoot, profile string) error {
+	ac, _ := loadArticleChatOverride(dataRoot)
+	ac.Profile = profile
+	data, err := json.MarshalIndent(ac, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dataRoot, "article_chat.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // DefaultConfigJSON returns the full default config serialized as indented JSON.
