@@ -913,11 +913,11 @@ func (m *Model) dispatchArticleChatCommand(command, args string) (bool, tea.Cmd)
 	return false, nil
 }
 
-// collapseAllArticleChatBoxes sets all boxes to collapsed.
+// collapseAllArticleChatBoxes marks every logical box as collapsed except the last one.
 func (m *Model) collapseAllArticleChatBoxes() {
-	m.achatCollapsed = map[int]bool{}
-	count := m.achatBoxCount()
-	for i := 0; i < count; i++ {
+	n := m.achatBoxCount()
+	m.achatCollapsed = make(map[int]bool, n)
+	for i := 0; i < n-1; i++ {
 		m.achatCollapsed[i] = true
 	}
 }

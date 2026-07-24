@@ -876,7 +876,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.collapseAllArticleChatBoxes()
 			viewH := m.achatViewHeight()
 			m.achatAutoScrollToBottom(viewH)
-			m.achatBoxCursor = 0
+			if n := m.achatBoxCount(); n > 0 {
+				m.achatBoxCursor = n - 1
+			} else {
+				m.achatBoxCursor = 0
+			}
 			m.statusMsg = ""
 		}
 
@@ -1123,7 +1127,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		// Tab cycles forward: Nav → Content → Split (if open) → Nav.
-		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen
+		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen || m.achatMode
 		switch {
 		case m.focus == paneNav:
 			m.setFocusPane(paneContent)
@@ -1135,7 +1139,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case key.Matches(msg, keys.PanePrev):
 		// Shift+Tab cycles backward: Nav → Split (if open) → Content → Nav.
-		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen
+		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen || m.achatMode
 		switch {
 		case m.focus == paneNav && splitOpen:
 			m.focusSplitPane()
@@ -1188,11 +1192,7 @@ func (m *Model) setFocusPane(p focusPane) {
 		}
 	}
 	if m.achatMode && p == paneContent {
-		m.achatFocused = true
 		m.rebuildArticleChatLines(m.achatBuildWidth())
-		if n := m.achatBoxCount(); n > 0 {
-			m.achatBoxCursor = n - 1
-		}
 	}
 }
 
@@ -1246,7 +1246,7 @@ func (m *Model) applyWsCursorRestore() tea.Cmd {
 
 // splitPaneFocused reports whether the currently visible split pane has focus.
 func (m *Model) splitPaneFocused() bool {
-	return m.previewFocused || m.scratchFocused || m.askxFocused
+	return m.previewFocused || m.scratchFocused || m.askxFocused || m.achatFocused
 }
 
 // focusSplitPane gives focus to whichever split pane is currently open.
@@ -1260,6 +1260,12 @@ func (m *Model) focusSplitPane() {
 		m.scratchFocused = true
 	case m.askxOpen:
 		m.askxFocused = true
+	case m.achatMode:
+		m.achatFocused = true
+		m.rebuildArticleChatLines(m.achatBuildWidth())
+		if n := m.achatBoxCount(); n > 0 {
+			m.achatBoxCursor = n - 1
+		}
 	}
 }
 
@@ -1268,6 +1274,7 @@ func (m *Model) unfocusSplitPane() {
 	m.previewFocused = false
 	m.scratchFocused = false
 	m.askxFocused = false
+	m.achatFocused = false
 	// m.focus stays paneContent — main content area retains keyboard focus.
 }
 

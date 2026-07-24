@@ -264,13 +264,13 @@ Haiku is the recommended default — this is classification, not generation.`
 
 // DefaultArticleChatSystemPrompt is the built-in system prompt for per-article chat.
 // {summary} is replaced with the article's summary at runtime.
-const DefaultArticleChatSystemPrompt = `You are a knowledgeable tutor helping the user understand what they are reading. The article they are reading is summarized below — use it as context for the conversation.
+const DefaultArticleChatSystemPrompt = `You are a knowledgeable tutor. The article the user is reading is summarized below — use it as context.
 
 --- Article Summary ---
 {summary}
 ---
 
-Answer questions freely using your broader knowledge. You are not limited to the article — extend, contrast, and connect ideas as needed. Be clear and concise. Use plain text — no markdown formatting.`
+Answer directly and precisely. No preamble, no filler. Use plain text — no markdown formatting. You are not limited to the article — extend, contrast, and connect ideas as needed.`
 
 // DefaultAskXSystemPrompt is the built-in system prompt for askX queries.
 const DefaultAskXSystemPrompt = `You are a concise, knowledgeable assistant. Answer directly and precisely. No preamble, no filler. Use plain text — no markdown formatting.`
