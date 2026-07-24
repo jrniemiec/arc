@@ -1296,17 +1296,19 @@ func (m *Model) cmdArticleChatOverlay() tea.Cmd {
 
 // cmdArticleChatAddNote adds a note (comment) to the article chat history.
 func (m *Model) cmdArticleChatAddNote(text string) tea.Cmd {
-	eng := m.achatEngine
-	if eng == nil {
-		m.statusMsg = "✗ chat engine not ready"
-		m.statusErr = true
+	if text == "" {
+		m.setStatusError("comment cannot be empty — use //your note text")
 		return nil
 	}
-	eng.History().Msgs = append(eng.History().Msgs, chat.Message{
-		Role:    chat.RoleNote,
-		Content: text,
-		Time:    time.Now(),
-	})
+	note := chat.Message{Role: chat.RoleNote, Content: text, Time: time.Now()}
+
+	// Append to raw msgs for display (engine may not be initialised yet).
+	m.achatRawMsgs = append(m.achatRawMsgs, note)
+	// If engine is live, keep its history in sync too.
+	if m.achatEngine != nil {
+		m.achatEngine.History().Msgs = append(m.achatEngine.History().Msgs, note)
+	}
+
 	m.rebuildArticleChatLines(m.achatBuildWidth())
 	m.achatAutoScroll = true
 	viewH := m.achatViewHeight()
@@ -1314,7 +1316,12 @@ func (m *Model) cmdArticleChatAddNote(text string) tea.Cmd {
 
 	articlesRoot := m.cfg.ArticlesRoot
 	slug := m.achatSlug
-	src := eng.History().Msgs
+	var src []chat.Message
+	if m.achatEngine != nil {
+		src = m.achatEngine.History().Msgs
+	} else {
+		src = m.achatRawMsgs
+	}
 	toSave := make([]chat.Message, len(src))
 	copy(toSave, src)
 	return func() tea.Msg {
