@@ -689,6 +689,9 @@ var globalCommands = []cmdCompletion{
 	{"/log", "", "open/close debug log tail"},
 	{"/agent-run", "[--dry-run] [--focus \"...\"]", "start a fresh agent feed scan"},
 	{"/agent-rerun", "[--dry-run]", "re-run decisions for the selected agent run"},
+	{"/chats-archive", "", "archive pending AskX + article chat messages"},
+	{"/chats-history", "", "browse archived chat sessions (overlay)"},
+	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
 }
 
 // articleCommands are available when the Articles sub-tab is active.

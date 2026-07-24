@@ -4054,6 +4054,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdChatProfile(arg)
 	case "/log", "/logs":
 		return m.cmdLog()
+	case "/chats-archive":
+		m.cmdChatsArchive()
+		return nil
+	case "/chats-history":
+		m.cmdChatsHistory()
+		return nil
+	case "/chats-export":
+		m.cmdChatsExport(strings.TrimSpace(arg))
+		return nil
 	case "/help":
 		m.setStatusLines(m.helpLines(arg))
 		return nil
@@ -6859,6 +6868,11 @@ var helpGroups = []struct {
 		{"/feed-edit", "", "edit selected feed in $EDITOR"},
 		{"/feed-toggle", "", "toggle selected feed enabled/disabled"},
 		{"/feed-delete", "", "delete selected feed (with confirmation)"},
+	}},
+	{"chats", []cmdCompletion{
+		{"/chats-archive", "", "archive pending AskX + article chat messages into chat_archive.jsonl"},
+		{"/chats-history", "", "browse all archived chat sessions in a read-only overlay"},
+		{"/chats-export", "[--md|--text]", "export chat archive to file (default: config chat_export_format) and open in $EDITOR"},
 	}},
 	{"system", []cmdCompletion{
 		{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},

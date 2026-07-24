@@ -67,6 +67,10 @@ type Config struct {
 	// Agent
 	AgentPath string `json:"agent_path,omitempty"` // default: <DataRoot>/agent
 
+	// ChatExport controls the default format for /chats-export.
+	// "text" (default) or "markdown".
+	ChatExportFormat string `json:"chat_export_format,omitempty"`
+
 	// Logging
 	LogPath  string `json:"log_path,omitempty"`  // default: <DataRoot>/arc.log
 	LogLevel string `json:"log_level,omitempty"` // debug|info|warn|error; default: info
