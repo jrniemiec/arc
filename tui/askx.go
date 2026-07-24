@@ -16,7 +16,6 @@ import (
 	"github.com/jrniemiec/arc/chat"
 	chatengine "github.com/jrniemiec/arc/chat/engine"
 	"github.com/jrniemiec/arc/config"
-	"github.com/jrniemiec/arc/internal/clog"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
 	"github.com/jrniemiec/llm"
@@ -484,9 +483,7 @@ func appendAskXEvent(eventsPath, model string, inputTokens, outputTokens int, co
 func (m *Model) loadAskXLifetimeStatsCmd() tea.Cmd {
 	eventsPath := m.cfg.EventsPath
 	return func() tea.Msg {
-		stats, err := chatengine.LoadAskXStats(eventsPath)
-		clog.Debugf("[askx] loadAskXLifetimeStats: turns=%d in=%d out=%d cost=%.4f err=%v",
-			stats.Turns, stats.InputTokens, stats.OutputTokens, stats.CostUSD, err)
+		stats, _ := chatengine.LoadAskXStats(eventsPath)
 		return askxLifetimeStatsMsg{stats: stats}
 	}
 }
