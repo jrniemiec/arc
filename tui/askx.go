@@ -170,6 +170,19 @@ func msgsToAskXHistory(msgs []chat.Message) *storefs.AskXHistory {
 	return h
 }
 
+// cmdAskXAddNote adds a note (comment) to the askX history.
+// Triggered by the "//" prefix in the input while askX is open.
+func (m *Model) cmdAskXAddNote(text string) {
+	if text == "" {
+		m.setStatusError("comment cannot be empty — use //your note text")
+		return
+	}
+	note := chat.Message{Role: chat.RoleNote, Content: text, Time: time.Now()}
+	m.askxMsgs = append(m.askxMsgs, note)
+	m.rebuildAskXLines()
+	m.saveAskXHistory()
+}
+
 // saveAskXHistory persists the current askxMsgs to JSON.
 func (m *Model) saveAskXHistory() {
 	ws := m.askxWorkspace()
@@ -557,11 +570,35 @@ func (m *Model) rebuildAskXLines() {
 		userW = 10
 	}
 
+	const notePrefix = "📌 "
+	const noteCont = "   "
+
 	var lines []chatLine
 	prevHadContent := false
 
 	for _, msg := range msgs {
 		switch msg.Role {
+		case chat.RoleNote:
+			if prevHadContent {
+				lines = append(lines, chatLine{chatLineBlank, ""})
+			}
+			first := true
+			for _, rl := range strings.Split(msg.Content, "\n") {
+				rl = strings.TrimRight(rl, " \t")
+				if rl == "" {
+					continue
+				}
+				prefix := noteCont
+				if first {
+					prefix = notePrefix
+					first = false
+				}
+				for _, wl := range wordWrap(rl, userW) {
+					lines = append(lines, chatLine{chatLineNote, prefix + wl})
+				}
+			}
+			prevHadContent = true
+
 		case chat.RoleUser:
 			if prevHadContent {
 				lines = append(lines, chatLine{chatLineBlank, ""})

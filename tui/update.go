@@ -3425,6 +3425,11 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 				}
 				return m.sendChatMsg(val)
 			}
+			// AskX note: "//" prefix while askX pane is open and focused.
+			if m.askxOpen && m.askxFocused && strings.HasPrefix(val, "//") {
+				m.cmdAskXAddNote(strings.TrimSpace(val[2:]))
+				return nil
+			}
 			// Resolve @<numID> references for non-slash commands.
 			if !strings.HasPrefix(val, "/") && atRefPattern.MatchString(val) {
 				resolved, err := m.resolveAtRefs(val)
