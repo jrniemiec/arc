@@ -33,6 +33,11 @@ func (s *Service) SyncChats() (SyncChatsResult, error) {
 	var result SyncChatsResult
 	now := time.Now().UTC()
 
+	// Write a run-delimiter entry so the archive log shows when each sync happened.
+	if err := storefs.AppendArchiveRunEntry(dataRoot, now); err != nil {
+		slog.Warn("chat archive: append run entry", "err", err)
+	}
+
 	// --- AskX (global) ---
 	askxHistory, err := storefs.ReadAskXHistory(dataRoot, "")
 	if err != nil {

@@ -97,15 +97,13 @@ func (m *Model) cmdChatsExport(flag string) {
 // Oldest first. Notes are prefixed with "Note:".
 func renderArchiveLines(entries []storefs.ArchiveEntry) []string {
 	var lines []string
-	sep := strings.Repeat("─", 60)
 
-	for i, e := range entries {
-		if i > 0 {
-			lines = append(lines, "", sep, "")
+	for _, e := range entries {
+		if e.Type == "archive-run" {
+			lines = append(lines, "", archiveRunHeader(e.ArchivedAt), "")
+			continue
 		}
-		// Header
 		lines = append(lines, entryHeader(e), "")
-		// Messages
 		for _, msg := range e.Messages {
 			switch msg.Role {
 			case "user":
@@ -127,9 +125,11 @@ func renderArchiveText(entries []storefs.ArchiveEntry, dateStr string) string {
 	sb.WriteString("Exported: " + dateStr + "\n")
 
 	for _, e := range entries {
-		sb.WriteString("\n")
-		sb.WriteString("== " + entryHeaderText(e) + " ==\n")
-		sb.WriteString("\n")
+		if e.Type == "archive-run" {
+			sb.WriteString("\n" + archiveRunHeader(e.ArchivedAt) + "\n")
+			continue
+		}
+		sb.WriteString("\n== " + entryHeaderText(e) + " ==\n\n")
 		for _, msg := range e.Messages {
 			switch msg.Role {
 			case "user":
@@ -151,6 +151,10 @@ func renderArchiveMarkdown(entries []storefs.ArchiveEntry, dateStr string) strin
 	sb.WriteString("Exported: " + dateStr + "\n")
 
 	for _, e := range entries {
+		if e.Type == "archive-run" {
+			sb.WriteString("\n---\n*" + archiveRunHeader(e.ArchivedAt) + "*\n\n")
+			continue
+		}
 		sb.WriteString("\n## " + entryHeaderText(e) + "\n\n")
 		for _, msg := range e.Messages {
 			switch msg.Role {
@@ -183,6 +187,13 @@ func entryHeaderText(e storefs.ArchiveEntry) string {
 		return "Article: " + label + " — " + timeRange
 	}
 	return "AskX — " + timeRange
+}
+
+// archiveRunHeader returns a visual delimiter for an archive-run entry.
+func archiveRunHeader(ts time.Time) string {
+	label := "Archive run: " + ts.Local().Format("Jan 2, 2006 15:04")
+	pad := strings.Repeat("=", 10)
+	return pad + " " + label + " " + pad
 }
 
 func formatTimeRange(from, to time.Time) string {

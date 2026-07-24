@@ -74,6 +74,15 @@ func WriteArchiveState(dataRoot string, s ArchiveState) error {
 	return os.Rename(tmp, archiveStatePath(dataRoot))
 }
 
+// AppendArchiveRunEntry appends a run-delimiter entry to chat_archive.jsonl.
+// This marks the start of each /chats-archive run so sessions can be grouped visually.
+func AppendArchiveRunEntry(dataRoot string, ts time.Time) error {
+	return AppendArchiveEntry(dataRoot, ArchiveEntry{
+		Type:       "archive-run",
+		ArchivedAt: ts,
+	})
+}
+
 // AppendArchiveEntry appends one entry to chat_archive.jsonl.
 func AppendArchiveEntry(dataRoot string, entry ArchiveEntry) error {
 	data, err := json.Marshal(entry)
