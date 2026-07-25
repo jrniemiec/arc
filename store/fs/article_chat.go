@@ -53,12 +53,19 @@ func WriteArticleChatConfig(articlesRoot, slug string, cfg ArticleChatConfig) er
 	return os.Rename(tmp, filepath.Join(dir, "config.json"))
 }
 
-// HasArticleChat returns true if the article has a non-empty chat history.
+// HasArticleChat returns true if the article has a non-empty chat history
+// (at least one message).
 func HasArticleChat(articlesRoot, slug string) bool {
 	path := filepath.Join(ArticleChatDir(articlesRoot, slug), "history.json")
-	info, err := os.Stat(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
-	return info.Size() > 10 // skip trivially empty files (e.g. "{}" or "[]")
+	var h struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(data, &h); err != nil {
+		return false
+	}
+	return len(h.Messages) > 0
 }

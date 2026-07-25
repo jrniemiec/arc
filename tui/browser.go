@@ -40,13 +40,14 @@ end tell
 	}
 }
 
-// CloseChromeWindow closes the Chrome window with the given window ID.
-// Called from cmd/tui.go after p.Run() returns. No-op if windowID is empty.
-func CloseChromeWindow(windowID string) {
-	if windowID == "" {
-		return
-	}
-	script := fmt.Sprintf(`
+// CloseChromeWindows closes all Chrome windows with the given IDs.
+// Called from cmd/tui.go after p.Run() returns. No-op if windowIDs is empty.
+func CloseChromeWindows(windowIDs []string) {
+	for _, id := range windowIDs {
+		if id == "" {
+			continue
+		}
+		script := fmt.Sprintf(`
 tell application "Google Chrome"
   repeat with w in windows
     try
@@ -57,10 +58,11 @@ tell application "Google Chrome"
     end try
   end repeat
 end tell
-`, windowID)
-	cmd := exec.Command("osascript", "-e", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	_ = cmd.Run()
+`, id)
+		cmd := exec.Command("osascript", "-e", script)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		_ = cmd.Run()
+	}
 }
 
 // escapeAppleScript escapes a string for safe inclusion in an AppleScript string literal.

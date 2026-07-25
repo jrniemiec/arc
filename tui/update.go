@@ -372,13 +372,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.restoredState.AgentRunID = m.agentRunDecisionsID
 			// Reload the decisions file so done items are trimmed.
 			cmds = append(cmds, loadAgentDecisions(m.cfg.AgentPath, m.agentRunDecisionsID))
-			// Index newly ingested articles into SQLite (pipeline writes files only).
+			// Index newly ingested articles into SQLite, then assign to existing collections.
 			if len(msg.rec.IngestedSlugs) > 0 {
 				svc := m.svc
 				slugs := msg.rec.IngestedSlugs
 				cmds = append(cmds, func() tea.Msg {
 					if err := svc.Library().IndexSlugs(context.Background(), slugs); err != nil {
 						slog.Warn("index after decisions rerun failed", "err", err)
+					}
+					if _, err := svc.AssignCollections(context.Background(), "", 0, true, nil); err != nil {
+						slog.Warn("assign collections after decisions rerun failed", "err", err)
 					}
 					return nil
 				})
@@ -389,13 +392,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				"run_id", msg.newRunID, "ingested", n)
 			m.statusMsg = fmt.Sprintf("✓ agent run complete — %d ingested", n)
 			m.statusSuccess = true
-			// Index newly ingested articles into SQLite (pipeline writes files only).
+			// Index newly ingested articles into SQLite, then assign to existing collections.
 			if len(msg.rec.IngestedSlugs) > 0 {
 				svc := m.svc
 				slugs := msg.rec.IngestedSlugs
 				cmds = append(cmds, func() tea.Msg {
 					if err := svc.Library().IndexSlugs(context.Background(), slugs); err != nil {
 						slog.Warn("index after agent run failed", "err", err)
+					}
+					if _, err := svc.AssignCollections(context.Background(), "", 0, true, nil); err != nil {
+						slog.Warn("assign collections after agent run failed", "err", err)
 					}
 					return nil
 				})
@@ -489,7 +495,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chromeOpenedMsg:
 		if msg.err == nil && msg.windowID != "" {
-			m.chromeWindowID = msg.windowID
+			m.chromeWindowIDs = append(m.chromeWindowIDs, msg.windowID)
 		}
 
 	case populateEditMsg:
@@ -872,8 +878,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.achatProfile == "" {
 				m.achatProfile = m.cfg.ArticleChatProfileName()
 			}
-			m.focus = paneCommand
-			m.cursorVisible = true
 			m.syncInputPrompt()
 			m.rebuildArticleChatLines(m.achatBuildWidth())
 			m.collapseAllArticleChatBoxes()
@@ -884,6 +888,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.achatBoxCursor = 0
 			}
+			// Focus on the chat view (box navigation), not the input pane.
+			m.focus = paneContent
+			m.achatFocused = true
+			m.cursorVisible = false
 			m.statusMsg = ""
 		}
 
@@ -1131,6 +1139,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		// Tab cycles forward: Nav → Content → Split (if open) → Nav.
 		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen || m.achatMode
+		slog.Debug("tab forward",
+			"focus_before", m.focus,
+			"splitOpen", splitOpen,
+			"splitPaneFocused", m.splitPaneFocused(),
+			"achatMode", m.achatMode,
+			"achatFocused", m.achatFocused)
 		switch {
 		case m.focus == paneNav:
 			m.setFocusPane(paneContent)
@@ -1139,10 +1153,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		default:
 			m.setFocusPane(paneNav)
 		}
+		slog.Debug("tab forward result",
+			"focus_after", m.focus,
+			"achatFocused", m.achatFocused)
 		return nil
 	case key.Matches(msg, keys.PanePrev):
 		// Shift+Tab cycles backward: Nav → Split (if open) → Content → Nav.
 		splitOpen := m.previewOpen || m.scratchOpen || m.askxOpen || m.achatMode
+		slog.Debug("tab backward",
+			"focus_before", m.focus,
+			"splitOpen", splitOpen,
+			"splitPaneFocused", m.splitPaneFocused(),
+			"achatMode", m.achatMode,
+			"achatFocused", m.achatFocused)
 		switch {
 		case m.focus == paneNav && splitOpen:
 			m.focusSplitPane()
@@ -1151,6 +1174,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		default:
 			m.setFocusPane(paneNav)
 		}
+		slog.Debug("tab backward result",
+			"focus_after", m.focus,
+			"achatFocused", m.achatFocused)
 		return nil
 	}
 
@@ -1182,6 +1208,11 @@ func (m *Model) setFocusPane(p focusPane) {
 	m.askxFocused = false
 	m.achatFocused = false
 	m.previewFocused = false
+	// Exit article chat when leaving the content pane entirely.
+	if m.achatMode && p != paneContent && p != paneCommand {
+		slog.Debug("setFocusPane: exiting achat", "newPane", p)
+		m.exitArticleChat()
+	}
 	if p == paneCommand {
 		m.cursorVisible = true
 	}
@@ -1236,8 +1267,8 @@ func (m *Model) applyWsCursorRestore() tea.Cmd {
 	m.restoredState.WsExpanded = false
 	m.restoredState.WsExpandedCol = ""
 	m.restoredState.WsArticle = ""
-	// Load chat for the restored workspace — overrides any premature load for workspace[0].
-	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
+	// Load chat for the restored workspace — only when on the workspaces sub-tab.
+	if m.navSubTab == navSubTabWorkspaces && m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
 		row := m.wsRows[m.wsCursor]
 		if row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
 			wsName := m.workspaceItems[row.wsIdx].name
@@ -2857,6 +2888,13 @@ func (m *Model) openEditorInTerminal(editor, filePath, label string) {
 }
 
 func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
+	slog.Debug("handleContentKey",
+		"key", msg.String(),
+		"achatMode", m.achatMode,
+		"achatFocused", m.achatFocused,
+		"chatMode", m.chatMode,
+		"activeTab", m.activeTab,
+		"contentLines", len(m.contentLines))
 	// Scratch pane-level shortcuts (V view, E edit) — work whenever scratch is visible.
 	if m.scratchOpen && msg.Type == tea.KeyRunes {
 		switch msg.String() {
@@ -2930,15 +2968,21 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handlePreviewKey(msg)
 	}
 	if m.achatMode && m.achatFocused {
+		slog.Debug("content key → article chat", "key", msg.String())
 		return m.handleArticleChatContentKey(msg)
 	}
-	if m.chatMode {
+	if m.chatMode && m.navSubTab == navSubTabWorkspaces {
 		return m.handleChatContentKey(msg)
 	}
 	if m.activeTab == tabAgent {
 		return m.handleAgentContentKey(msg)
 	}
 	total := len(m.contentLines)
+	slog.Debug("content key → generic scroll",
+		"key", msg.String(),
+		"achatMode", m.achatMode,
+		"achatFocused", m.achatFocused,
+		"contentLines", total)
 	viewH := m.contentViewHeight()
 
 	switch {
@@ -3647,6 +3691,9 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 	}
 	// Close article chat if we've navigated to a different article.
 	if m.achatMode && item.id != m.achatSlug {
+		slog.Debug("triggerContentLoad: closing achat — slug mismatch",
+			"item.id", item.id,
+			"achatSlug", m.achatSlug)
 		m.exitArticleChat()
 	}
 	m.contentLoading = true
@@ -7161,9 +7208,35 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return m.triggerContentLoad()
 		}
 
+		// Article chat pane wheel (bottom of content pane, 50% split).
+		if msg.X > m.dividerCol() && m.achatMode {
+			mainH := m.mainAreaHeight()
+			achatSplitH := mainH / 2
+			if achatSplitH < 3 {
+				achatSplitH = 3
+			}
+			splitStartRow := topBarHeight + (mainH - achatSplitH)
+			if msg.Y >= splitStartRow {
+				chatViewH := m.achatViewHeight()
+				m.achatScroll += delta
+				if m.achatScroll < 0 {
+					m.achatScroll = 0
+				}
+				maxScroll := m.achatTotalLines() - chatViewH
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.achatScroll > maxScroll {
+					m.achatScroll = maxScroll
+				}
+				m.achatAutoScroll = m.achatScroll >= maxScroll
+				return nil
+			}
+		}
+
 		// Content pane wheel (right of divider).
 		if msg.X > m.dividerCol() {
-			if m.chatMode {
+			if m.chatMode && m.navSubTab == navSubTabWorkspaces {
 				chatViewH := m.chatViewHeight()
 				if chatViewH < 1 {
 					chatViewH = 1

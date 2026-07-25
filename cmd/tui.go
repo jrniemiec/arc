@@ -54,7 +54,7 @@ func runTUI(cmd *cobra.Command) error {
 	final, err := p.Run()
 	if fm, ok := final.(arctui.Model); ok {
 		fm.Cleanup()
-		arctui.CloseChromeWindow(fm.ChromeWindowID())
+		arctui.CloseChromeWindows(fm.ChromeWindowIDs())
 		fm.SaveHistory()
 		fm.SaveState()
 	}

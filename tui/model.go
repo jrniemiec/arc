@@ -463,7 +463,7 @@ type Model struct {
 	statsLoaded bool
 
 	// Browser
-	chromeWindowID string // ID of the Chrome window opened via 'o', closed on exit
+	chromeWindowIDs []string // IDs of Chrome windows opened via 'o', closed on exit
 
 	// Log viewer
 	logViewerOpen bool // true while the tail window is open
@@ -1491,9 +1491,9 @@ func (m *Model) inputHistoryInit() {
 	m.inputHistoryIdx = -1
 }
 
-// ChromeWindowID returns the ID of the Chrome window opened during this session.
-func (m Model) ChromeWindowID() string {
-	return m.chromeWindowID
+// ChromeWindowIDs returns the IDs of all Chrome windows opened during this session.
+func (m Model) ChromeWindowIDs() []string {
+	return m.chromeWindowIDs
 }
 
 // setStatusLines sets statusLines and resets the scroll offset.
