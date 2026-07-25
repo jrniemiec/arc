@@ -2434,7 +2434,32 @@ func (m *Model) triggerCollectionContentLoad() tea.Cmd {
 	}
 	row := m.navRows[m.navRowCursor]
 	if row.kind != rowArticle || row.item == nil || row.item.root == "" {
+		// Landing on a collection header — close any open article chat.
+		if m.achatMode {
+			m.exitArticleChat()
+		}
 		return nil
+	}
+	// Close article chat if we've navigated to a different article.
+	if m.achatMode && row.item.id != m.achatSlug {
+		m.exitArticleChat()
+	}
+	// Auto-open article chat if the new article has chat history
+	// and no other split pane is open.
+	if !m.achatMode && !m.scratchOpen && !m.previewOpen && !m.askxOpen &&
+		m.achatHasChat[row.item.id] {
+		m.achatMode = true
+		m.achatSlug = row.item.id
+		m.achatFocused = false
+		m.achatAutoScroll = true
+		m.achatBoxCursor = 0
+		m.achatCollapsed = nil
+		m.contentLoading = true
+		m.contentLines = nil
+		return tea.Batch(
+			loadContent(row.item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels),
+			m.loadArticleChatHistoryCmd(row.item.id),
+		)
 	}
 	m.contentLoading = true
 	m.contentLines = nil

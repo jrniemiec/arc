@@ -722,7 +722,11 @@ func (m Model) renderNavCollections(maxLines int) []string {
 				idTag = fmt.Sprintf("%d ", row.item.numID)
 				idTagLen = len(idTag)
 			}
-			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot)-idTagLen-1)
+			chatSuffix := ""
+			if m.achatHasChat[row.item.id] {
+				chatSuffix = " 💬"
+			}
+			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot)-idTagLen-1-len(chatSuffix)) + chatSuffix
 			if selected {
 				line = m.navSelected(prefix + idTag + dot + title)
 			} else if row.item.favorite {
