@@ -888,10 +888,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.achatBoxCursor = 0
 			}
-			// Focus on the chat view (box navigation), not the input pane.
-			m.focus = paneContent
-			m.achatFocused = true
-			m.cursorVisible = false
+			// Focus on the chat view (box navigation), not the input pane —
+			// but preserve nav focus when chat was auto-opened during navigation.
+			if m.focus != paneNav {
+				m.focus = paneContent
+				m.achatFocused = true
+				m.cursorVisible = false
+			}
 			m.statusMsg = ""
 		}
 
@@ -1566,6 +1569,13 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case msg.String() == "c":
 		if m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections {
+			if m.achatMode {
+				// Chat already open for this article — focus the input pane.
+				m.focus = paneCommand
+				m.cursorVisible = true
+				m.syncInputPrompt()
+				return nil
+			}
 			return m.cmdArticleChat()
 		}
 	case key.Matches(msg, keys.Command):
@@ -3695,6 +3705,25 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 			"item.id", item.id,
 			"achatSlug", m.achatSlug)
 		m.exitArticleChat()
+	}
+	// Auto-open article chat if the new article has chat history,
+	// no other split pane is open, and we're on articles/collections sub-tab.
+	if !m.achatMode && !m.scratchOpen && !m.previewOpen && !m.askxOpen &&
+		(m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections) &&
+		m.achatHasChat[item.id] {
+		m.achatMode = true
+		m.achatSlug = item.id
+		m.achatFocused = false
+		m.achatAutoScroll = true
+		m.achatBoxCursor = 0
+		m.achatCollapsed = nil
+		m.contentLoading = true
+		m.contentLines = nil
+		m.contentLineCursor = 0
+		return tea.Batch(
+			loadContent(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels),
+			m.loadArticleChatHistoryCmd(item.id),
+		)
 	}
 	m.contentLoading = true
 	m.contentLines = nil
@@ -6898,7 +6927,7 @@ var helpGroups = []struct {
 		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
 		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
 		{"h / ←", "", "previous content tab"},
-		{"c", "", "open article chat (Articles / Collections nav)"},
+		{"c", "", "toggle/focus article chat (Articles / Collections nav)"},
 		{"r", "", "mark article as read"},
 		{"u", "", "mark article as unread"},
 		{"f/*", "", "toggle favorite"},

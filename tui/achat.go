@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -170,6 +171,10 @@ func (m *Model) cmdArticleChat() tea.Cmd {
 
 // exitArticleChat cleans up all article chat state.
 func (m *Model) exitArticleChat() {
+	slog.Debug("exitArticleChat called",
+		"focus", m.focus,
+		"achatSlug", m.achatSlug,
+		"caller", "exitArticleChat")
 	if m.achatCancelStream != nil {
 		m.achatCancelStream()
 		m.achatCancelStream = nil
@@ -251,7 +256,6 @@ func (m *Model) rebuildArticleChatLines(width int) {
 			}
 			first = false
 		}
-		lines = append(lines, chatLine{chatLineBlank, ""})
 		prevHadContent = true
 	}
 
@@ -286,13 +290,14 @@ func (m *Model) rebuildArticleChatLines(width int) {
 				continue
 			}
 			mdLines := m.appendMarkdown(msg.Content, width)
-			for len(mdLines) > 0 && mdLines[0].role == chatLineBlank {
-				mdLines = mdLines[1:]
+			// Strip all blank lines for compact article chat display.
+			compact := mdLines[:0]
+			for _, ml := range mdLines {
+				if ml.role != chatLineBlank {
+					compact = append(compact, ml)
+				}
 			}
-			for len(mdLines) > 0 && mdLines[len(mdLines)-1].role == chatLineBlank {
-				mdLines = mdLines[:len(mdLines)-1]
-			}
-			lines = append(lines, mdLines...)
+			lines = append(lines, compact...)
 			prevHadContent = len(mdLines) > 0
 		case chat.RoleNote:
 			appendNote(msg.Content)
@@ -423,9 +428,10 @@ func (m *Model) buildArticleChatVLines() []chatVLine {
 				vlines = append(vlines, chatVLine{isBoxBottom: true, boxIdx: boxIdx - 1, isSelected: boxIdx-1 == m.achatBoxCursor, isCommented: boxIdx-1 < len(infos) && infos[boxIdx-1].commented})
 				vlines = append(vlines, chatVLine{isSep: true, boxIdx: boxIdx})
 			}
+			// All boxes get top border.
+			vlines = append(vlines, chatVLine{isBoxTop: true, boxIdx: boxIdx, isSelected: selected, isCommented: commented})
+			// Only selected box gets header line.
 			if selected {
-				vlines = append(vlines, chatVLine{isBoxTop: true, boxIdx: boxIdx, isSelected: true, isCommented: commented})
-				// Header line.
 				meta := ""
 				if boxIdx < len(infos) {
 					parts := []string{}
@@ -501,8 +507,8 @@ func (m *Model) buildArticleChatVLines() []chatVLine {
 	}
 
 	// Close final box.
-	if inBox && boxIdx >= 0 && boxIdx == m.achatBoxCursor {
-		vlines = append(vlines, chatVLine{isBoxBottom: true, boxIdx: boxIdx, isSelected: true, isCommented: boxIdx < len(infos) && infos[boxIdx].commented})
+	if inBox && boxIdx >= 0 {
+		vlines = append(vlines, chatVLine{isBoxBottom: true, boxIdx: boxIdx, isSelected: boxIdx == m.achatBoxCursor, isCommented: boxIdx < len(infos) && infos[boxIdx].commented})
 	}
 
 	return vlines
@@ -1088,7 +1094,7 @@ func (m Model) renderArticleChatPane(height, width int) []string {
 
 			default:
 				cl := m.achatDisplayLines[vl.contentIdx]
-				if selPlain || !vl.isSelected {
+				if selPlain {
 					if vl.isCommented {
 						lines = append(lines, fg(t.ContentDimmed, cl.text))
 					} else {
@@ -1189,6 +1195,11 @@ func (m *Model) handleArticleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 	switch {
 	case msg.Type == tea.KeyRunes:
 		switch msg.String() {
+		case "c":
+			m.exitArticleChat()
+			m.focus = paneNav
+			m.cursorVisible = false
+			return nil
 		case "v":
 			if numBoxes > 0 {
 				m.cmdArticleChatCollapseBox(m.achatBoxCursor)
@@ -1263,34 +1274,43 @@ func (m *Model) handleArticleChatContentKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// cmdArticleChatOverlay opens the selected box in the resource overlay.
+// cmdArticleChatOverlay opens the entire conversation in the resource overlay.
 func (m *Model) cmdArticleChatOverlay() tea.Cmd {
-	infos := m.achatBoxInfos()
-	if m.achatBoxCursor < 0 || m.achatBoxCursor >= len(infos) {
-		m.setStatusError("nothing to view")
-		return nil
-	}
-	bi := infos[m.achatBoxCursor]
 	var msgs []chat.Message
 	if m.achatEngine != nil {
 		msgs = m.achatEngine.History().Msgs
 	} else {
 		msgs = m.achatRawMsgs
 	}
+	if len(msgs) == 0 {
+		m.setStatusError("nothing to view")
+		return nil
+	}
 
 	var parts []string
-	for i := bi.msgStart; i < bi.msgEnd && i < len(msgs); i++ {
-		if msgs[i].Content != "" {
-			parts = append(parts, msgs[i].Content)
+	for _, msg := range msgs {
+		if msg.Content == "" {
+			continue
 		}
+		var label string
+		switch msg.Role {
+		case chat.RoleUser:
+			label = "## You"
+		case chat.RoleAssistant:
+			label = "## Assistant"
+		case chat.RoleNote:
+			label = "## Note"
+		default:
+			label = "## " + msg.Role
+		}
+		parts = append(parts, label+"\n\n"+msg.Content)
 	}
 	if len(parts) == 0 {
 		m.setStatusError("nothing to view")
 		return nil
 	}
 
-	title := fmt.Sprintf("article chat #%d", m.achatBoxCursor+1)
-	m.openResourceOverlay(title, strings.Join(parts, "\n\n"))
+	m.openResourceOverlay("article chat", strings.Join(parts, "\n\n---\n\n"))
 	return nil
 }
 
