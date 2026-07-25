@@ -30,12 +30,15 @@ func (m *Model) toggleAskX() tea.Cmd {
 		m.clearAskXInput()
 		return nil
 	}
-	// Mutual exclusion: close scratch and preview if open.
+	// Mutual exclusion: close other split panes if open.
 	if m.scratchOpen {
 		m.closeScratch()
 	}
 	if m.previewOpen {
 		m.closePreview()
+	}
+	if m.achatMode {
+		m.exitArticleChat()
 	}
 	m.askxGlobal = true
 	m.askxOpen = true
