@@ -1568,7 +1568,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 	case msg.String() == "c":
-		if m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections {
+		if m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections ||
+			(m.navSubTab == navSubTabWorkspaces && m.selectedNavItem() != nil) {
 			if m.achatMode {
 				// Chat already open for this article — focus the input pane.
 				m.focus = paneCommand
@@ -2418,6 +2419,40 @@ func (m *Model) triggerWorkspaceChatLoad() tea.Cmd {
 		return nil
 	}
 	row := m.wsRows[m.wsCursor]
+
+	// Article row — handle article chat auto-open/close.
+	if row.kind == wsRowArticle && row.slug != "" {
+		if m.achatMode && row.slug != m.achatSlug {
+			m.exitArticleChat()
+		}
+		if !m.achatMode && !m.scratchOpen && !m.previewOpen && !m.askxOpen &&
+			m.achatHasChat[row.slug] {
+			// Find the navItem to get root path for content loading.
+			var item *navItem
+			for i := range m.navItemsAll {
+				if m.navItemsAll[i].id == row.slug {
+					item = &m.navItemsAll[i]
+					break
+				}
+			}
+			if item != nil {
+				m.achatMode = true
+				m.achatSlug = row.slug
+				m.achatFocused = false
+				m.achatAutoScroll = true
+				m.achatBoxCursor = 0
+				m.achatCollapsed = nil
+				return m.loadArticleChatHistoryCmd(row.slug)
+			}
+		}
+		return nil
+	}
+
+	// Non-article row — close any open article chat.
+	if m.achatMode {
+		m.exitArticleChat()
+	}
+
 	if row.kind != wsRowWorkspace {
 		return nil
 	}

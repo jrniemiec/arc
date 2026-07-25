@@ -863,7 +863,11 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				idTag = fmt.Sprintf("%d ", row.numID)
 				idTagLen = len(idTag)
 			}
-			title := truncate(oneLine(row.title), w-len(prefix)-len(dot)-idTagLen)
+			chatSuffix := ""
+			if m.achatHasChat[row.slug] {
+				chatSuffix = " 💬"
+			}
+			title := truncate(oneLine(row.title), w-len(prefix)-len(dot)-idTagLen-len(chatSuffix)) + chatSuffix
 			label = prefix + idTag + dot + title
 			if selected {
 				label = m.navSelected(label)
