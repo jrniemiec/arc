@@ -324,19 +324,35 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 		}
 
 		// --- 3a. Send request ---
-		resp, err := e.prov.ChatStreamWithTools(
-			ctx,
-			e.systemPrompt,
-			workingMsgs,
-			e.tools,
-			cb.OnTextDelta,
-			func(toolName string) error {
-				if cb.OnToolStart != nil {
-					cb.OnToolStart(toolName)
+		var resp chat.StreamResponse
+		var err error
+		if len(e.tools) == 0 {
+			// No tools — use plain streaming (works on all providers).
+			var text string
+			var usage chat.Usage
+			text, usage, err = e.prov.ChatStream(ctx, e.systemPrompt, workingMsgs, cb.OnTextDelta)
+			if err == nil {
+				resp = chat.StreamResponse{
+					Content:    []chat.ContentBlock{{Type: "text", Text: text}},
+					StopReason: "end_turn",
+					Usage:      usage,
 				}
-				return nil
-			},
-		)
+			}
+		} else {
+			resp, err = e.prov.ChatStreamWithTools(
+				ctx,
+				e.systemPrompt,
+				workingMsgs,
+				e.tools,
+				cb.OnTextDelta,
+				func(toolName string) error {
+					if cb.OnToolStart != nil {
+						cb.OnToolStart(toolName)
+					}
+					return nil
+				},
+			)
+		}
 		if err != nil {
 			return ChatResult{Usage: turnUsage, Elapsed: time.Since(turnStart), Rounds: round}, err
 		}

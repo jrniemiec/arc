@@ -375,10 +375,6 @@ func runFeed(
 					FlashModel:       opts.AgentCfg.FlashProfileName(),
 					AllowedLanguages: opts.AgentCfg.Languages,
 				}
-				if len(r.Collections) > 0 {
-					pReq.Collection = r.Collections[0]
-				}
-
 				pResult, pErr := pipeline.Run(ctx, opts.ArcConfig, pReq)
 				if pErr != nil {
 					slog.Warn("ingest failed",

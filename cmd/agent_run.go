@@ -138,7 +138,7 @@ func runAgentRun(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Index newly ingested articles into SQLite.
+	// Index newly ingested articles into SQLite, then assign them to existing collections.
 	// pipeline.Run writes files only; index only the new slugs rather than
 	// walking the entire library.
 	if len(rec.IngestedSlugs) > 0 && !agentDryRun {
@@ -150,6 +150,16 @@ func runAgentRun(cmd *cobra.Command, _ []string) error {
 		}
 		if isTTY {
 			fmt.Print("\r\033[K") // clear "indexing..." line
+		}
+		// Assign newly ingested (uncollected) articles to existing collections.
+		if isTTY {
+			fmt.Print("assigning collections...")
+		}
+		if _, err := svc.AssignCollections(ctx, "", 0, true, nil); err != nil {
+			slog.Warn("assign collections after agent run failed", "err", err)
+		}
+		if isTTY {
+			fmt.Print("\r\033[K") // clear "assigning collections..." line
 		}
 	}
 
