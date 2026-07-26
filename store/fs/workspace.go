@@ -173,9 +173,11 @@ func ClearScratch(dataRoot, workspace string) error {
 
 // AskXMessage is one turn in an askX conversation (user or assistant).
 type AskXMessage struct {
-	Role    string    `json:"role"`    // "user" or "assistant"
-	Content string    `json:"content"`
-	Time    time.Time `json:"time,omitempty"`
+	Role      string    `json:"role"`                // "user" or "assistant"
+	Content   string    `json:"content"`
+	Time      time.Time `json:"time,omitempty"`
+	Profile   string    `json:"profile,omitempty"`   // profile that produced this message (assistant only)
+	Commented bool      `json:"commented,omitempty"` // excluded from LLM context after reset
 }
 
 // AskXHistory is the stored askX message history.
@@ -234,6 +236,51 @@ func ReadAskXHistory(dataRoot, workspace string) (*AskXHistory, error) {
 func SaveAskXHistory(dataRoot, workspace string, h *AskXHistory) error {
 	path := AskXPath(dataRoot, workspace)
 	data, err := json.MarshalIndent(h, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// askxSummaryMeta is the JSON envelope persisted alongside the summary text.
+type askxSummaryMeta struct {
+	CoversThrough time.Time `json:"covers_through"`
+	Text          string    `json:"text"`
+}
+
+// AskXSummaryPath returns the path to the askX rolling summary file.
+func AskXSummaryPath(dataRoot, workspace string) string {
+	base := AskXPath(dataRoot, workspace)
+	return base[:len(base)-len(".json")] + "-summary.json"
+}
+
+// ReadAskXSummary loads the rolling summary for AskX history compaction.
+// Returns empty values (no error) when the file does not exist yet.
+func ReadAskXSummary(dataRoot, workspace string) (text string, coversThrough time.Time, err error) {
+	path := AskXSummaryPath(dataRoot, workspace)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", time.Time{}, nil
+		}
+		return "", time.Time{}, err
+	}
+	var meta askxSummaryMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return "", time.Time{}, fmt.Errorf("parse askx summary: %w", err)
+	}
+	return meta.Text, meta.CoversThrough, nil
+}
+
+// SaveAskXSummary persists the rolling summary for AskX history compaction.
+func SaveAskXSummary(dataRoot, workspace string, text string, coversThrough time.Time) error {
+	path := AskXSummaryPath(dataRoot, workspace)
+	meta := askxSummaryMeta{CoversThrough: coversThrough, Text: text}
+	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
 	}

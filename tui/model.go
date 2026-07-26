@@ -586,6 +586,8 @@ type Model struct {
 	askxDisplayLines  []chatLine         // rendered lines for display (reuses chat line types)
 	askxBoxCursor     int                // selected box index (each box = user+assistant exchange)
 	askxCollapsed     map[int]bool       // set of collapsed box indices
+	askxResetPending  bool               // true when /reset confirmation is awaiting y/n
+	askxResetTurnCount int               // number of active (non-commented) turns shown in confirmation
 	populateRunning bool   // true while workspace populate LLM is in flight
 	populateLabel   string // label shown in wave indicator during populate
 	ingestRunning      bool               // true while an article ingest is in flight
@@ -675,6 +677,7 @@ var globalCommands = []cmdCompletion{
 	{"/Scratch", "[msg]", "global scratch (append / toggle)"},
 	{"/askX", "<prompt>", "workspace-local LLM query"},
 	{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
+	{"/reset", "", "reset askX context (keeps history visible, removes from LLM context)"},
 	{"/help", "[group]", "show command reference"},
 	{"/config", "", "show resolved configuration"},
 	{"/config-view", "", "view config.jsonc in overlay"},
@@ -789,6 +792,7 @@ var chatCommands = []cmdCompletion{
 	{"/Scratch", "[msg]", "global scratch (append / toggle)"},
 	{"/askX", "<prompt>", "workspace-local LLM query"},
 	{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
+	{"/reset", "", "reset askX context (keeps history visible, removes from LLM context)"},
 	{"/article", "<cmd>", "article commands (list, search, ingest, …)"},
 	{"/collection", "<cmd>", "collection commands (list, show, …)"},
 	{"/workspace", "<cmd>", "workspace commands (list, new, delete, …)"},

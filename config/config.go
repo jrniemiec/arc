@@ -223,7 +223,7 @@ type ArticleChatConfig struct {
 	SystemPrompt string `json:"system_prompt,omitempty"`
 }
 
-// AskXConfig holds configuration for the /askX single-shot LLM query pane.
+// AskXConfig holds configuration for the /askX LLM query pane.
 type AskXConfig struct {
 	// Profile is the arc profile name used for askX queries.
 	// Default: "haiku".
@@ -234,6 +234,23 @@ type AskXConfig struct {
 
 	// MaxOutputTokens caps the response length. 0 uses the provider default.
 	MaxOutputTokens int `json:"max_output_tokens"`
+
+	// Strategy controls how conversation history is trimmed to fit the context window.
+	// Options: "tail" (last N user turns), "summarize" (compress old history via LLM).
+	// Default: "tail".
+	Strategy string `json:"strategy"`
+
+	// MaxUserMessages is the number of past user turns kept by the tail strategy.
+	// Default: 256.
+	MaxUserMessages int `json:"max_user_messages"`
+
+	// SummarizerProfile is the arc profile used to run history compaction in the
+	// summarize strategy. Empty falls back to the main Profile.
+	SummarizerProfile string `json:"summarizer_profile"`
+
+	// VerbatimRatio is the fraction of the token budget kept as verbatim recent
+	// messages in the summarize strategy. Default: 0.4.
+	VerbatimRatio float64 `json:"verbatim_ratio"`
 }
 
 // WorkspacePopulateConfig controls LLM-assisted workspace population.
@@ -738,6 +755,9 @@ func Default() Config {
 			Profile:         "haiku",
 			SystemPrompt:    DefaultAskXSystemPrompt,
 			MaxOutputTokens: 4096,
+			Strategy:        "tail",
+			MaxUserMessages: 256,
+			VerbatimRatio:   0.4,
 		},
 		ArticleChat: ArticleChatConfig{
 			Profile:         "haiku",
@@ -934,6 +954,18 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.AskX.MaxOutputTokens != 0 {
 		cfg.AskX.MaxOutputTokens = overlay.AskX.MaxOutputTokens
+	}
+	if overlay.AskX.Strategy != "" {
+		cfg.AskX.Strategy = overlay.AskX.Strategy
+	}
+	if overlay.AskX.MaxUserMessages != 0 {
+		cfg.AskX.MaxUserMessages = overlay.AskX.MaxUserMessages
+	}
+	if overlay.AskX.SummarizerProfile != "" {
+		cfg.AskX.SummarizerProfile = overlay.AskX.SummarizerProfile
+	}
+	if overlay.AskX.VerbatimRatio != 0 {
+		cfg.AskX.VerbatimRatio = overlay.AskX.VerbatimRatio
 	}
 	if overlay.ArticleChat.Profile != "" {
 		cfg.ArticleChat.Profile = overlay.ArticleChat.Profile

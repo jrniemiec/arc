@@ -4353,6 +4353,13 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	case "/askx":
 		global := parts[0] == "/AskX"
 		return m.cmdAskX(arg, global)
+	case "/reset":
+		if !m.askxOpen {
+			m.setStatusError("/reset: askX pane is not open")
+			return nil
+		}
+		m.cmdAskXReset()
+		return nil
 	case "/article":
 		return m.dispatchQualified(navSubTabArticles, arg)
 	case "/collection":
@@ -7249,6 +7256,7 @@ var helpGroups = []struct {
 		{"/Scratch", "[msg]", "global scratch (append / toggle)"},
 		{"/askX", "[--profile <name>] <prompt>", "workspace-local LLM query"},
 		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
+		{"/reset", "", "reset askX context (history stays visible, removed from LLM context)"},
 		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
 		{"/chat-profile", "[name]", "show or set global article chat profile (alias: /chat-model)"},
 		{"/config", "", "show resolved configuration"},

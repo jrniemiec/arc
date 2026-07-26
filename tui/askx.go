@@ -15,10 +15,11 @@ import (
 
 	"github.com/jrniemiec/arc/chat"
 	chatengine "github.com/jrniemiec/arc/chat/engine"
+	chatprovider "github.com/jrniemiec/arc/chat/provider"
+	"github.com/jrniemiec/arc/chat/strategy"
 	"github.com/jrniemiec/arc/config"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
-	"github.com/jrniemiec/llm"
 )
 
 // ── Toggle & lifecycle ──────────────────────────────────────────────────────
@@ -150,9 +151,11 @@ func askxHistoryToMsgs(h *storefs.AskXHistory) []chat.Message {
 	msgs := make([]chat.Message, len(h.Messages))
 	for i, am := range h.Messages {
 		msgs[i] = chat.Message{
-			Role:    am.Role,
-			Content: am.Content,
-			Time:    am.Time,
+			Role:      am.Role,
+			Content:   am.Content,
+			Time:      am.Time,
+			Profile:   am.Profile,
+			Commented: am.Commented,
 		}
 	}
 	return msgs
@@ -165,9 +168,11 @@ func msgsToAskXHistory(msgs []chat.Message) *storefs.AskXHistory {
 	}
 	for i, m := range msgs {
 		h.Messages[i] = storefs.AskXMessage{
-			Role:    m.Role,
-			Content: m.Content,
-			Time:    m.Time,
+			Role:      m.Role,
+			Content:   m.Content,
+			Time:      m.Time,
+			Profile:   m.Profile,
+			Commented: m.Commented,
 		}
 	}
 	return h
@@ -391,9 +396,24 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 
 // ── Streaming ───────────────────────────────────────────────────────────────
 
-// sendAskXQuery sends a single-shot query to the LLM with streaming.
+// askxSummaryStore implements strategy.SummaryStore for the AskX pane.
+type askxSummaryStore struct {
+	dataRoot  string
+	workspace string
+}
+
+func (s *askxSummaryStore) LoadSummary() (string, time.Time, error) {
+	return storefs.ReadAskXSummary(s.dataRoot, s.workspace)
+}
+func (s *askxSummaryStore) SaveSummary(text string, coversThrough time.Time) error {
+	return storefs.SaveAskXSummary(s.dataRoot, s.workspace, text, coversThrough)
+}
+
+// sendAskXQuery sends a multi-turn query to the LLM with streaming.
+// Prior turns in m.askxMsgs (excluding the last, which is the just-appended user message)
+// are included in context via the configured strategy.
 // profileOverride, if non-empty, takes precedence over config.
-func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
+func (m *Model) sendAskXQuery(llmPrompt string, profileOverride string) tea.Cmd {
 	cfg := m.cfg
 
 	// Resolve profile.
@@ -416,7 +436,26 @@ func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 		systemPrompt = "You are a concise assistant."
 	}
 
-	apiKey := correctionResolveAPIKey(prof.Provider)
+	// Build history from prior messages (all except the last, which is the current user turn).
+	// The last message was just appended in cmdAskX before calling sendAskXQuery.
+	priorMsgs := m.askxMsgs
+	if len(priorMsgs) > 0 {
+		priorMsgs = priorMsgs[:len(priorMsgs)-1]
+	}
+	hist := &chat.History{Msgs: priorMsgs}
+
+	// Build context strategy from config.
+	stratName := cfg.AskX.Strategy
+	if stratName == "" {
+		stratName = strategy.StrategyTail
+	}
+	maxUser := cfg.AskX.MaxUserMessages
+	if maxUser == 0 {
+		maxUser = 256
+	}
+
+	ws := m.askxWorkspace()
+	dataRoot := cfg.DataRoot
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.askxCancelStream = cancel
@@ -426,26 +465,46 @@ func (m *Model) sendAskXQuery(prompt string, profileOverride string) tea.Cmd {
 	m.askxSharedBuf = shared
 
 	maxTokens := cfg.AskX.MaxOutputTokens
+	verbatimRatio := cfg.AskX.VerbatimRatio
+	if verbatimRatio == 0 {
+		verbatimRatio = 0.4
+	}
+	summarizerProfileName := cfg.AskX.SummarizerProfile
 
 	return func() tea.Msg {
-		prov, err := llm.New(llm.ProviderConfig{
-			Provider:        prof.Provider,
-			Model:           prof.Model,
-			Host:            prof.Host,
-			APIKey:          apiKey,
-			MaxOutputTokens: maxTokens,
-			Think:           prof.Think,
-		})
+		prov, err := chatprovider.New(prof, maxTokens)
 		if err != nil {
 			return askxStreamDoneMsg{err: fmt.Sprintf("askX: %v", err)}
 		}
 
-		msgs := []llm.Message{
-			{Role: llm.RoleUser, Content: prompt},
+		// Resolve context strategy.
+		var strat strategy.ContextStrategy
+		if stratName == strategy.StrategySummarize {
+			summProv := chat.Provider(prov)
+			if summarizerProfileName != "" && summarizerProfileName != profileName {
+				if sp, ok := cfg.Profiles[summarizerProfileName]; ok {
+					if sp2, err := chatprovider.New(sp, 0); err == nil {
+						summProv = sp2
+					}
+				}
+			}
+			strat = &strategy.SummarizeStrategy{
+				SummarizerProvider: summProv,
+				Store:              &askxSummaryStore{dataRoot: dataRoot, workspace: ws},
+				Ctx:                ctx,
+				Budget:             128000,
+				VerbatimRatio:      verbatimRatio,
+			}
+		} else {
+			strat = strategy.New(stratName, 0, systemPrompt, maxUser)
 		}
 
+		// Apply strategy to prior history, then append current user prompt.
+		contextMsgs := strat.Apply(hist, llmPrompt)
+		allMsgs := append(contextMsgs, chat.Message{Role: chat.RoleUser, Content: llmPrompt})
+
 		start := time.Now()
-		fullText, usage, err := prov.ChatStream(ctx, systemPrompt, msgs, func(delta string) error {
+		fullText, usage, err := prov.ChatStream(ctx, systemPrompt, allMsgs, func(delta string) error {
 			shared.Append(delta)
 			return nil
 		})
@@ -580,6 +639,53 @@ func (m *Model) rebuildAskXLines() {
 	prevHadContent := false
 
 	for _, msg := range msgs {
+		// Commented messages (out-of-context after reset) render dimmed.
+		if msg.Commented {
+			switch msg.Role {
+			case chat.RoleUser:
+				if prevHadContent {
+					lines = append(lines, chatLine{chatLineBlank, ""})
+				}
+				raw := strings.Split(msg.Content, "\n")
+				first := true
+				for _, rl := range raw {
+					rl = strings.TrimRight(rl, " \t")
+					if rl == "" {
+						continue
+					}
+					prefix := "  ~ "
+					if first {
+						prefix = "~ "
+						first = false
+					}
+					for _, wl := range wordWrap(rl, userW) {
+						lines = append(lines, chatLine{chatLineNote, prefix + wl})
+					}
+				}
+				lines = append(lines, chatLine{chatLineBlank, ""})
+				prevHadContent = true
+			case chat.RoleAssistant:
+				raw := strings.Split(msg.Content, "\n")
+				first := true
+				for _, rl := range raw {
+					rl = strings.TrimRight(rl, " \t")
+					if rl == "" {
+						continue
+					}
+					prefix := "  ~ "
+					if first {
+						prefix = "~ "
+						first = false
+					}
+					for _, wl := range wordWrap(rl, userW) {
+						lines = append(lines, chatLine{chatLineNote, prefix + wl})
+					}
+				}
+				prevHadContent = true
+			}
+			continue
+		}
+
 		switch msg.Role {
 		case chat.RoleNote:
 			if prevHadContent {
@@ -841,6 +947,47 @@ func (m *Model) cmdAskXDeleteBox() tea.Cmd {
 	return nil
 }
 
+// cmdAskXReset initiates a reset confirmation.
+// Counts active (non-commented) turns and sets askxResetPending.
+func (m *Model) cmdAskXReset() {
+	count := 0
+	for _, msg := range m.askxMsgs {
+		if msg.Role == chat.RoleUser && !msg.Commented {
+			count++
+		}
+	}
+	if count == 0 {
+		m.setStatusError("askX: no active turns to reset")
+		return
+	}
+	m.askxResetPending = true
+	m.askxResetTurnCount = count
+}
+
+// confirmAskXReset marks all messages as Commented=true and saves.
+func (m *Model) confirmAskXReset() {
+	count := m.askxResetTurnCount
+	for i := range m.askxMsgs {
+		m.askxMsgs[i].Commented = true
+	}
+	m.saveAskXHistory()
+	m.askxResetPending = false
+	m.askxResetTurnCount = 0
+	m.rebuildAskXLines()
+	noun := "turn"
+	if count != 1 {
+		noun = "turns"
+	}
+	m.statusMsg = fmt.Sprintf("✓ askX context reset — %d %s removed from context", count, noun)
+}
+
+// cancelAskXReset cancels a pending reset without making changes.
+func (m *Model) cancelAskXReset() {
+	m.askxResetPending = false
+	m.askxResetTurnCount = 0
+	m.statusMsg = "reset cancelled"
+}
+
 // ── TTS ─────────────────────────────────────────────────────────────────────
 
 func (m *Model) cmdAskXTTS() tea.Cmd {
@@ -916,6 +1063,17 @@ func (m *Model) cmdAskXTTSAdjustRate(delta int) tea.Cmd {
 // handleAskXKey handles keys when the askX pane is focused.
 func (m *Model) handleAskXKey(msg tea.KeyMsg) tea.Cmd {
 	viewH := m.askxViewH()
+
+	// Reset confirmation intercepts all keys.
+	if m.askxResetPending {
+		switch msg.String() {
+		case "y", "Y":
+			m.confirmAskXReset()
+		default:
+			m.cancelAskXReset()
+		}
+		return nil
+	}
 
 	switch {
 	case msg.Type == tea.KeyRunes:
@@ -1200,7 +1358,22 @@ func (m Model) renderAskXPane(height, width int) []string {
 	header := fg(headerColor, strings.Repeat("─", leftSep)+label+strings.Repeat("─", rightSep)+hint)
 	lines = append(lines, header)
 
+	// Reset confirmation banner replaces one content line.
+	if m.askxResetPending {
+		noun := "turn"
+		if m.askxResetTurnCount != 1 {
+			noun = "turns"
+		}
+		banner := fmt.Sprintf(" Reset context? %d active %s will be removed from context · y confirm · any key cancel",
+			m.askxResetTurnCount, noun)
+		banner = truncate(banner, width)
+		lines = append(lines, fgBold(t.StatusError, banner))
+	}
+
 	viewH := height - 1
+	if m.askxResetPending {
+		viewH-- // banner consumed one line
+	}
 	if viewH < 1 {
 		viewH = 1
 	}
