@@ -51,8 +51,8 @@ func (m *Model) toggleAskX() tea.Cmd {
 	}
 	m.focus = paneCommand
 	m.cursorVisible = true
-	m.input.SetValue("/AskX ")
-	m.input.CursorEnd()
+	m.input.SetValue("")
+	m.syncInputPrompt()
 	m.cmdComplete = nil
 	m.cmdCompleteIdx = -1
 	m.paramItems = nil
@@ -74,6 +74,7 @@ func (m *Model) closeAskX() {
 	m.askxDisplayLines = nil
 	m.askxStreaming = false
 	m.askxStreamBuf = ""
+	m.syncInputPrompt()
 }
 
 // clearAskXInput clears the input if it has the /askX or /AskX prefix.
@@ -83,6 +84,24 @@ func (m *Model) clearAskXInput() {
 		m.input.CursorEnd()
 		m.syncInputHeight()
 	}
+}
+
+// askxPromptPrefix returns the input prompt string for askX session mode.
+func (m *Model) askxPromptPrefix() string {
+	profile := m.askxResolvedProfile
+	if profile == "" {
+		profile = m.cfg.AskX.Profile
+	}
+	if profile == "" {
+		profile = "haiku"
+	}
+	name := "AskX"
+	if !m.askxGlobal {
+		if ws := m.askxWorkspace(); ws != "" {
+			name = ws + "/AskX"
+		}
+	}
+	return name + "(" + profile + ")> "
 }
 
 // askxWorkspace returns the workspace name for askX file operations.
@@ -189,6 +208,7 @@ func (m *Model) cmdAskXAddNote(text string) {
 	note := chat.Message{Role: chat.RoleNote, Content: text, Time: time.Now()}
 	m.askxMsgs = append(m.askxMsgs, note)
 	m.rebuildAskXLines()
+	m.askxScrollToBottom()
 	m.saveAskXHistory()
 }
 
@@ -786,7 +806,7 @@ type askxBoxInfo struct {
 }
 
 // askxBoxInfos walks askxMsgs and returns one entry per logical box.
-// A box is a user→assistant exchange.
+// A box is a user→assistant exchange or a standalone note.
 func (m *Model) askxBoxInfos() []askxBoxInfo {
 	var infos []askxBoxInfo
 	for i, msg := range m.askxMsgs {
@@ -804,6 +824,12 @@ func (m *Model) askxBoxInfos() []askxBoxInfo {
 					infos[len(infos)-1].profile = msg.Profile
 				}
 			}
+		case chat.RoleNote:
+			ts := ""
+			if !msg.Time.IsZero() {
+				ts = msg.Time.Format("Jan 2, 2006 · 15:04")
+			}
+			infos = append(infos, askxBoxInfo{ts: ts, msgStart: i, msgEnd: i + 1})
 		}
 	}
 	return infos
@@ -815,6 +841,8 @@ func (m *Model) askxBoxCount() int {
 	count := 0
 	for i, cl := range dl {
 		if cl.role == chatLineUser && (i == 0 || dl[i-1].role != chatLineUser) {
+			count++
+		} else if cl.role == chatLineNote && (i == 0 || dl[i-1].role != chatLineNote) {
 			count++
 		}
 	}
@@ -1166,12 +1194,8 @@ func (m *Model) handleAskXKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.Command):
 		m.focus = paneCommand
 		m.cursorVisible = true
-		if m.askxGlobal {
-			m.input.SetValue("/AskX ")
-		} else {
-			m.input.SetValue("/askX ")
-		}
-		m.input.CursorEnd()
+		m.input.SetValue("")
+		m.syncInputPrompt()
 	}
 	return nil
 }
@@ -1190,13 +1214,15 @@ func (m Model) buildAskXVLines() []chatVLine {
 		return nil
 	}
 
-	// Detect box boundaries from display lines (same logic as buildChatVLines).
+	// Detect box boundaries from display lines.
 	type boxStart struct {
 		idx int
 	}
 	var boxes []boxStart
 	for i, cl := range dl {
 		if cl.role == chatLineUser && (i == 0 || dl[i-1].role != chatLineUser) {
+			boxes = append(boxes, boxStart{i})
+		} else if cl.role == chatLineNote && (i == 0 || dl[i-1].role != chatLineNote) {
 			boxes = append(boxes, boxStart{i})
 		}
 	}

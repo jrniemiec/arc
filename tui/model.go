@@ -1544,6 +1544,9 @@ func (m Model) inputPrompt() string {
 	if m.achatMode {
 		return m.achatPromptPrefix()
 	}
+	if m.askxOpen {
+		return m.askxPromptPrefix()
+	}
 	if m.chatMode {
 		if m.chatProfileOverride != "" {
 			return m.chatWorkspace + ":" + m.chatProfileOverride + "> "
