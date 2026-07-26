@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	storefs "github.com/jrniemiec/arc/store/fs"
 )
@@ -181,6 +182,49 @@ func oneLine(s string) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// stripEmoji removes emoji characters and variation selectors from s.
+// This prevents terminal width mismatches in fixed-width nav layouts.
+func stripEmoji(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if isEmoji(r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// isEmoji returns true for emoji and emoji-related codepoints that cause
+// terminal width calculation mismatches.
+func isEmoji(r rune) bool {
+	switch {
+	case r >= 0x1F600 && r <= 0x1F64F: // emoticons
+		return true
+	case r >= 0x1F300 && r <= 0x1F5FF: // misc symbols & pictographs
+		return true
+	case r >= 0x1F680 && r <= 0x1F6FF: // transport & map symbols
+		return true
+	case r >= 0x1F900 && r <= 0x1F9FF: // supplemental symbols
+		return true
+	case r >= 0x1FA00 && r <= 0x1FA6F: // chess symbols
+		return true
+	case r >= 0x1FA70 && r <= 0x1FAFF: // symbols extended-A
+		return true
+	case r >= 0x2600 && r <= 0x26FF: // misc symbols (☀, ⚡, etc.)
+		return true
+	case r >= 0x2700 && r <= 0x27BF: // dingbats (✂, ✈, etc.)
+		return true
+	case r == 0xFE0F || r == 0xFE0E: // variation selectors
+		return true
+	case r >= 0x200D && r <= 0x200D: // zero-width joiner
+		return true
+	case r >= 0xE0020 && r <= 0xE007F: // tag characters (flag sequences)
+		return true
+	}
+	return false
 }
 
 // truncate cuts s to maxWidth visible chars (no ANSI in s assumed).
@@ -726,7 +770,7 @@ func (m Model) renderNavCollections(maxLines int) []string {
 			if m.achatHasChat[row.item.id] {
 				chatSuffix = " 💬"
 			}
-			title := truncate(oneLine(row.item.title), m.navWidth()-len(prefix)-len(dot)-idTagLen-1-len(chatSuffix)) + chatSuffix
+			title := truncate(stripEmoji(oneLine(row.item.title)), m.navWidth()-len(prefix)-len(dot)-idTagLen-1-lipgloss.Width(chatSuffix)) + chatSuffix
 			if selected {
 				line = m.navSelected(prefix + idTag + dot + title)
 			} else if row.item.favorite {
@@ -867,7 +911,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 			if m.achatHasChat[row.slug] {
 				chatSuffix = " 💬"
 			}
-			title := truncate(oneLine(row.title), w-len(prefix)-len(dot)-idTagLen-len(chatSuffix)) + chatSuffix
+			title := truncate(stripEmoji(oneLine(row.title)), w-len(prefix)-len(dot)-idTagLen-lipgloss.Width(chatSuffix)) + chatSuffix
 			label = prefix + idTag + dot + title
 			if selected {
 				label = m.navSelected(label)
@@ -958,7 +1002,7 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 		case wsRowAtticArticle:
 			prefix := "    "
 			dot := "◦ "
-			title := truncate(oneLine(row.title), w-len(prefix)-len(dot))
+			title := truncate(stripEmoji(oneLine(row.title)), w-len(prefix)-len(dot))
 			label = prefix + dot + title
 			if selected {
 				label = m.navSelected(label)
@@ -1058,25 +1102,38 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 		if m.achatHasChat[item.id] {
 			chatSuffix = " 💬"
 		}
-		title := truncate(oneLine(item.title), m.navWidth()-len(prefix)-idWidth-1-len(chatSuffix)) + chatSuffix
+		// Strip emoji from title to avoid terminal width mismatches.
+		// UI-controlled markers (★, 💬) are added separately and unaffected.
+		cleanTitle := stripEmoji(oneLine(item.title))
+		// Compute the visual width of the prefix area before the title.
+		// All branches render: <lead>(1) + idStr(idWidth+1) + <marker>(prefixW) + title
+		// Favorite items always render "★ " (width 2) regardless of numbered mode.
+		var renderPrefixW int
+		if item.favorite {
+			renderPrefixW = 2 // "★ "
+		} else if numbered {
+			renderPrefixW = lipgloss.Width(prefix)
+		} else {
+			renderPrefixW = 2 // "• " or "  "
+		}
+		chatSuffixW := lipgloss.Width(chatSuffix)
+		title := truncate(cleanTitle, m.navWidth()-renderPrefixW-idWidth-2-chatSuffixW) + chatSuffix
 		var line string
 		if i == m.navCursor {
-			line = m.navSelected(idStr + prefix + title)
+			if item.favorite {
+				line = m.navSelected(idStr + "★ " + title)
+			} else {
+				line = m.navSelected(idStr + prefix + title)
+			}
 		} else {
 			idPart := fg(t.NavDimmed, idStr)
-			if numbered {
-				if item.favorite {
-					line = " " + idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
-				} else {
-					line = " " + idPart + fg(t.NavDimmed, prefix) + fg(t.NavText, title)
-				}
+			if item.favorite {
+				line = " " + idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
+			} else if numbered {
+				line = " " + idPart + fg(t.NavDimmed, prefix) + fg(t.NavText, title)
 			} else {
-				if item.favorite {
-					line = " " + idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
-				} else {
-					dotChar := prefix[:len(prefix)-1] // strip trailing space for coloring
-					line = " " + idPart + fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
-				}
+				dotChar := prefix[:len(prefix)-1] // strip trailing space for coloring
+				line = " " + idPart + fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
 			}
 		}
 		lines = append(lines, line)
@@ -1275,7 +1332,7 @@ func (m Model) renderContentLibrary(height, width int) []string {
 	if idPrefix != "" {
 		headerLine = fg(t.ContentDimmed, idPrefix) + sep
 	}
-	headerLine += fgBold(titleColor, truncate(oneLine(item.title), titleMaxW)) + sep + slugStr
+	headerLine += fgBold(titleColor, truncate(stripEmoji(oneLine(item.title)), titleMaxW)) + sep + slugStr
 	lines = append(lines, headerLine)
 
 	// meta line 1: ingest date · source type · url · read status · favorite
@@ -3073,9 +3130,14 @@ func (m Model) hintsFor() string {
 }
 
 // padRight pads a string (which may contain ANSI codes) to width visible chars.
+// If the string is wider than width (e.g. due to emoji width mismatches), it is
+// truncated to prevent the vertical divider from shifting.
 func padRight(s string, width int) string {
 	visible := lipgloss.Width(s)
-	if visible >= width {
+	if visible > width {
+		return ansi.Truncate(s, width, "")
+	}
+	if visible == width {
 		return s
 	}
 	return s + strings.Repeat(" ", width-visible)
