@@ -20,6 +20,7 @@ import (
 	agentpkg "github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/service"
+	"github.com/jrniemiec/arc/store"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
 	"github.com/jrniemiec/llm"
@@ -196,30 +197,168 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != "" {
 			m.setStatusError("✗ " + msg.err)
 		} else {
-			rows := make([]navRow, 0, len(msg.results))
-			for _, c := range msg.results {
-				rows = append(rows, navRow{
-					kind:         rowCollection,
-					colSlug:      c.Slug,
-					colNumID:     c.NumID,
-					colName:      c.Name,
-					colDesc:      c.Description,
-					colCount:     c.ArticleCount,
-					colCreatedAt: c.CreatedAt,
-					colHasSummary: c.HasSummary,
-					colHasSystem:  c.HasSystem,
-				})
+			// Build sets for dedup.
+			colMatch := make(map[string]service.CollectionInfo, len(msg.collections))
+			for _, c := range msg.collections {
+				colMatch[c.Slug] = c
 			}
+
+			// Group matching articles by collection slug.
+			artByCol := map[string][]navItem{}
+			for _, r := range msg.articles {
+				item := navItemFromArticle(r.Article)
+				for _, colSlug := range r.Article.Collections {
+					artByCol[colSlug] = append(artByCol[colSlug], item)
+				}
+			}
+
+			// Collect all collection slugs that appear in either result set.
+			seen := map[string]bool{}
+			var colSlugs []string
+			for slug := range colMatch {
+				if !seen[slug] {
+					seen[slug] = true
+					colSlugs = append(colSlugs, slug)
+				}
+			}
+			for slug := range artByCol {
+				if !seen[slug] {
+					seen[slug] = true
+					colSlugs = append(colSlugs, slug)
+				}
+			}
+			sort.Strings(colSlugs)
+
+			// Build tree rows.
+			var rows []navRow
+			for _, slug := range colSlugs {
+				// Collection header — prefer colMatch info if available.
+				var header navRow
+				if ci, ok := colMatch[slug]; ok {
+					header = navRow{
+						kind:          rowCollection,
+						expanded:      true,
+						colSlug:       ci.Slug,
+						colNumID:      ci.NumID,
+						colName:       ci.Name,
+						colDesc:       ci.Description,
+						colCount:      ci.ArticleCount,
+						colCreatedAt:  ci.CreatedAt,
+						colHasSummary: ci.HasSummary,
+						colHasSystem:  ci.HasSystem,
+					}
+				} else {
+					// Collection matched only via article content — look it up from navRowsAll.
+					header = navRow{kind: rowCollection, expanded: true, colSlug: slug, colName: slug}
+					for _, r := range m.navRowsAll {
+						if r.kind == rowCollection && r.colSlug == slug {
+							header = r
+							header.expanded = true
+							break
+						}
+					}
+				}
+				rows = append(rows, header)
+
+				// Article children.
+				if arts, ok := artByCol[slug]; ok {
+					// Article content matches — show only matching articles.
+					for i := range arts {
+						rows = append(rows, navRow{kind: rowArticle, item: &arts[i], indented: true})
+					}
+				} else {
+					// Collection matched by name only — show all its articles from navItemsAll.
+					for _, ni := range m.navItemsAll {
+						for _, c := range ni.collections {
+							if c == slug {
+								cp := ni
+								rows = append(rows, navRow{kind: rowArticle, item: &cp, indented: true})
+								break
+							}
+						}
+					}
+				}
+			}
+
 			m.navRows = rows
 			m.navRowCursor = 0
 			m.navRowScroll = 0
 			m.focus = paneNav
-			n := len(rows)
-			if n == 0 {
-				m.statusMsg = fmt.Sprintf("no collections matching %q", msg.query)
+			nCol := len(colSlugs)
+			nArt := 0
+			for _, r := range rows {
+				if r.kind == rowArticle {
+					nArt++
+				}
+			}
+			if nCol == 0 {
+				m.statusMsg = fmt.Sprintf("no results for %q", msg.query)
 				m.navFilter = ""
 			} else {
-				m.navFilter = fmt.Sprintf("collections: %q · %d results  ·  /clear to reset", msg.query, n)
+				m.navFilter = fmt.Sprintf("search: %q · %d collections · %d articles  ·  /clear to reset", msg.query, nCol, nArt)
+				m.statusMsg = ""
+			}
+		}
+
+	case workspaceSearchMsg:
+		if msg.err != "" {
+			m.setStatusError("✗ " + msg.err)
+		} else {
+			// Filter workspaces: keep those matching by name/description OR containing matching articles.
+			q := strings.ToLower(msg.query)
+			var filtered []workspaceItem
+			for _, ws := range m.workspaceItemsAll {
+				nameMatch := strings.Contains(strings.ToLower(ws.name+" "+ws.description), q)
+
+				// Check if any workspace article matched the content search.
+				articleMatch := false
+				for _, slug := range ws.articles {
+					if msg.matchingSlugs[slug] {
+						articleMatch = true
+						break
+					}
+				}
+				// Also check collection articles.
+				if !articleMatch {
+					for _, colSlug := range ws.collectionSlugs {
+						for _, item := range m.navItemsAll {
+							if msg.matchingSlugs[item.id] {
+								for _, c := range item.collections {
+									if c == colSlug {
+										articleMatch = true
+										break
+									}
+								}
+							}
+							if articleMatch {
+								break
+							}
+						}
+						if articleMatch {
+							break
+						}
+					}
+				}
+
+				if nameMatch || articleMatch {
+					cp := ws
+					cp.expanded = true
+					filtered = append(filtered, cp)
+				}
+			}
+
+			m.workspaceItems = filtered
+			m.wsRows = m.buildWsRows()
+			m.wsCursor = 0
+			m.wsScroll = 0
+			m.focus = paneNav
+			nWs := len(filtered)
+			nArt := len(msg.matchingSlugs)
+			if nWs == 0 {
+				m.statusMsg = fmt.Sprintf("no results for %q", msg.query)
+				m.navFilter = ""
+			} else {
+				m.navFilter = fmt.Sprintf("search: %q · %d workspaces · %d articles  ·  /clear to reset", msg.query, nWs, nArt)
 				m.statusMsg = ""
 			}
 		}
@@ -4277,7 +4416,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 				"arg", arg)
 			if ws != nil {
 				// Cursor is within an expanded/focused workspace: search its articles.
-				query, limit := parseSearchArg(arg)
+				query, limit, noSemantic := parseSearchArg(arg)
 				slugs := m.workspaceArticleSlugs(ws)
 				slog.Debug("/search scoping to workspace", "name", ws.name, "articleCount", len(slugs))
 				if m.svc == nil || len(slugs) == 0 {
@@ -4285,25 +4424,31 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 					return nil
 				}
 				m.statusMsg = "searching…"
-				return cmdFTSSearch(m.svc, query, limit, slugs)
+				return cmdSearch(m.svc, query, limit, slugs, searchMode(noSemantic))
 			}
-			m.filterWorkspaces(arg)
-			return nil
+			if m.svc == nil {
+				m.filterWorkspaces(arg)
+				return nil
+			}
+			query, limit, noSemantic := parseSearchArg(arg)
+			m.statusMsg = "searching…"
+			return cmdWorkspaceSearch(m.svc, query, limit, searchMode(noSemantic))
 		case navSubTabCollections:
 			if m.svc == nil {
 				m.filterCollections(arg)
 				return nil
 			}
+			query, limit, noSemantic := parseSearchArg(arg)
 			m.statusMsg = "searching…"
-			return cmdCollectionSearch(m.svc, arg)
+			return cmdCollectionSearch(m.svc, query, limit, searchMode(noSemantic))
 		default: // articles
-			query, limit := parseSearchArg(arg)
+			query, limit, noSemantic := parseSearchArg(arg)
 			if m.svc == nil {
 				m.applyNavFilter("search", query)
 				return nil
 			}
 			m.statusMsg = "searching…"
-			return cmdFTSSearch(m.svc, query, limit, nil)
+			return cmdSearch(m.svc, query, limit, nil, searchMode(noSemantic))
 		}
 
 	case "/clear":
@@ -4613,10 +4758,10 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 			if arg == "" {
 				m.statusMsg = "usage: /article search <query>"
 			} else {
-				query, limit := parseSearchArg(arg)
+				query, limit, noSemantic := parseSearchArg(arg)
 				if m.svc != nil {
 					m.statusMsg = "searching…"
-					return tea.Batch(switchCmd, cmdFTSSearch(m.svc, query, limit, nil))
+					return tea.Batch(switchCmd, cmdSearch(m.svc, query, limit, nil, searchMode(noSemantic)))
 				}
 				m.applyNavFilter("search", query)
 			}
@@ -4638,8 +4783,9 @@ func (m *Model) dispatchQualified(sub navSubTab, subCmd string) tea.Cmd {
 			if arg == "" {
 				m.statusMsg = "usage: /collection search <query>"
 			} else if m.svc != nil {
+				query, limit, noSemantic := parseSearchArg(arg)
 				m.statusMsg = "searching…"
-				return tea.Batch(switchCmd, cmdCollectionSearch(m.svc, arg))
+				return tea.Batch(switchCmd, cmdCollectionSearch(m.svc, query, limit, searchMode(noSemantic)))
 			} else {
 				m.filterCollections(arg)
 			}
@@ -5177,26 +5323,70 @@ func (m *Model) filterByCollection(name string) tea.Cmd {
 	}
 }
 
-// parseSearchArg splits a /search arg string into query and optional --limit value.
-// e.g. "go concurrency --limit 50" → ("go concurrency", 50)
-func parseSearchArg(arg string) (query string, limit int) {
+func navItemFromArticle(a store.Article) navItem {
+	tags := make([]string, len(a.Tags))
+	for i, t := range a.Tags {
+		tags[i] = t.Value
+	}
+	summaryLabel := ""
+	if a.SummaryStyle != "" && a.SummaryModel != "" {
+		summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
+	}
+	return navItem{
+		id:           a.ID,
+		numID:        a.NumID,
+		title:        a.Title,
+		date:         a.IngestedAt,
+		read:         a.ReadAt != nil,
+		favorite:     a.FavoritedAt != nil,
+		root:         a.Files.Root,
+		url:          a.URL,
+		tags:         tags,
+		collections:  a.Collections,
+		sourceType:   a.SourceType,
+		author:       a.Author,
+		publishedAt:  a.PublishedAt,
+		feed:         a.Feed,
+		agentReason:  a.AgentReason,
+		qualityScore: a.QualityScore,
+		summary:      summaryLabel,
+		flashModel:   a.FlashModel,
+	}
+}
+
+func searchMode(noSemantic bool) store.QueryMode {
+	if noSemantic {
+		return store.QueryKeyword
+	}
+	return store.QueryCombined
+}
+
+// parseSearchArg splits a /search arg string into query, optional --limit value,
+// and optional --no-semantic flag.
+// e.g. "go concurrency --limit 50 --no-semantic" → ("go concurrency", 50, true)
+func parseSearchArg(arg string) (query string, limit int, noSemantic bool) {
+	if strings.Contains(arg, "--no-semantic") {
+		noSemantic = true
+		arg = strings.ReplaceAll(arg, "--no-semantic", "")
+		arg = strings.TrimSpace(arg)
+	}
 	const flag = "--limit"
 	if idx := strings.Index(arg, flag); idx != -1 {
 		rest := strings.TrimSpace(arg[idx+len(flag):])
 		before := strings.TrimSpace(arg[:idx])
 		var n int
 		if _, err := fmt.Sscanf(rest, "%d", &n); err == nil && n > 0 {
-			return before, n
+			return before, n, noSemantic
 		}
 	}
-	return arg, 0
+	return arg, 0, noSemantic
 }
 
-// cmdFTSSearch runs a full-text search via the FTS5 index and replaces nav with results.
+// cmdSearch runs a search and replaces nav with results.
 // limit=0 uses the service default (20). slugs optionally restricts results to a set of article slugs.
-func cmdFTSSearch(svc *service.Service, query string, limit int, slugs []string) tea.Cmd {
+func cmdSearch(svc *service.Service, query string, limit int, slugs []string, mode store.QueryMode) tea.Cmd {
 	return func() tea.Msg {
-		results, err := svc.Search(context.Background(), service.SearchRequest{Query: query, Limit: limit, Slugs: slugs})
+		results, err := svc.Search(context.Background(), service.SearchRequest{Query: query, Limit: limit, Slugs: slugs, Mode: mode})
 		if err != nil {
 			return cmdDoneMsg{err: fmt.Sprintf("search: %v", err)}
 		}
@@ -5209,35 +5399,7 @@ func cmdFTSSearch(svc *service.Service, query string, limit int, slugs []string)
 		}
 		items := make([]navItem, len(results))
 		for i, r := range results {
-			a := r.Article
-			tags := make([]string, len(a.Tags))
-			for j, t := range a.Tags {
-				tags[j] = t.Value
-			}
-			summaryLabel := ""
-			if a.SummaryStyle != "" && a.SummaryModel != "" {
-				summaryLabel = a.SummaryStyle + "/" + a.SummaryModel
-			}
-			items[i] = navItem{
-				id:           a.ID,
-				numID:        a.NumID,
-				title:        a.Title,
-				date:         a.IngestedAt,
-				read:         a.ReadAt != nil,
-				favorite:     a.FavoritedAt != nil,
-				root:         a.Files.Root,
-				url:          a.URL,
-				tags:         tags,
-				collections:  a.Collections,
-				sourceType:   a.SourceType,
-				author:       a.Author,
-				publishedAt:  a.PublishedAt,
-				feed:         a.Feed,
-				agentReason:  a.AgentReason,
-				qualityScore: a.QualityScore,
-				summary:      summaryLabel,
-				flashModel:   a.FlashModel,
-			}
+			items[i] = navItemFromArticle(r.Article)
 		}
 		return cmdDoneMsg{
 			navItems:  items,
@@ -5246,14 +5408,77 @@ func cmdFTSSearch(svc *service.Service, query string, limit int, slugs []string)
 	}
 }
 
-// cmdCollectionSearch runs an FTS5 search on collections via the service layer.
-func cmdCollectionSearch(svc *service.Service, query string) tea.Cmd {
+// cmdCollectionSearch searches both collection names/descriptions and article content,
+// returning only collected articles. Both searches run concurrently.
+func cmdCollectionSearch(svc *service.Service, query string, limit int, mode store.QueryMode) tea.Cmd {
 	return func() tea.Msg {
-		results, err := svc.SearchCollections(context.Background(), query)
-		if err != nil {
-			return collectionSearchMsg{err: fmt.Sprintf("search collections: %v", err)}
+		ctx := context.Background()
+
+		type colOut struct {
+			results []service.CollectionInfo
+			err     error
 		}
-		return collectionSearchMsg{results: results, query: query}
+		type artOut struct {
+			results []service.SearchResult
+			err     error
+		}
+
+		colCh := make(chan colOut, 1)
+		artCh := make(chan artOut, 1)
+
+		go func() {
+			r, err := svc.SearchCollections(ctx, query)
+			colCh <- colOut{r, err}
+		}()
+		go func() {
+			r, err := svc.Search(ctx, service.SearchRequest{
+				Query: query,
+				Mode:  mode,
+				Limit: limit,
+			})
+			artCh <- artOut{r, err}
+		}()
+
+		cr := <-colCh
+		ar := <-artCh
+
+		if cr.err != nil && ar.err != nil {
+			return collectionSearchMsg{err: fmt.Sprintf("search: %v; %v", cr.err, ar.err)}
+		}
+
+		// Filter articles to only those belonging to at least one collection.
+		var collected []service.SearchResult
+		for _, r := range ar.results {
+			if len(r.Article.Collections) > 0 {
+				collected = append(collected, r)
+			}
+		}
+
+		return collectionSearchMsg{
+			collections: cr.results,
+			articles:    collected,
+			query:       query,
+		}
+	}
+}
+
+// cmdWorkspaceSearch runs an article content search and returns matching slugs
+// so the handler can filter workspaceItemsAll to relevant workspaces.
+func cmdWorkspaceSearch(svc *service.Service, query string, limit int, mode store.QueryMode) tea.Cmd {
+	return func() tea.Msg {
+		results, err := svc.Search(context.Background(), service.SearchRequest{
+			Query: query,
+			Mode:  mode,
+			Limit: limit,
+		})
+		if err != nil {
+			return workspaceSearchMsg{err: fmt.Sprintf("search: %v", err), query: query}
+		}
+		slugs := make(map[string]bool, len(results))
+		for _, r := range results {
+			slugs[r.Article.ID] = true
+		}
+		return workspaceSearchMsg{matchingSlugs: slugs, query: query}
 	}
 }
 

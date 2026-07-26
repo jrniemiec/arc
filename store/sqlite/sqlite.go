@@ -12,6 +12,18 @@ import (
 	"github.com/jrniemiec/arc/store"
 )
 
+// fts5Sanitize quotes each term in the query so that FTS5 operators like - (NOT),
+// OR, AND, NEAR are treated as literal search text.
+// e.g. "2-dimensional data" → `"2-dimensional" "data"`
+func fts5Sanitize(query string) string {
+	tokens := strings.Fields(query)
+	for i, t := range tokens {
+		t = strings.ReplaceAll(t, `"`, `""`)
+		tokens[i] = `"` + t + `"`
+	}
+	return strings.Join(tokens, " ")
+}
+
 // Store is the SQLite-backed metadata and search store.
 type Store struct {
 	pool *sqlitex.Pool
@@ -324,7 +336,7 @@ func (s *Store) Search(ctx context.Context, q store.Query) ([]store.Result, erro
 		FROM articles_fts
 		JOIN articles a ON a.id = articles_fts.article_id
 		WHERE articles_fts MATCH ?`
-	args := []any{q.Text}
+	args := []any{fts5Sanitize(q.Text)}
 
 	if len(q.Filter.Slugs) > 0 {
 		placeholders := make([]string, len(q.Filter.Slugs))
@@ -412,7 +424,7 @@ func (s *Store) SearchCollections(ctx context.Context, query string) ([]store.Co
 		WHERE collections_fts MATCH ?
 		ORDER BY rank
 	`, &sqlitex.ExecOptions{
-		Args: []any{query},
+		Args: []any{fts5Sanitize(query)},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			results = append(results, store.Collection{
 				ID:          stmt.ColumnText(0),

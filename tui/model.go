@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -876,11 +877,21 @@ type collectionsLoadedMsg struct {
 	err         string
 }
 
-// collectionSearchMsg is returned by cmdCollectionSearch when FTS5 search completes.
+// collectionSearchMsg is returned by cmdCollectionSearch when search completes.
+// It carries both collection-level matches (by name/description) and article-level
+// matches (by content) so the handler can build a merged tree.
 type collectionSearchMsg struct {
-	results []service.CollectionInfo
-	query   string
-	err     string
+	collections []service.CollectionInfo  // collections matched by name/description
+	articles    []service.SearchResult    // articles matched by content (only collected ones)
+	query       string
+	err         string
+}
+
+// workspaceSearchMsg is returned by cmdWorkspaceSearch when search completes.
+type workspaceSearchMsg struct {
+	matchingSlugs map[string]bool // article slugs that matched the content search
+	query         string
+	err           string
 }
 
 type workspacesLoadedMsg struct {
@@ -1649,6 +1660,7 @@ func (m *Model) stopTTS() {
 }
 
 func (m *Model) setStatusError(msg string) {
+	slog.Error(msg)
 	m.statusMsg = msg
 	m.statusErr = true
 }
