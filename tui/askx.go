@@ -45,6 +45,7 @@ func (m *Model) toggleAskX() tea.Cmd {
 	m.askxOpen = true
 	m.loadAskXHistory()
 	m.rebuildAskXLines()
+	m.askxScrollToBottom()
 	if m.chatMode {
 		m.chatScroll = m.chatTotalLines()
 	}
@@ -316,6 +317,7 @@ func (m *Model) cmdAskX(prompt string, global bool) tea.Cmd {
 			m.askxOpen = true
 			m.loadAskXHistory()
 			m.rebuildAskXLines()
+			m.askxScrollToBottom()
 			return m.loadAskXLifetimeStatsCmd()
 		}
 		return nil
@@ -776,10 +778,11 @@ func (m *Model) rebuildAskXLines() {
 
 // askxBoxInfo holds per-box metadata derived from askX message history.
 type askxBoxInfo struct {
-	ts       string
-	profile  string
-	msgStart int // inclusive index into askxMsgs
-	msgEnd   int // exclusive index into askxMsgs
+	ts        string
+	profile   string
+	msgStart  int  // inclusive index into askxMsgs
+	msgEnd    int  // exclusive index into askxMsgs
+	commented bool // true when the box is commented (excluded from LLM context)
 }
 
 // askxBoxInfos walks askxMsgs and returns one entry per logical box.
@@ -793,7 +796,7 @@ func (m *Model) askxBoxInfos() []askxBoxInfo {
 			if !msg.Time.IsZero() {
 				ts = msg.Time.Format("Jan 2, 2006 · 15:04")
 			}
-			infos = append(infos, askxBoxInfo{ts: ts, msgStart: i, msgEnd: i + 1})
+			infos = append(infos, askxBoxInfo{ts: ts, msgStart: i, msgEnd: i + 1, commented: msg.Commented})
 		case chat.RoleAssistant:
 			if len(infos) > 0 {
 				infos[len(infos)-1].msgEnd = i + 1
@@ -899,6 +902,27 @@ func (m *Model) cmdAskXCollapseBox(boxIdx int) {
 		m.askxCollapsed = make(map[int]bool)
 	}
 	m.askxCollapsed[boxIdx] = !m.askxCollapsed[boxIdx]
+}
+
+// cmdAskXCommentBox toggles the commented flag on the selected box, excluding it from LLM context.
+func (m *Model) cmdAskXCommentBox(boxIdx int) tea.Cmd {
+	infos := m.askxBoxInfos()
+	if boxIdx < 0 || boxIdx >= len(infos) {
+		return nil
+	}
+	bi := infos[boxIdx]
+	newState := !bi.commented
+	for i := bi.msgStart; i < bi.msgEnd && i < len(m.askxMsgs); i++ {
+		m.askxMsgs[i].Commented = newState
+	}
+	m.saveAskXHistory()
+	m.rebuildAskXLines()
+	status := "✓ exchange commented out"
+	if !newState {
+		status = "✓ exchange uncommented"
+	}
+	m.statusMsg = status
+	return nil
 }
 
 func (m *Model) cmdAskXDeleteBox() tea.Cmd {
@@ -1084,6 +1108,10 @@ func (m *Model) handleAskXKey(msg tea.KeyMsg) tea.Cmd {
 			if m.askxBoxCount() > 0 {
 				m.cmdAskXCollapseBox(m.askxBoxCursor)
 			}
+		case "#":
+			if m.askxBoxCount() > 0 {
+				return m.cmdAskXCommentBox(m.askxBoxCursor)
+			}
 		case "x":
 			return m.cmdAskXDeleteBox()
 		case "e":
@@ -1182,6 +1210,7 @@ func (m Model) buildAskXVLines() []chatVLine {
 	for e, box := range boxes {
 		selected := e == m.askxBoxCursor
 		collapsed := m.askxCollapsed != nil && m.askxCollapsed[e]
+		commented := e < len(infos) && infos[e].commented
 
 		var end int
 		if e+1 < len(boxes) {
@@ -1197,7 +1226,7 @@ func (m Model) buildAskXVLines() []chatVLine {
 		totalContent := trimEnd - box.idx
 
 		if selected {
-			vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1, boxIdx: e, isSelected: true})
+			vlines = append(vlines, chatVLine{isBoxTop: true, contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented})
 
 			// Header: timestamp + profile + hints.
 			var leftParts []string
@@ -1210,7 +1239,7 @@ func (m Model) buildAskXVLines() []chatVLine {
 				}
 			}
 			metaLeft := strings.Join(leftParts, "  ")
-			vlines = append(vlines, chatVLine{isHeader: true, metaText: metaLeft, contentIdx: -1, boxIdx: e, isSelected: true})
+			vlines = append(vlines, chatVLine{isHeader: true, metaText: metaLeft, contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented})
 
 			if collapsed {
 				limit := box.idx + 3
@@ -1218,23 +1247,23 @@ func (m Model) buildAskXVLines() []chatVLine {
 					limit = trimEnd
 				}
 				for i := box.idx; i < limit; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true, isCommented: commented})
 				}
 				if limit < trimEnd {
 					remaining := totalContent - (limit - box.idx)
 					vlines = append(vlines, chatVLine{
 						isEllipsis: true,
 						metaText:   fmt.Sprintf("... (%d more lines)", remaining),
-						contentIdx: -1, boxIdx: e, isSelected: true,
+						contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented,
 					})
 				}
 			} else {
 				for i := box.idx; i < trimEnd; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isSelected: true, isCommented: commented})
 				}
 			}
 
-			vlines = append(vlines, chatVLine{isBoxBottom: true, contentIdx: -1, boxIdx: e, isSelected: true})
+			vlines = append(vlines, chatVLine{isBoxBottom: true, contentIdx: -1, boxIdx: e, isSelected: true, isCommented: commented})
 		} else {
 			if collapsed {
 				limit := box.idx + 3
@@ -1242,19 +1271,19 @@ func (m Model) buildAskXVLines() []chatVLine {
 					limit = trimEnd
 				}
 				for i := box.idx; i < limit; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isCommented: commented})
 				}
 				if limit < trimEnd {
 					remaining := totalContent - (limit - box.idx)
 					vlines = append(vlines, chatVLine{
 						isEllipsis: true,
 						metaText:   fmt.Sprintf("... (%d more lines)", remaining),
-						contentIdx: -1, boxIdx: e,
+						contentIdx: -1, boxIdx: e, isCommented: commented,
 					})
 				}
 			} else {
 				for i := box.idx; i < trimEnd; i++ {
-					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e})
+					vlines = append(vlines, chatVLine{contentIdx: i, boxIdx: e, isCommented: commented})
 				}
 			}
 		}
@@ -1390,6 +1419,10 @@ func (m Model) renderAskXPane(height, width int) []string {
 		botRule := fg(t.BoxBorder, "╰"+strings.Repeat("─", width-2)+"╯")
 		bL := fg(t.BoxBorder, "│ ")
 		bR := fg(t.BoxBorder, " │")
+		topRuleC := fg(t.ContentDimmed, "╭"+strings.Repeat("─", width-2)+"╮")
+		botRuleC := fg(t.ContentDimmed, "╰"+strings.Repeat("─", width-2)+"╯")
+		bLC := fg(t.ContentDimmed, "│ ")
+		bRC := fg(t.ContentDimmed, " │")
 
 		total := len(vlines)
 		start := m.askxScroll
@@ -1407,16 +1440,30 @@ func (m Model) renderAskXPane(height, width int) []string {
 		for _, vl := range vlines[start:end] {
 			switch {
 			case vl.isBoxTop:
-				lines = append(lines, topRule)
+				if vl.isCommented {
+					lines = append(lines, topRuleC)
+				} else {
+					lines = append(lines, topRule)
+				}
 			case vl.isBoxBottom:
-				lines = append(lines, botRule)
+				if vl.isCommented {
+					lines = append(lines, botRuleC)
+				} else {
+					lines = append(lines, botRule)
+				}
 			case vl.isSep:
 				lines = append(lines, "")
 			case vl.isHeader:
 				// Left: timestamp, Right: hints.
-				hints := "v expand · s speak · x delete"
+				expandHint := "v expand"
 				if m.askxCollapsed != nil && m.askxCollapsed[vl.boxIdx] {
-					hints = "v collapse · s speak · x delete"
+					expandHint = "v collapse"
+				}
+				var hints string
+				if vl.isCommented {
+					hints = "# uncomment · " + expandHint + " · s speak · x delete"
+				} else {
+					hints = "# comment · " + expandHint + " · s speak · x delete"
 				}
 				leftText := fg(t.ContentDimmed, vl.metaText)
 				rightText := fg(t.ContentDimmed, hints)
@@ -1427,15 +1474,23 @@ func (m Model) renderAskXPane(height, width int) []string {
 					pad = 1
 				}
 				headerContent := leftText + strings.Repeat(" ", pad) + rightText
-				lines = append(lines, bL+headerContent+bR)
+				borderL, borderR := bL, bR
+				if vl.isCommented {
+					borderL, borderR = bLC, bRC
+				}
+				lines = append(lines, borderL+headerContent+borderR)
 			case vl.isEllipsis:
+				borderL, borderR := bL, bR
+				if vl.isCommented {
+					borderL, borderR = bLC, bRC
+				}
 				if vl.isSelected {
 					text := fg(t.ContentDimmed, vl.metaText)
 					visW := lipgloss.Width(vl.metaText)
 					if visW < innerW {
 						text += strings.Repeat(" ", innerW-visW)
 					}
-					lines = append(lines, bL+text+bR)
+					lines = append(lines, borderL+text+borderR)
 				} else {
 					lines = append(lines, fg(t.ContentDimmed, vl.metaText))
 				}
@@ -1445,16 +1500,30 @@ func (m Model) renderAskXPane(height, width int) []string {
 					continue
 				}
 				cl := dl[vl.contentIdx]
+				borderL, borderR := bL, bR
+				if vl.isCommented {
+					borderL, borderR = bLC, bRC
+				}
 				if vl.isSelected {
+					if cl.role == chatLineBlank || cl.text == "" {
+						lines = append(lines, borderL+strings.Repeat(" ", innerW)+borderR)
+						continue
+					}
+					budget := innerW
+					if cl.role == chatLineQuote {
+						budget = innerW - 2
+						if budget < 2 {
+							budget = 2
+						}
+					}
 					text := cl.text
 					visW := lipgloss.Width(text)
-					if visW < innerW {
-						text = text + strings.Repeat(" ", innerW-visW)
-					} else if visW > innerW {
-						text = truncate(text, innerW)
+					if visW > budget {
+						text = truncate(text, budget)
+					} else if visW < budget {
+						text = text + strings.Repeat(" ", budget-visW)
 					}
-					// Color inside the box.
-					lines = append(lines, bL+colorChatLine(chatLine{cl.role, text}, t)+bR)
+					lines = append(lines, borderL+colorChatLine(chatLine{cl.role, text}, t)+borderR)
 				} else {
 					lines = append(lines, colorChatLine(cl, t))
 				}
