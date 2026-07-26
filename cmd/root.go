@@ -71,7 +71,7 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.arc/config.json)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: ~/.arc/config.jsonc)")
 	rootCmd.PersistentFlags().StringVar(&dataRoot, "data-root", "", "arc data root directory (default: ~/.arc)")
 	rootCmd.PersistentFlags().StringVar(&articlesRoot, "articles-root", "", "articles directory (default: <data-root>/articles)")
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "output JSON")
@@ -137,7 +137,7 @@ func loadConfig() (config.Config, error) {
 		if err != nil {
 			return config.Default(), nil
 		}
-		path = filepath.Join(home, ".arc", "config.json")
+		path = filepath.Join(home, ".arc", "config.jsonc")
 	}
 
 	cfg, err := config.Load(path)

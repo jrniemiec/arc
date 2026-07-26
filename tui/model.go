@@ -1293,7 +1293,7 @@ func loadAgentRuns(agentPath string) tea.Cmd {
 
 func loadAgentFeeds(agentPath string) tea.Cmd {
 	return func() tea.Msg {
-		cfg, err := agentpkg.LoadAgentConfig(filepath.Join(agentPath, "config.json"))
+		cfg, err := agentpkg.LoadAgentConfig(filepath.Join(agentPath, "config.jsonc"))
 		if err != nil {
 			return agentFeedsLoadedMsg{err: err.Error()}
 		}
@@ -1320,7 +1320,7 @@ func loadAgentFeeds(agentPath string) tea.Cmd {
 
 func toggleAgentFeed(agentPath string, idx int) tea.Cmd {
 	return func() tea.Msg {
-		cfgPath := filepath.Join(agentPath, "config.json")
+		cfgPath := filepath.Join(agentPath, "config.jsonc")
 		if err := agentpkg.ToggleFeed(cfgPath, idx); err != nil {
 			return agentFeedSavedMsg{err: err.Error()}
 		}
@@ -1334,7 +1334,7 @@ func toggleAgentFeed(agentPath string, idx int) tea.Cmd {
 
 func deleteAgentFeed(agentPath string, idx int) tea.Cmd {
 	return func() tea.Msg {
-		cfgPath := filepath.Join(agentPath, "config.json")
+		cfgPath := filepath.Join(agentPath, "config.jsonc")
 		if err := agentpkg.DeleteFeed(cfgPath, idx); err != nil {
 			return agentFeedSavedMsg{err: err.Error()}
 		}

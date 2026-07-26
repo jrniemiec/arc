@@ -3020,7 +3020,7 @@ func (m *Model) openEditorForFeed(idx int) {
 		return
 	}
 
-	cfgPath := filepath.Join(m.cfg.AgentPath, "config.json")
+	cfgPath := filepath.Join(m.cfg.AgentPath, "config.jsonc")
 	send := *m.programSend
 	go func() {
 		defer os.Remove(tmp.Name())
@@ -6073,7 +6073,7 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 	}
 	dryRun, focus := parseAgentRunFlags(arg)
 
-	agentCfgPath := filepath.Join(m.cfg.AgentPath, "config.json")
+	agentCfgPath := filepath.Join(m.cfg.AgentPath, "config.jsonc")
 	agentCfg, err := agentpkg.LoadAgentConfig(agentCfgPath)
 	if err != nil {
 		m.statusMsg = "✗ could not load agent config: " + err.Error()
@@ -6086,7 +6086,7 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 		}
 	}
 	if activeFeeds == 0 {
-		m.statusMsg = "✗ no feeds configured — add feeds to ~/.arc/agent/config.json"
+		m.statusMsg = "✗ no feeds configured — add feeds to ~/.arc/agent/config.jsonc"
 		return nil
 	}
 
@@ -6213,7 +6213,7 @@ func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
 	}
 	decisionsPath := filepath.Join(m.cfg.AgentPath, "decisions-"+rec.RunID+".json")
 
-	agentCfgPath := filepath.Join(m.cfg.AgentPath, "config.json")
+	agentCfgPath := filepath.Join(m.cfg.AgentPath, "config.jsonc")
 	agentCfg, err := agentpkg.LoadAgentConfig(agentCfgPath)
 	if err != nil {
 		m.statusMsg = "✗ could not load agent config: " + err.Error()

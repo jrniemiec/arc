@@ -21,7 +21,7 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize arc — create ~/.arc and write the default config",
 	Long: `Init creates the arc data directory and writes a fully annotated
-config file to ~/.arc/config.json (or the path set by --config).
+config file to ~/.arc/config.jsonc (or the path set by --config).
 
 All available LLM profiles are included with pricing and tradeoff notes
 so you can make an informed choice before your first ingest.`,
@@ -32,7 +32,7 @@ so you can make an informed choice before your first ingest.`,
 			if err != nil {
 				return fmt.Errorf("home dir: %w", err)
 			}
-			cfgPath = filepath.Join(home, ".arc", "config.json")
+			cfgPath = filepath.Join(home, ".arc", "config.jsonc")
 		}
 
 		cfgDir := filepath.Dir(cfgPath)
