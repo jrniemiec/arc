@@ -3709,7 +3709,6 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 							return nil
 						}
 						m.askxSessionProfile = arg
-						_ = storefs.WriteAskXConfig(m.cfg.DataRoot, m.askxWorkspace(), storefs.AskXConfig{Profile: arg})
 						m.syncInputPrompt()
 						m.statusMsg = "profile → " + arg
 						return nil
@@ -5770,10 +5769,6 @@ func (m *Model) cmdChatProfile(arg string) tea.Cmd {
 	}
 	if _, ok := m.cfg.Profiles[arg]; !ok {
 		m.setStatusError("✗ unknown profile: " + arg)
-		return nil
-	}
-	if err := config.SaveArticleChatProfile(m.cfg.DataRoot, arg); err != nil {
-		m.setStatusError("✗ save profile: " + err.Error())
 		return nil
 	}
 	m.cfg.ArticleChat.Profile = arg

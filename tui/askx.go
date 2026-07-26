@@ -162,9 +162,6 @@ func (m *Model) loadAskXHistory() {
 		return
 	}
 	m.askxMsgs = askxHistoryToMsgs(h)
-	if cfg, err := storefs.ReadAskXConfig(m.cfg.DataRoot, ws); err == nil && cfg.Profile != "" {
-		m.askxSessionProfile = cfg.Profile
-	}
 }
 
 // askxHistoryToMsgs converts storage messages to chat.Messages.
@@ -668,53 +665,6 @@ func (m *Model) rebuildAskXLines() {
 	prevHadContent := false
 
 	for _, msg := range msgs {
-		// Commented messages (out-of-context after reset) render dimmed.
-		if msg.Commented {
-			switch msg.Role {
-			case chat.RoleUser:
-				if prevHadContent {
-					lines = append(lines, chatLine{chatLineBlank, ""})
-				}
-				raw := strings.Split(msg.Content, "\n")
-				first := true
-				for _, rl := range raw {
-					rl = strings.TrimRight(rl, " \t")
-					if rl == "" {
-						continue
-					}
-					prefix := "  ~ "
-					if first {
-						prefix = "~ "
-						first = false
-					}
-					for _, wl := range wordWrap(rl, userW) {
-						lines = append(lines, chatLine{chatLineNote, prefix + wl})
-					}
-				}
-				lines = append(lines, chatLine{chatLineBlank, ""})
-				prevHadContent = true
-			case chat.RoleAssistant:
-				raw := strings.Split(msg.Content, "\n")
-				first := true
-				for _, rl := range raw {
-					rl = strings.TrimRight(rl, " \t")
-					if rl == "" {
-						continue
-					}
-					prefix := "  ~ "
-					if first {
-						prefix = "~ "
-						first = false
-					}
-					for _, wl := range wordWrap(rl, userW) {
-						lines = append(lines, chatLine{chatLineNote, prefix + wl})
-					}
-				}
-				prevHadContent = true
-			}
-			continue
-		}
-
 		switch msg.Role {
 		case chat.RoleNote:
 			if prevHadContent {
@@ -1530,9 +1480,13 @@ func (m Model) renderAskXPane(height, width int) []string {
 				} else {
 					hints = "# comment · " + expandHint + " · s speak · x delete"
 				}
-				leftText := fg(t.ContentDimmed, vl.metaText)
+				left := vl.metaText
+				if vl.isCommented {
+					left = "📌 " + left
+				}
+				leftText := fg(t.ContentDimmed, left)
 				rightText := fg(t.ContentDimmed, hints)
-				leftW := lipgloss.Width(vl.metaText)
+				leftW := lipgloss.Width(left)
 				rightW := lipgloss.Width(hints)
 				pad := innerW - leftW - rightW
 				if pad < 1 {
@@ -1588,9 +1542,19 @@ func (m Model) renderAskXPane(height, width int) []string {
 					} else if visW < budget {
 						text = text + strings.Repeat(" ", budget-visW)
 					}
-					lines = append(lines, borderL+colorChatLine(chatLine{cl.role, text}, t)+borderR)
+					var colored string
+					if vl.isCommented {
+						colored = fg(t.ContentDimmed, text)
+					} else {
+						colored = colorChatLine(chatLine{cl.role, text}, t)
+					}
+					lines = append(lines, borderL+colored+borderR)
 				} else {
-					lines = append(lines, colorChatLine(cl, t))
+					if vl.isCommented {
+						lines = append(lines, fg(t.ContentDimmed, cl.text))
+					} else {
+						lines = append(lines, colorChatLine(cl, t))
+					}
 				}
 			}
 		}
