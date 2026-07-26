@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1620,13 +1621,80 @@ func (m *Model) closeResourceOverlay() {
 	m.resourceScroll = 0
 }
 
-// scrollResourceToCursor adjusts resourceScroll so the cursor line is visible.
+// wrappedLineCount returns the number of visual rows a source line occupies
+// when word-wrapped to the given width.
+func wrappedLineCount(s string, lineW int) int {
+	if lineW < 1 {
+		lineW = 1
+	}
+	if s == "" {
+		return 1
+	}
+	n := 0
+	for len(s) > 0 {
+		runes := []rune(s)
+		if len(runes) <= lineW {
+			n++
+			break
+		}
+		cut := lineW
+		for cut > 0 && runes[cut] != ' ' {
+			cut--
+		}
+		if cut == 0 {
+			cut = lineW
+		}
+		n++
+		rest := runes[cut:]
+		if len(rest) > 0 && rest[0] == ' ' {
+			rest = rest[1:]
+		}
+		s = string(rest)
+	}
+	return n
+}
+
+// scrollResourceToCursor adjusts resourceScroll so the cursor line is visible,
+// accounting for word-wrapped lines that may consume multiple visual rows.
 func (m *Model) scrollResourceToCursor(viewH int) {
+	lineW := m.width - 2 // must match the prefix width used in renderResourceOverlay
+	if lineW < 1 {
+		lineW = 1
+	}
+
+	// Scroll up: if cursor is above the current scroll, snap scroll to cursor.
 	if m.resourceCursor < m.resourceScroll {
 		m.resourceScroll = m.resourceCursor
-	} else if m.resourceCursor >= m.resourceScroll+viewH {
-		m.resourceScroll = m.resourceCursor - viewH + 1
+		slog.Debug("scrollResource: cursor above scroll",
+			"cursor", m.resourceCursor, "scroll", m.resourceScroll, "viewH", viewH)
+		return
 	}
+
+	// Scroll down: compute visual rows from scroll to cursor (inclusive).
+	// If they exceed viewH, increment scroll until the cursor fits.
+	for {
+		usedRows := 0
+		fits := true
+		for i := m.resourceScroll; i <= m.resourceCursor && i < len(m.resourceLines); i++ {
+			usedRows += wrappedLineCount(m.resourceLines[i], lineW)
+			if usedRows > viewH {
+				fits = false
+				break
+			}
+		}
+		if fits {
+			break
+		}
+		m.resourceScroll++
+		if m.resourceScroll > m.resourceCursor {
+			// Safety: cursor line itself is taller than viewport.
+			m.resourceScroll = m.resourceCursor
+			break
+		}
+	}
+	slog.Debug("scrollResource: adjusted",
+		"cursor", m.resourceCursor, "scroll", m.resourceScroll,
+		"viewH", viewH, "lineW", lineW, "totalLines", len(m.resourceLines))
 }
 
 // cmdResourceList lists resources for the current workspace.

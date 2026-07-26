@@ -811,6 +811,11 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 	// When a workspace-scoped article search is active, show navItems (search
 	// results) using the standard article list renderer instead of the workspace tree.
 	if m.navFilter != "" && len(m.navItems) > 0 {
+		if m.wsSearchName != "" {
+			// Prepend workspace name header so the user knows which workspace is being searched.
+			header := fgBold(t.NavGroup, "  "+m.wsSearchName)
+			return append([]string{header}, m.renderNavLibrary(maxLines-1)...)
+		}
 		return m.renderNavLibrary(maxLines)
 	}
 
@@ -3203,6 +3208,10 @@ func (m Model) renderResourceOverlay() string {
 	}
 
 	// Render source lines starting from resourceScroll, filling contentH visual rows.
+	slog.Debug("renderResourceOverlay",
+		"w", w, "h", h, "contentH", contentH, "lineW", lineW,
+		"scroll", m.resourceScroll, "cursor", m.resourceCursor,
+		"totalLines", len(m.resourceLines))
 	visualRows := 0
 	for srcIdx := m.resourceScroll; srcIdx < len(m.resourceLines) && visualRows < contentH; srcIdx++ {
 		chunks := wrapSourceLine(m.resourceLines[srcIdx])

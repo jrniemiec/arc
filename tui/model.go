@@ -447,6 +447,7 @@ type Model struct {
 	wsCursor          int
 	wsScroll          int
 	wsFocusName       string             // non-empty = solo mode, only this workspace visible
+	wsSearchName      string             // workspace name active during a scoped article search
 	workspacesLoaded  bool
 	workspacesErr     string
 

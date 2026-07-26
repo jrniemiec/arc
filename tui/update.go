@@ -347,6 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+			m.navItems = nil // clear stale items so renderNavWorkspaces shows the workspace tree
 			m.workspaceItems = filtered
 			m.wsRows = m.buildWsRows()
 			m.wsCursor = 0
@@ -4423,9 +4424,11 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 					m.statusMsg = fmt.Sprintf("no articles in workspace %q", ws.name)
 					return nil
 				}
+				m.wsSearchName = ws.name
 				m.statusMsg = "searching…"
 				return cmdSearch(m.svc, query, limit, slugs, searchMode(noSemantic))
 			}
+			m.wsSearchName = ""
 			if m.svc == nil {
 				m.filterWorkspaces(arg)
 				return nil
@@ -4456,6 +4459,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		case navSubTabWorkspaces:
 			m.workspaceItems = m.workspaceItemsAll
 			m.wsFocusName = ""
+			m.wsSearchName = ""
 			m.wsRows = m.buildWsRows()
 			m.wsCursor = 0
 			m.wsScroll = 0
