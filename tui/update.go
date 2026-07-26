@@ -1437,6 +1437,7 @@ func (m *Model) focusSplitPane() {
 		m.scratchFocused = true
 	case m.askxOpen:
 		m.askxFocused = true
+		m.askxSyncCursorToScroll()
 	case m.achatMode:
 		m.achatFocused = true
 		m.rebuildArticleChatLines(m.achatBuildWidth())
@@ -3691,6 +3692,28 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					}
 				}
 				if strings.HasPrefix(val, "/") {
+					parts := strings.Fields(val)
+					cmd := parts[0]
+					arg := ""
+					if len(parts) > 1 {
+						arg = strings.TrimSpace(val[len(cmd)+1:])
+					}
+					switch cmd {
+					case "/profile", "/model":
+						if arg == "" {
+							m.statusMsg = "profile: " + m.askxPromptPrefix()
+							return nil
+						}
+						if _, ok := m.cfg.Profiles[arg]; !ok {
+							m.setStatusError("unknown profile: " + arg)
+							return nil
+						}
+						m.askxSessionProfile = arg
+						_ = storefs.WriteAskXConfig(m.cfg.DataRoot, m.askxWorkspace(), storefs.AskXConfig{Profile: arg})
+						m.syncInputPrompt()
+						m.statusMsg = "profile → " + arg
+						return nil
+					}
 					return m.dispatchCommand(val)
 				}
 				if m.askxStreaming {
@@ -7685,6 +7708,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					}
 					if m.askxOpen {
 						m.askxFocused = true
+						m.askxSyncCursorToScroll()
 					}
 					if m.previewOpen {
 						m.previewFocused = true

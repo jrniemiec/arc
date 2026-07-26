@@ -185,6 +185,52 @@ type AskXHistory struct {
 	Messages []AskXMessage `json:"messages"`
 }
 
+// AskXConfig is the per-context askX configuration (sticky profile override).
+type AskXConfig struct {
+	Profile string `json:"profile"` // empty = use global config default
+}
+
+// askxConfigPath returns the path to the askX config file.
+func askxConfigPath(dataRoot, workspace string) string {
+	if workspace != "" {
+		return filepath.Join(WorkspaceDir(dataRoot, workspace), "askx-"+workspace+"-config.json")
+	}
+	return filepath.Join(dataRoot, "askx-config.json")
+}
+
+// ReadAskXConfig reads the askX config. Returns zero value if missing.
+func ReadAskXConfig(dataRoot, workspace string) (AskXConfig, error) {
+	data, err := os.ReadFile(askxConfigPath(dataRoot, workspace))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return AskXConfig{}, nil
+		}
+		return AskXConfig{}, fmt.Errorf("read askx config: %w", err)
+	}
+	var cfg AskXConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return AskXConfig{}, fmt.Errorf("parse askx config: %w", err)
+	}
+	return cfg, nil
+}
+
+// WriteAskXConfig writes the askX config atomically.
+func WriteAskXConfig(dataRoot, workspace string, cfg AskXConfig) error {
+	path := askxConfigPath(dataRoot, workspace)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // AskXName returns the askx filename for a workspace.
 // Per-workspace: "askx-<workspace>.json"; global: "askx.json".
 func AskXName(workspace string) string {

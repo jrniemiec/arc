@@ -619,6 +619,7 @@ type Model struct {
 	removeReviewWs    string                     // workspace name
 	removeReviewDry   bool                       // dry-run mode
 
+	askxSessionProfile  string             // sticky profile for current session (set by /profile)
 	askxStreaming        bool              // true while LLM response is in flight
 	askxStreamBuf       string             // accumulated streaming response text
 	askxSharedBuf       *streamBuf         // goroutine-safe buffer written by streaming goroutine
@@ -748,6 +749,16 @@ var feedCommands = []cmdCompletion{
 	{"/feed-delete", "", "delete selected feed (with confirmation)"},
 }
 
+// askxCommands are available when the AskX pane is open.
+var askxCommands = []cmdCompletion{
+	{"/profile", "[name]", "show or switch LLM profile for this session"},
+	{"/model", "[name]", "alias for /profile"},
+	{"/reset", "", "reset askX context (keeps history visible, removes from LLM context)"},
+	{"/chats-archive", "", "archive pending AskX + article chat messages"},
+	{"/chats-history", "", "browse archived chat sessions (overlay)"},
+	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
+}
+
 // achatCommands are available when article chat mode is active.
 var achatCommands = []cmdCompletion{
 	{"/clear", "", "clear conversation history"},
@@ -814,6 +825,12 @@ var chatCommands = []cmdCompletion{
 func (m *Model) allCommands() []cmdCompletion {
 	if m.achatMode {
 		return achatCommands
+	}
+	if m.askxOpen {
+		out := make([]cmdCompletion, 0, len(askxCommands)+len(globalCommands))
+		out = append(out, askxCommands...)
+		out = append(out, globalCommands...)
+		return out
 	}
 	if m.chatMode {
 		return chatCommands

@@ -74,6 +74,7 @@ func (m *Model) closeAskX() {
 	m.askxDisplayLines = nil
 	m.askxStreaming = false
 	m.askxStreamBuf = ""
+	m.askxSessionProfile = ""
 	m.syncInputPrompt()
 }
 
@@ -88,7 +89,7 @@ func (m *Model) clearAskXInput() {
 
 // askxPromptPrefix returns the input prompt string for askX session mode.
 func (m *Model) askxPromptPrefix() string {
-	profile := m.askxResolvedProfile
+	profile := m.askxSessionProfile
 	if profile == "" {
 		profile = m.cfg.AskX.Profile
 	}
@@ -151,7 +152,7 @@ func (m *Model) askxFilePath() string {
 
 // ── Data loading ────────────────────────────────────────────────────────────
 
-// loadAskXHistory reads the askX JSON history and converts to chat.Messages.
+// loadAskXHistory reads the askX JSON history and config, populating msgs and session profile.
 func (m *Model) loadAskXHistory() {
 	ws := m.askxWorkspace()
 	h, err := storefs.ReadAskXHistory(m.cfg.DataRoot, ws)
@@ -161,6 +162,9 @@ func (m *Model) loadAskXHistory() {
 		return
 	}
 	m.askxMsgs = askxHistoryToMsgs(h)
+	if cfg, err := storefs.ReadAskXConfig(m.cfg.DataRoot, ws); err == nil && cfg.Profile != "" {
+		m.askxSessionProfile = cfg.Profile
+	}
 }
 
 // askxHistoryToMsgs converts storage messages to chat.Messages.
@@ -438,8 +442,11 @@ func (s *askxSummaryStore) SaveSummary(text string, coversThrough time.Time) err
 func (m *Model) sendAskXQuery(llmPrompt string, profileOverride string) tea.Cmd {
 	cfg := m.cfg
 
-	// Resolve profile.
+	// Resolve profile: per-query override > session profile > config default.
 	profileName := profileOverride
+	if profileName == "" {
+		profileName = m.askxSessionProfile
+	}
 	if profileName == "" {
 		profileName = cfg.AskX.Profile
 	}
@@ -874,6 +881,38 @@ func (m *Model) askxViewH() int {
 		h = 3
 	}
 	return h - 1 // minus header
+}
+
+// askxSyncCursorToScroll sets askxBoxCursor to the box visible at the current scroll offset.
+// Called when focus enters the AskX pane so navigation starts from the visible position.
+func (m *Model) askxSyncCursorToScroll() {
+	dl := m.askxDisplayLines
+	scroll := m.askxScroll
+	if scroll >= len(dl) {
+		scroll = len(dl) - 1
+	}
+	if scroll < 0 {
+		return
+	}
+	boxIdx := -1
+	for i := 0; i <= scroll && i < len(dl); i++ {
+		cl := dl[i]
+		prev := chatLineBlank
+		if i > 0 {
+			prev = dl[i-1].role
+		}
+		if (cl.role == chatLineUser && (i == 0 || prev != chatLineUser)) ||
+			(cl.role == chatLineNote && (i == 0 || prev != chatLineNote)) {
+			boxIdx++
+		}
+	}
+	if boxIdx < 0 {
+		boxIdx = 0
+	}
+	if max := m.askxBoxCount() - 1; boxIdx > max && max >= 0 {
+		boxIdx = max
+	}
+	m.askxBoxCursor = boxIdx
 }
 
 func (m *Model) askxScrollToBottom() {
