@@ -97,6 +97,12 @@ main() {
     set -x
   fi
 
+  # Default ARC_HOME to ~/.ARC_ACTIVE_HOME symlink if not already set.
+  if [[ -z "${ARC_HOME:-}" && -L "$HOME/.ARC_ACTIVE_HOME" ]]; then
+    ARC_HOME=$(readlink -f "$HOME/.ARC_ACTIVE_HOME")
+    export ARC_HOME
+  fi
+
   [[ -n "$ARC_RECIPIENT" ]] || die "ARC_RECIPIENT is not set (try --help)"
   [[ -n "$ARC_FROM" ]]      || die "ARC_FROM is not set (try --help)"
 

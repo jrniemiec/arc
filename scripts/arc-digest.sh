@@ -75,6 +75,12 @@ main() {
     set -x
   fi
 
+  # Default ARC_HOME to ~/.ARC_ACTIVE_HOME symlink if not already set.
+  if [[ -z "${ARC_HOME:-}" && -L "$HOME/.ARC_ACTIVE_HOME" ]]; then
+    ARC_HOME=$(readlink -f "$HOME/.ARC_ACTIVE_HOME")
+    export ARC_HOME
+  fi
+
   # Load API key from Keychain if not set in environment.
   if [[ -z "${ARC_ANTHROPIC_API_KEY:-}" ]]; then
     ARC_ANTHROPIC_API_KEY=$(security find-generic-password -a anthropic -s arc -w 2>/dev/null) \
