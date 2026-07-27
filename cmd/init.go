@@ -28,11 +28,7 @@ so you can make an informed choice before your first ingest.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfgPath := cfgFile
 		if cfgPath == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return fmt.Errorf("home dir: %w", err)
-			}
-			cfgPath = filepath.Join(home, ".arc", "config.jsonc")
+			cfgPath = filepath.Join(arcHomeDir(), "config.jsonc")
 		}
 
 		cfgDir := filepath.Dir(cfgPath)

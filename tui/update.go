@@ -4344,6 +4344,9 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	// ── Global commands (available in any context) ──────────────────────────
 	switch cmd {
+	case "/arc-home":
+		m.statusMsg = m.cfg.DataRoot
+		return nil
 	case "/config":
 		m.setStatusLines(m.cmdConfigLines())
 		m.focus = paneStatus
@@ -5533,8 +5536,7 @@ func cmdWorkspaceSearch(svc *service.Service, query string, limit int, mode stor
 // cmdConfigLines returns formatted lines showing the resolved configuration,
 // following c2's /config pattern: key settings + full profile listing.
 func (m *Model) cmdConfigLines() []string {
-	home, _ := os.UserHomeDir()
-	cfgPath := resolveConfigPath(filepath.Join(home, ".arc", "config.jsonc"))
+	cfgPath := resolveConfigPath(filepath.Join(m.cfg.DataRoot, "config.jsonc"))
 
 	row := func(label, value string) string {
 		return fmt.Sprintf("  %-20s%s", label+":", value)
@@ -5643,8 +5645,7 @@ func (m *Model) cmdViewConfigFile(path, label string) {
 
 // cmdConfigView opens the global config in the resource overlay.
 func (m *Model) cmdConfigView() {
-	home, _ := os.UserHomeDir()
-	m.cmdViewConfigFile(filepath.Join(home, ".arc", "config.jsonc"), "config.jsonc")
+	m.cmdViewConfigFile(filepath.Join(m.cfg.DataRoot, "config.jsonc"), "config.jsonc")
 }
 
 // cmdAgentConfigView opens the agent config in the resource overlay.
@@ -5698,8 +5699,7 @@ func (m *Model) cmdConfigEdit() tea.Cmd {
 	if editor == "" {
 		return nil
 	}
-	home, _ := os.UserHomeDir()
-	cfgPath := resolveConfigPath(filepath.Join(home, ".arc", "config.jsonc"))
+	cfgPath := resolveConfigPath(filepath.Join(m.cfg.DataRoot, "config.jsonc"))
 	m.openEditorInTerminal(editor, cfgPath, filepath.Base(cfgPath))
 	return nil
 }
@@ -6081,7 +6081,7 @@ func (m *Model) cmdAgentRun(arg string) tea.Cmd {
 		}
 	}
 	if activeFeeds == 0 {
-		m.statusMsg = "✗ no feeds configured — add feeds to ~/.arc/agent/config.jsonc"
+		m.statusMsg = "✗ no feeds configured — add feeds to " + filepath.Join(m.cfg.AgentPath, "config.jsonc")
 		return nil
 	}
 
@@ -7292,6 +7292,7 @@ var helpGroups = []struct {
 		{"/reset", "", "reset askX context (history stays visible, removed from LLM context)"},
 		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
 		{"/chat-profile", "[name]", "show or set global article chat profile (alias: /chat-model)"},
+		{"/arc-home", "", "show active arc data root"},
 		{"/config", "", "show resolved configuration"},
 		{"/config-view", "", "view config.jsonc in overlay"},
 		{"/config-edit", "", "open config.jsonc in $EDITOR"},

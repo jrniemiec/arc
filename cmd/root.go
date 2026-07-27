@@ -133,11 +133,8 @@ func closeLibrary(cmd *cobra.Command, _ []string) error {
 func loadConfig() (config.Config, error) {
 	path := cfgFile
 	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return config.Default(), nil
-		}
-		path = filepath.Join(home, ".arc", "config.jsonc")
+		arcHome := arcHomeDir()
+		path = filepath.Join(arcHome, "config.jsonc")
 	}
 
 	cfg, err := config.Load(path)
@@ -145,13 +142,22 @@ func loadConfig() (config.Config, error) {
 		return cfg, err
 	}
 
-	// --data-root overrides config
+	// ARC_HOME sets both the config location and the data root.
+	// --data-root flag wins if explicitly set.
 	if dataRoot != "" {
 		cfg.DataRoot = dataRoot
 		cfg.ArticlesRoot = filepath.Join(dataRoot, "articles")
 		cfg.DBPath = filepath.Join(dataRoot, "arc.db")
 		cfg.VectorPath = filepath.Join(dataRoot, "index")
 		cfg.EventsPath = filepath.Join(dataRoot, "events.jsonl")
+		cfg.AgentPath = filepath.Join(dataRoot, "agent")
+	} else if h := os.Getenv("ARC_HOME"); h != "" {
+		cfg.DataRoot = h
+		cfg.ArticlesRoot = filepath.Join(h, "articles")
+		cfg.DBPath = filepath.Join(h, "arc.db")
+		cfg.VectorPath = filepath.Join(h, "index")
+		cfg.EventsPath = filepath.Join(h, "events.jsonl")
+		cfg.AgentPath = filepath.Join(h, "agent")
 	}
 	// --articles-root overrides articles location independently
 	if articlesRoot != "" {
@@ -159,6 +165,19 @@ func loadConfig() (config.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// arcHomeDir returns the arc data root directory.
+// Precedence: ARC_HOME env var > ~/.arc default.
+func arcHomeDir() string {
+	if h := os.Getenv("ARC_HOME"); h != "" {
+		return h
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".arc"
+	}
+	return filepath.Join(home, ".arc")
 }
 
 // svcFrom extracts the Service from a command's context.
