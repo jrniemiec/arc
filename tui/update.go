@@ -4257,10 +4257,30 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 				return items
 			}
 		}
-		// First level: return group names.
-		items := make([]cmdCompletion, len(helpGroups))
-		for i, g := range helpGroups {
-			items[i] = cmdCompletion{cmd: g.name}
+		// First level: return group names, context group first.
+		contextGroup := ""
+		switch m.activeTab {
+		case tabAgent:
+			contextGroup = "agent"
+		case tabStats:
+			contextGroup = "system"
+		default: // tabLibrary
+			switch m.navSubTab {
+			case navSubTabArticles:
+				contextGroup = "article"
+			case navSubTabCollections:
+				contextGroup = "collection"
+			case navSubTabWorkspaces:
+				contextGroup = "workspace"
+			}
+		}
+		items := make([]cmdCompletion, 0, len(helpGroups))
+		for _, g := range helpGroups {
+			if g.name == contextGroup {
+				items = append([]cmdCompletion{{cmd: g.name}}, items...)
+			} else {
+				items = append(items, cmdCompletion{cmd: g.name})
+			}
 		}
 		return items
 	}
