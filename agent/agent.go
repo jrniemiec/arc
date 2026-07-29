@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,6 +236,11 @@ func runFeed(
 		dedupedItems = newItems
 	}
 
+	// Domain blocklist: drop items before any LLM call.
+	if len(feedCfg.BlockDomains) > 0 {
+		dedupedItems = blockByDomain(dedupedItems, feedCfg.BlockDomains)
+	}
+
 	fr.Filter = len(dedupedItems)
 	if fr.Filter == 0 {
 		slog.Debug("all new items already ingested", "feed", fr.Name)
@@ -369,6 +375,7 @@ func runFeed(
 				pReq := pipeline.Request{
 					URL:              it.Link,
 					AgentRunID:       runID,
+					AgentFeed:        fr.Name,
 					AgentVerdict:     string(r.Verdict),
 					AgentReason:      r.Reason,
 					SummaryModel:     opts.AgentCfg.SummaryProfileName(),
@@ -440,6 +447,51 @@ func tagFilter(items []feed.Item, allowed []string) []feed.Item {
 				out = append(out, item)
 				break
 			}
+		}
+	}
+	return out
+}
+
+// blockByDomain removes items whose URL host matches any entry in blocked.
+// Matching is done against the full hostname and the eTLD+1 (e.g. "pagedout.institute"
+// blocks "files.pagedout.institute" as well).
+func blockByDomain(items []feed.Item, blocked []string) []feed.Item {
+	if len(blocked) == 0 {
+		return items
+	}
+	set := make(map[string]bool, len(blocked))
+	for _, d := range blocked {
+		set[strings.ToLower(d)] = true
+	}
+	var out []feed.Item
+	for _, item := range items {
+		if item.Link == "" {
+			out = append(out, item)
+			continue
+		}
+		u, err := url.Parse(item.Link)
+		if err != nil {
+			out = append(out, item)
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if set[host] {
+			slog.Info("blocked by domain", "url", item.Link, "title", item.Title, "domain", host)
+			continue
+		}
+		// Check eTLD+1: walk up from the right, try each suffix.
+		parts := strings.Split(host, ".")
+		blocked := false
+		for i := range parts {
+			candidate := strings.Join(parts[i:], ".")
+			if set[candidate] {
+				slog.Info("blocked by domain", "url", item.Link, "title", item.Title, "domain", candidate)
+				blocked = true
+				break
+			}
+		}
+		if !blocked {
+			out = append(out, item)
 		}
 	}
 	return out
@@ -580,6 +632,7 @@ func RunDecisions(ctx context.Context, opts RunOptions, decisionsPath string) (R
 			pResult, pErr := pipeline.Run(ctx, opts.ArcConfig, pipeline.Request{
 				URL:          item.URL,
 				AgentRunID:   runID,
+				AgentFeed:    dfr.Name,
 				AgentVerdict: "ingest",
 				AgentReason:  item.Reason,
 				SummaryModel: opts.AgentCfg.SummaryProfileName(),

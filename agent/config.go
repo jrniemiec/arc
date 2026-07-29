@@ -77,6 +77,11 @@ type FeedConfig struct {
 	// at the RSS level before calling the LLM. Empty means accept all.
 	Tags []string `json:"tags,omitempty"`
 
+	// BlockDomains is an optional list of hostnames to reject before any LLM
+	// call. Items whose URL host matches any entry (exact or eTLD+1) are
+	// dropped silently. Example: ["pagedout.institute", "example.com"]
+	BlockDomains []string `json:"block_domains,omitempty"`
+
 	// Disabled skips this feed without removing it from the config.
 	Disabled bool `json:"disabled,omitempty"`
 }
