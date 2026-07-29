@@ -1727,7 +1727,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		m.input.CursorEnd()
 		m.updateCompletions()
 	case key.Matches(msg, keys.Help):
-		m.setStatusLines(m.helpLines("keys"))
+		m.setStatusLines(m.contextKeys(false))
 	}
 	return nil
 }
@@ -4406,6 +4406,10 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 	case "/help":
 		m.setStatusLines(m.helpLines(arg))
+		return nil
+	case "/?":
+		m.setStatusLines(m.contextKeys(true))
+		m.focus = paneStatus
 		return nil
 	case "/scratch":
 		global := parts[0] == "/Scratch"
@@ -7262,34 +7266,8 @@ var helpGroups = []struct {
 		{"arc workspace system", "<slug>", "get/set system prompt  (CLI only)"},
 	}},
 	{"keys", []cmdCompletion{
-		{"j / ↓", "", "move down"},
-		{"k / ↑", "", "move up"},
-		{"PgDn / ctrl+d", "", "page down"},
-		{"PgUp / ctrl+u", "", "page up"},
-		{"g / Home", "", "go to top"},
-		{"G / End", "", "go to bottom"},
-		{"enter", "", "select / expand / collapse"},
-		{"space", "", "expand / collapse"},
-		{"esc", "", "back / dismiss"},
-		{"tab", "", "next pane"},
-		{"shift+tab", "", "previous pane"},
-		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
-		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
-		{"h / ←", "", "previous content tab"},
-		{"c", "", "toggle/focus article chat (Articles / Collections nav)"},
-		{"r", "", "mark article as read"},
-		{"u", "", "mark article as unread"},
-		{"f/*", "", "toggle favorite"},
-		{"o", "", "open source URL in browser"},
-		{"v", "", "view article in external terminal"},
-		{"D", "", "delete current item"},
-		{"U", "", "unlink article/collection from workspace"},
-		{"a", "", "move article/collection to attic"},
-		{"b", "", "restore article/collection from attic"},
-		{"/", "", "open command input"},
-		{"↑ / ↓", "", "recall command history (in command pane)"},
-		{"?", "", "show key bindings"},
-		{"q / ctrl+c", "", "quit"},
+		{"?", "", "show context-sensitive key bindings"},
+		{"/?", "", "show all key bindings (global)"},
 	}},
 	{"agent", []cmdCompletion{
 		{"/agent-run", "[--dry-run] [--focus \"...\"]", "fresh feed scan — poll all feeds, filter, ingest"},
@@ -7325,6 +7303,146 @@ var helpGroups = []struct {
 		{"/models", "", "list available LLM profiles"},
 		{"/log", "", "open/close debug log tail"},
 	}},
+}
+
+// contextKeys returns key binding help lines.
+// all=true returns every binding (the "global" / /? view).
+// all=false returns only bindings relevant to the active tab/sub-tab.
+func (m *Model) contextKeys(all bool) []string {
+	universal := []cmdCompletion{
+		{"j / ↓", "", "move down"},
+		{"k / ↑", "", "move up"},
+		{"PgDn / ctrl+d", "", "page down"},
+		{"PgUp / ctrl+u", "", "page up"},
+		{"g / Home", "", "go to top"},
+		{"G / End", "", "go to bottom"},
+		{"enter", "", "select / expand / collapse"},
+		{"space", "", "expand / collapse"},
+		{"esc", "", "back / dismiss"},
+		{"tab", "", "next pane"},
+		{"shift+tab", "", "previous pane"},
+		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
+		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
+		{"h / ←", "", "previous content tab"},
+		{"ctrl+l", "", "toggle scratch pane"},
+		{"ctrl+x", "", "toggle global askX pane"},
+		{"ctrl+o", "", "toggle preview pane"},
+		{"ctrl+r", "", "refresh current view"},
+		{"/", "", "open command input"},
+		{"↑ / ↓", "", "recall command history (in command pane)"},
+		{"?", "", "show context key bindings"},
+		{"/?", "", "show all key bindings"},
+		{"q / ctrl+c", "", "quit"},
+	}
+
+	articleKeys := []cmdCompletion{
+		{"c", "", "toggle/focus article chat"},
+		{"r", "", "mark article as read"},
+		{"u", "", "mark article as unread"},
+		{"f / *", "", "toggle favorite"},
+		{"o", "", "open source URL in browser"},
+		{"v", "", "view article in overlay"},
+		{"D", "", "delete article"},
+		{"a", "", "move to attic"},
+		{"b", "", "restore from attic"},
+	}
+
+	collectionKeys := []cmdCompletion{
+		{"c", "", "toggle/focus collection chat"},
+		{"D", "", "delete collection"},
+	}
+
+	workspaceKeys := []cmdCompletion{
+		{"c", "", "toggle/focus workspace chat"},
+		{"f / *", "", "toggle pin"},
+		{"!", "", "toggle workspace focus"},
+		{"o", "", "open resource or source URL"},
+		{"v", "", "view resource/scratch/article in overlay"},
+		{"e", "", "edit resource/outcome/scratch in $EDITOR"},
+		{"D", "", "delete workspace / selected item"},
+		{"U", "", "unlink article/collection from workspace"},
+		{"a", "", "move article/collection to attic"},
+		{"b", "", "restore article/collection from attic"},
+	}
+
+	agentRunKeys := []cmdCompletion{
+		{"a", "", "mark article for ingest"},
+		{"s", "", "skip article"},
+		{"v", "", "view ingested article in library"},
+		{"o", "", "open article URL in browser"},
+		{"space / enter", "", "expand / collapse feed"},
+	}
+
+	agentFeedKeys := []cmdCompletion{
+		{"a", "", "add new feed (opens $EDITOR)"},
+		{"e", "", "edit selected feed in $EDITOR"},
+		{"d", "", "toggle feed enabled/disabled"},
+		{"D", "", "delete selected feed"},
+	}
+
+	render := func(header string, cmds []cmdCompletion) []string {
+		lines := []string{header}
+		for _, c := range cmds {
+			synopsis := c.cmd
+			if c.arg != "" {
+				synopsis += " " + c.arg
+			}
+			lines = append(lines, fmt.Sprintf("  %-24s  %s", synopsis, c.desc))
+		}
+		return lines
+	}
+
+	if all {
+		var out []string
+		out = append(out, render("universal:", universal)...)
+		out = append(out, "")
+		out = append(out, render("articles:", articleKeys)...)
+		out = append(out, "")
+		out = append(out, render("collections:", collectionKeys)...)
+		out = append(out, "")
+		out = append(out, render("workspaces:", workspaceKeys)...)
+		out = append(out, "")
+		out = append(out, render("agent runs:", agentRunKeys)...)
+		out = append(out, "")
+		out = append(out, render("agent feeds:", agentFeedKeys)...)
+		return out
+	}
+
+	// Context-sensitive: universal + tab-specific keys.
+	var contextLabel string
+	var contextCmds []cmdCompletion
+	switch m.activeTab {
+	case tabAgent:
+		if m.agentSubTab == agentSubTabFeeds {
+			contextLabel = "agent feeds:"
+			contextCmds = agentFeedKeys
+		} else {
+			contextLabel = "agent runs:"
+			contextCmds = agentRunKeys
+		}
+	case tabStats:
+		// Stats tab: only universal keys apply.
+	default: // tabLibrary
+		switch m.navSubTab {
+		case navSubTabArticles:
+			contextLabel = "articles:"
+			contextCmds = articleKeys
+		case navSubTabCollections:
+			contextLabel = "collections:"
+			contextCmds = collectionKeys
+		case navSubTabWorkspaces:
+			contextLabel = "workspaces:"
+			contextCmds = workspaceKeys
+		}
+	}
+
+	var out []string
+	if len(contextCmds) > 0 {
+		out = append(out, render(contextLabel, contextCmds)...)
+		out = append(out, "")
+	}
+	out = append(out, render("universal:", universal)...)
+	return out
 }
 
 // helpLines returns context-sensitive help for the active tab.

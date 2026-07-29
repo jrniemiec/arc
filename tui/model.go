@@ -680,6 +680,7 @@ var globalCommands = []cmdCompletion{
 	{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
 	{"/reset", "", "reset askX context (keeps history visible, removes from LLM context)"},
 	{"/help", "[group]", "show command reference"},
+	{"/?", "", "show all key bindings"},
 	{"/arc-home", "", "show active arc data root"},
 	{"/config", "", "show resolved configuration"},
 	{"/config-view", "", "view config.jsonc in overlay"},
