@@ -481,16 +481,16 @@ func blockByDomain(items []feed.Item, blocked []string) []feed.Item {
 		}
 		// Check eTLD+1: walk up from the right, try each suffix.
 		parts := strings.Split(host, ".")
-		blocked := false
+		matched := false
 		for i := range parts {
 			candidate := strings.Join(parts[i:], ".")
 			if set[candidate] {
 				slog.Info("blocked by domain", "url", item.Link, "title", item.Title, "domain", candidate)
-				blocked = true
+				matched = true
 				break
 			}
 		}
-		if !blocked {
+		if !matched {
 			out = append(out, item)
 		}
 	}
