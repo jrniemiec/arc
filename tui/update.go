@@ -1636,6 +1636,8 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		return m.openArticleOverlay(m.selectedNavItem())
+	case msg.String() == "O":
+		return m.cmdViewArticleExternal()
 	case msg.String() == "U":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
@@ -6002,6 +6004,87 @@ func (m *Model) cmdViewArticle() tea.Cmd {
 	return nil
 }
 
+// cmdViewArticleExternal opens the selected article's flash/summary/body in an
+// external terminal window. Unlike cmdViewArticle, the viewer persists after arc
+// exits — there is no PID watcher.
+func (m *Model) cmdViewArticleExternal() tea.Cmd {
+	item := m.selectedNavItem()
+	if item == nil {
+		m.statusMsg = "✗ no article selected"
+		return nil
+	}
+	if item.root == "" {
+		m.statusMsg = "✗ article has no local files"
+		return nil
+	}
+
+	files := storefs.ProbeFiles(item.root)
+	files.Summary = storefs.ResolveSummary(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	files.Flash = storefs.ResolveFlash(item.root, m.cfg.PreferredModels)
+
+	type viewPart struct {
+		label string
+		path  string
+	}
+	var parts []viewPart
+	if files.Flash != "" {
+		parts = append(parts, viewPart{"Flash", files.Flash})
+	}
+	if files.Summary != "" {
+		parts = append(parts, viewPart{"Summary", files.Summary})
+	}
+	if files.Body != "" {
+		parts = append(parts, viewPart{"Body", files.Body})
+	}
+	if len(parts) == 0 {
+		m.statusMsg = "✗ no content files available"
+		return nil
+	}
+
+	pid := os.Getpid()
+	scriptPath := fmt.Sprintf("%s/arc-view-ext-%d-%s.sh", os.TempDir(), pid, item.id)
+
+	var catParts string
+	for i, p := range parts {
+		if i > 0 {
+			catParts += "echo ''; "
+		}
+		pad := 60 - 4 - len(p.label) - 1
+		if pad < 3 {
+			pad = 3
+		}
+		catParts += fmt.Sprintf("echo '── %s %s'; echo ''; ", p.label, strings.Repeat("─", pad))
+		catParts += fmt.Sprintf("cat %q; ", p.path)
+	}
+
+	script := fmt.Sprintf(
+		"#!/bin/bash\ntrap 'rm -f %q' EXIT\n"+
+			"{ %s }\necho ''\nread -n1 -s -r -p '(press any key to close)'\n",
+		scriptPath, catParts,
+	)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		m.statusMsg = fmt.Sprintf("✗ view: could not write script: %v", err)
+		return nil
+	}
+
+	var appleScript string
+	switch ActiveTerminal {
+	case TermITerm2:
+		appleScript = fmt.Sprintf(
+			`tell application "iTerm2" to create window with default profile command %q`,
+			scriptPath,
+		)
+	default:
+		appleScript = fmt.Sprintf(
+			`tell application "Terminal" to do script %q`,
+			scriptPath,
+		)
+	}
+	go exec.Command("osascript", "-e", appleScript).Run() //nolint:errcheck
+	m.statusMsg = "opened persistent viewer for " + item.id
+	return nil
+}
+
 // cmdReprocess regenerates summary/flash for the current article.
 func (m *Model) cmdReprocess() tea.Cmd {
 	sel := m.selectedNavItem()
@@ -7344,6 +7427,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"f / *", "", "toggle favorite"},
 		{"o", "", "open source URL in browser"},
 		{"v", "", "view article in overlay"},
+		{"O", "", "open article in external viewer (persists after exit)"},
 		{"D", "", "delete article"},
 		{"a", "", "move to attic"},
 		{"b", "", "restore from attic"},
