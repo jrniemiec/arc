@@ -7422,7 +7422,6 @@ func (m *Model) contextKeys(all bool) []string {
 		{"h / ←", "", "previous content tab"},
 		{"ctrl+l", "", "toggle scratch pane"},
 		{"ctrl+x", "", "toggle global askX pane"},
-		{"ctrl+o", "", "toggle preview pane"},
 		{"ctrl+r", "", "refresh current view"},
 		{"/", "", "open command input"},
 		{"↑ / ↓", "", "recall command history (in command pane)"},
@@ -7451,6 +7450,7 @@ func (m *Model) contextKeys(all bool) []string {
 
 	workspaceKeys := []cmdCompletion{
 		{"c", "", "toggle/focus workspace chat"},
+		{"ctrl+o", "", "toggle preview pane"},
 		{"f / *", "", "toggle pin"},
 		{"!", "", "toggle workspace focus"},
 		{"o", "", "open resource or source URL"},
@@ -7489,19 +7489,56 @@ func (m *Model) contextKeys(all bool) []string {
 		return lines
 	}
 
+	render2col := func(header string, cmds []cmdCompletion) []string {
+		lines := []string{header}
+		const keyW = 14
+		colW := m.width / 2
+		descW := colW - 2 - keyW - 2
+		if descW < 10 {
+			descW = 10
+		}
+		for i := 0; i < len(cmds); i += 2 {
+			left := cmds[i]
+			leftKey := left.cmd
+			if left.arg != "" {
+				leftKey += " " + left.arg
+			}
+			leftKey = truncate(leftKey, keyW)
+			leftDesc := truncate(left.desc, descW)
+			if i+1 < len(cmds) {
+				right := cmds[i+1]
+				rightKey := right.cmd
+				if right.arg != "" {
+					rightKey += " " + right.arg
+				}
+				rightKey = truncate(rightKey, keyW)
+				lines = append(lines, fmt.Sprintf("  %-*s  %-*s  %-*s  %s",
+					keyW, leftKey, descW, leftDesc, keyW, rightKey, right.desc))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %-*s  %s", keyW, leftKey, leftDesc))
+			}
+		}
+		return lines
+	}
+
+	renderSection := render
+	if m.width >= 140 {
+		renderSection = render2col
+	}
+
 	if all {
 		var out []string
-		out = append(out, render("universal:", universal)...)
+		out = append(out, renderSection("universal:", universal)...)
 		out = append(out, "")
-		out = append(out, render("articles:", articleKeys)...)
+		out = append(out, renderSection("articles:", articleKeys)...)
 		out = append(out, "")
-		out = append(out, render("collections:", collectionKeys)...)
+		out = append(out, renderSection("collections:", collectionKeys)...)
 		out = append(out, "")
-		out = append(out, render("workspaces:", workspaceKeys)...)
+		out = append(out, renderSection("workspaces:", workspaceKeys)...)
 		out = append(out, "")
-		out = append(out, render("agent runs:", agentRunKeys)...)
+		out = append(out, renderSection("agent runs:", agentRunKeys)...)
 		out = append(out, "")
-		out = append(out, render("agent feeds:", agentFeedKeys)...)
+		out = append(out, renderSection("agent feeds:", agentFeedKeys)...)
 		return out
 	}
 
@@ -7535,10 +7572,10 @@ func (m *Model) contextKeys(all bool) []string {
 
 	var out []string
 	if len(contextCmds) > 0 {
-		out = append(out, render(contextLabel, contextCmds)...)
+		out = append(out, renderSection(contextLabel, contextCmds)...)
 		out = append(out, "")
 	}
-	out = append(out, render("universal:", universal)...)
+	out = append(out, renderSection("universal:", universal)...)
 	return out
 }
 
