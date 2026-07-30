@@ -377,7 +377,52 @@ func (m Model) renderTabBar() string {
 	left := strings.Join(parts, "")
 	leftW := lipgloss.Width(left)
 
-	// Cost summary — only shown when there's been spend.
+	// Center: library sub-tab stats — only when Library tab is active.
+	var center string
+	var centerW int
+	if m.activeTab == tabLibrary {
+		var centerStr string
+		switch m.navSubTab {
+		case navSubTabArticles:
+			if m.navLoaded {
+				unread := 0
+				for _, item := range m.navItemsAll {
+					if !item.read {
+						unread++
+					}
+				}
+				centerStr = fmt.Sprintf("Articles · %d total · %d unread", len(m.navItemsAll), unread)
+			}
+		case navSubTabCollections:
+			if m.collectionsLoaded {
+				n, articles := 0, 0
+				for _, r := range m.navRows {
+					if r.kind == rowCollection {
+						n++
+						articles += r.colCount
+					}
+				}
+				centerStr = fmt.Sprintf("Collections · %d total · %d articles", n, articles)
+			}
+		case navSubTabWorkspaces:
+			if m.workspacesLoaded {
+				articles, collections, resources := 0, 0, 0
+				for _, ws := range m.workspaceItems {
+					articles += ws.articleCount
+					collections += ws.collectionCount
+					resources += ws.resourceCount
+				}
+				centerStr = fmt.Sprintf("Workspaces · %d total · %d articles · %d collections · %d resources",
+					len(m.workspaceItems), articles, collections, resources)
+			}
+		}
+		if centerStr != "" {
+			center = fg(t.ContentDimmed, centerStr)
+			centerW = lipgloss.Width(centerStr)
+		}
+	}
+
+	// Right: cost summary — only shown when there's been spend.
 	if m.statsLoaded && m.stats.CostTotal > 0 {
 		costStr := fmt.Sprintf("Cost: today %s · 7d %s · 30d %s · ∑ %s ",
 			formatUSD(m.stats.CostToday),
@@ -387,9 +432,20 @@ func (m Model) renderTabBar() string {
 		)
 		costRendered := fg(t.ContentDimmed, costStr)
 		costW := lipgloss.Width(costStr)
-		pad := m.width - leftW - costW
-		if pad > 0 {
-			return left + strings.Repeat(" ", pad) + costRendered
+		remaining := m.width - leftW - costW
+		if center != "" && remaining > centerW+2 {
+			leftGap := (remaining - centerW) / 2
+			rightGap := remaining - centerW - leftGap
+			return left + strings.Repeat(" ", leftGap) + center + strings.Repeat(" ", rightGap) + costRendered
+		}
+		if remaining > 0 {
+			return left + strings.Repeat(" ", remaining) + costRendered
+		}
+	} else if center != "" {
+		pad := m.width - leftW - centerW
+		if pad > 2 {
+			leftGap := pad / 2
+			return left + strings.Repeat(" ", leftGap) + center
 		}
 	}
 	return left
@@ -3069,41 +3125,8 @@ func (m Model) renderStatusLine() string {
 	}
 	// Idle: show context stats for the active tab/sub-tab.
 	if m.activeTab == tabLibrary {
-		switch m.navSubTab {
-		case navSubTabArticles:
-			if m.navLoaded {
-				unread := 0
-				for _, item := range m.navItemsAll {
-					if !item.read {
-						unread++
-					}
-				}
-				return fg(t.Dimmed, fmt.Sprintf(" Articles · %d total · %d unread", len(m.navItemsAll), unread))
-			}
-		case navSubTabCollections:
-			if m.collectionsLoaded {
-				n := 0
-				articles := 0
-				for _, r := range m.navRows {
-					if r.kind == rowCollection {
-						n++
-						articles += r.colCount
-					}
-				}
-				return fg(t.Dimmed, fmt.Sprintf(" Collections · %d total · %d articles", n, articles))
-			}
-		case navSubTabWorkspaces:
-			if m.workspacesLoaded {
-				articles, collections, resources := 0, 0, 0
-				for _, ws := range m.workspaceItems {
-					articles += ws.articleCount
-					collections += ws.collectionCount
-					resources += ws.resourceCount
-				}
-				return fg(t.Dimmed, fmt.Sprintf(" Workspaces · %d total · %d articles · %d collections · %d resources",
-					len(m.workspaceItems), articles, collections, resources))
-			}
-		}
+		// Library sub-tab stats are shown in the top tab bar center — nothing to show here.
+		_ = m.navSubTab
 	}
 	if m.activeTab == tabAgent {
 		switch m.agentSubTab {
