@@ -248,7 +248,9 @@ func (m Model) renderPreviewPane(height, width int) []string {
 	var lines []string
 
 	// Header: title on the left, hints on the right.
-	title := m.previewTitle
+	// Strip newlines: an embedded \n in the title breaks renderMainArea's line-based layout
+	// and causes the preview header to visually bleed into the nav bar.
+	title := strings.ReplaceAll(m.previewTitle, "\n", " ")
 	if title == "" {
 		title = "Preview"
 	}

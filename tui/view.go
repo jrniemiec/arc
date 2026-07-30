@@ -352,6 +352,12 @@ func (m Model) View() string {
 		out = append(out, "")
 	}
 
+	// Strip embedded newlines from every output line: a \n in any element causes the
+	// final strings.Join to produce phantom rows that bleed across pane boundaries.
+	for i, line := range out {
+		out[i] = stripNL(line)
+	}
+
 	return strings.Join(out, "\n")
 }
 
@@ -521,6 +527,10 @@ func (m Model) renderMainArea(height int) string {
 		if i < len(rightLines) {
 			r = rightLines[i]
 		}
+		// Strip embedded newlines before assembly: a \n in any pane line would escape
+		// the layout grid and cause content to bleed into adjacent panes.
+		l = stripNL(l)
+		r = stripNL(r)
 		// Pad left pane to fixed width
 		l = padRight(l, navW)
 		sb.WriteString(l)
@@ -3159,6 +3169,17 @@ func (m Model) hintsFor() string {
 // padRight pads a string (which may contain ANSI codes) to width visible chars.
 // If the string is wider than width (e.g. due to emoji width mismatches), it is
 // truncated to prevent the vertical divider from shifting.
+// stripNL removes embedded newlines and carriage returns from a single rendered line.
+// Any \n or \r in a pane line breaks the layout grid — left content bleeds into adjacent
+// panes when renderMainArea writes nav+│+content rows, and vertical stacking in View()
+// produces phantom rows without their column context. Strip defensively at assembly time.
+func stripNL(s string) string {
+	if !strings.ContainsAny(s, "\n\r") {
+		return s
+	}
+	return strings.NewReplacer("\n", "", "\r", "").Replace(s)
+}
+
 func padRight(s string, width int) string {
 	visible := lipgloss.Width(s)
 	if visible > width {
