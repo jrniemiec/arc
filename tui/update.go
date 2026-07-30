@@ -3714,6 +3714,15 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 						m.syncInputPrompt()
 						m.statusMsg = "profile → " + arg
 						return nil
+					case "/no-history":
+						m.askxNoHistory = !m.askxNoHistory
+						m.syncInputPrompt()
+						if m.askxNoHistory {
+							m.statusMsg = "no-history mode on — queries will not include prior context"
+						} else {
+							m.statusMsg = "no-history mode off"
+						}
+						return nil
 					}
 					return m.dispatchCommand(val)
 				}
@@ -7384,6 +7393,7 @@ var helpGroups = []struct {
 		{"/askX", "[--profile <name>] <prompt>", "workspace-local LLM query"},
 		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
 		{"/reset", "", "reset askX context (history stays visible, removed from LLM context)"},
+		{"/no-history", "", "toggle no-history mode: send queries without prior context (prompt turns orange)"},
 		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
 		{"/chat-profile", "[name]", "show or set global article chat profile (alias: /chat-model)"},
 		{"/arc-home", "", "show active arc data root"},

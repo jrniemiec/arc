@@ -703,6 +703,16 @@ var builtinProfiles = map[string]Profile{
 			ContextWindow: 32_768,
 		},
 	},
+	"gemma": {
+		Provider: "ollama",
+		Host:     "http://localhost:11434",
+		Model:    "gemma3:12b",
+		Info: ProfileInfo{
+			CostTier:      "local",
+			CostVsValue:   "Free local Gemma 3 12B via Ollama. Good general-purpose model for summarization and chat.",
+			ContextWindow: 128_000,
+		},
+	},
 }
 
 // Default returns a Config with sensible defaults.

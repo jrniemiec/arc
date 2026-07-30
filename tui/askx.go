@@ -75,6 +75,7 @@ func (m *Model) closeAskX() {
 	m.askxStreaming = false
 	m.askxStreamBuf = ""
 	m.askxSessionProfile = ""
+	m.askxNoHistory = false
 	m.syncInputPrompt()
 }
 
@@ -102,7 +103,15 @@ func (m *Model) askxPromptPrefix() string {
 			name = ws + "/AskX"
 		}
 	}
-	return name + "(" + profile + ")> "
+	label := profile
+	if m.askxNoHistory {
+		label += "/no-history"
+	}
+	prompt := name + "(" + label + ")> "
+	if m.askxNoHistory {
+		return fg(lipgloss.Color("#F5A623"), prompt)
+	}
+	return prompt
 }
 
 // askxWorkspace returns the workspace name for askX file operations.
@@ -464,11 +473,17 @@ func (m *Model) sendAskXQuery(llmPrompt string, profileOverride string) tea.Cmd 
 
 	// Build history from prior messages (all except the last, which is the current user turn).
 	// The last message was just appended in cmdAskX before calling sendAskXQuery.
-	priorMsgs := m.askxMsgs
-	if len(priorMsgs) > 0 {
-		priorMsgs = priorMsgs[:len(priorMsgs)-1]
+	// In no-history mode, prior context is omitted entirely.
+	var hist *chat.History
+	if m.askxNoHistory {
+		hist = &chat.History{}
+	} else {
+		priorMsgs := m.askxMsgs
+		if len(priorMsgs) > 0 {
+			priorMsgs = priorMsgs[:len(priorMsgs)-1]
+		}
+		hist = &chat.History{Msgs: priorMsgs}
 	}
-	hist := &chat.History{Msgs: priorMsgs}
 
 	// Build context strategy from config.
 	stratName := cfg.AskX.Strategy

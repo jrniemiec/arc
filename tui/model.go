@@ -619,6 +619,7 @@ type Model struct {
 	removeReviewWs    string                     // workspace name
 	removeReviewDry   bool                       // dry-run mode
 
+	askxNoHistory       bool               // true when /no-history mode is active (skip prior context)
 	askxSessionProfile  string             // sticky profile for current session (set by /profile)
 	askxStreaming        bool              // true while LLM response is in flight
 	askxStreamBuf       string             // accumulated streaming response text
@@ -756,6 +757,7 @@ var askxCommands = []cmdCompletion{
 	{"/profile", "[name]", "show or switch LLM profile for this session"},
 	{"/model", "[name]", "alias for /profile"},
 	{"/reset", "", "reset askX context (keeps history visible, removes from LLM context)"},
+	{"/no-history", "", "toggle no-history mode: send queries without prior context"},
 	{"/chats-archive", "", "archive pending AskX + article chat messages"},
 	{"/chats-history", "", "browse archived chat sessions (overlay)"},
 	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
