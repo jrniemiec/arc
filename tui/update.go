@@ -4252,6 +4252,8 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 					if parts := strings.Fields(name); len(parts) == 3 && parts[0] == "arc" {
 						name = parts[2]
 					}
+					// Strip leading slash so "/help workspace search" not "/help workspace /search".
+					name = strings.TrimPrefix(name, "/")
 					items[i] = cmdCompletion{cmd: name, desc: c.desc}
 				}
 				return items
@@ -7527,6 +7529,7 @@ func (m *Model) helpLines(arg string) []string {
 				if parts := strings.Fields(displayCmd); len(parts) >= 3 && parts[0] == "arc" {
 					displayCmd = parts[2]
 				}
+				displayCmd = strings.TrimPrefix(displayCmd, "/")
 				if strings.HasPrefix(displayCmd, cmdFilter) {
 					synopsis := displayCmd
 					if c.arg != "" {

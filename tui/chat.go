@@ -1326,6 +1326,10 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		return m.cmdRemoveWorkspace(arg)
 
 	case "/help":
+		// With an arg (e.g. "/help workspace search"), fall through to global dispatch.
+		if fullArg != "" {
+			return m.dispatchCommand(val)
+		}
 		var lines []string
 		lines = append(lines, "Chat commands:")
 		for _, c := range chatCommands {

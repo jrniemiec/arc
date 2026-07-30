@@ -888,6 +888,10 @@ func (m *Model) dispatchArticleChatCommand(command, args string) (bool, tea.Cmd)
 		return true, nil
 
 	case "/help":
+		// With an arg (e.g. "/help workspace search"), fall through to global dispatch.
+		if args != "" {
+			return false, nil
+		}
 		var lines []string
 		lines = append(lines, "Article chat commands:")
 		for _, c := range achatCommands {
