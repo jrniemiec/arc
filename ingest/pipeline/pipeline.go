@@ -213,6 +213,7 @@ type Request struct {
 
 	// Agent provenance — set only when ingested by the feed agent.
 	AgentRunID   string // run ID, e.g. "agent-20260609-120000"
+	AgentFeed    string // feed name, e.g. "Hacker News Best (RSS)"
 	AgentVerdict string // "ingest" | "maybe"
 	AgentReason  string // LLM's one-sentence justification
 
@@ -481,6 +482,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 			Language:     extracted.Language,
 			IngestedAt:   now,
 			Tags:         []fs.MetaTag{{Value: "teaser", Source: "auto"}},
+			Feed:         req.AgentFeed,
 			AgentRunID:   req.AgentRunID,
 			AgentVerdict: req.AgentVerdict,
 			AgentReason:  req.AgentReason,
@@ -735,6 +737,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 			return ""
 		}(),
 		EmbedModel:     embedModel,
+		Feed:           req.AgentFeed,
 		AgentRunID:     req.AgentRunID,
 		AgentVerdict:   req.AgentVerdict,
 		AgentReason:    req.AgentReason,
