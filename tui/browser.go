@@ -15,6 +15,23 @@ type chromeOpenedMsg struct {
 	err      error
 }
 
+// openInChromeNoTrack fires an async cmd that opens a new Chrome window for url
+// without tracking the window ID — the window persists after arc exits.
+func openInChromeNoTrack(url string) tea.Cmd {
+	return func() tea.Msg {
+		script := fmt.Sprintf(`
+tell application "Google Chrome"
+  make new window
+  set URL of active tab of front window to "%s"
+end tell
+`, escapeAppleScript(url))
+		cmd := exec.Command("osascript", "-e", script)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		_ = cmd.Run()
+		return nil
+	}
+}
+
 // openInChrome fires an async cmd that opens a new Chrome window for url
 // and returns the window ID so it can be closed on exit.
 func openInChrome(url string) tea.Cmd {

@@ -1637,7 +1637,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return m.openArticleOverlay(m.selectedNavItem())
 	case msg.String() == "O":
-		return m.cmdViewArticleExternal()
+		return m.openCurrentURLNoTrack()
 	case msg.String() == "U":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
@@ -4001,6 +4001,17 @@ func (m *Model) openCurrentURL() tea.Cmd {
 		return nil
 	}
 	return openInChrome(item.url)
+}
+
+// openCurrentURLNoTrack opens the source URL of the current nav item in Chrome
+// without tracking the window — the window persists after arc exits.
+func (m *Model) openCurrentURLNoTrack() tea.Cmd {
+	item := m.selectedNavItem()
+	if item == nil || item.url == "" {
+		m.statusMsg = "✗ no URL for this article"
+		return nil
+	}
+	return openInChromeNoTrack(item.url)
 }
 
 // activeSection returns the content tab whose section is currently visible at the top
@@ -7427,7 +7438,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"f / *", "", "toggle favorite"},
 		{"o", "", "open source URL in browser"},
 		{"v", "", "view article in overlay"},
-		{"O", "", "open article in external viewer (persists after exit)"},
+		{"O", "", "open source URL in browser (window persists after exit)"},
 		{"D", "", "delete article"},
 		{"a", "", "move to attic"},
 		{"b", "", "restore from attic"},
