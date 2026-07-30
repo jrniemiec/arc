@@ -1185,8 +1185,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.setFocusPane(paneNav)
 			return nil
 		}
-		// If input is already empty and not in chat mode, move focus to nav.
-		if m.input.Value() == "" && !m.chatMode && !m.achatMode && m.focus == paneCommand {
+		// If input is already empty, move focus to nav (works in all modes including workspace chat).
+		if m.input.Value() == "" && !m.achatMode && m.focus == paneCommand {
 			m.setFocusPane(paneNav)
 			return nil
 		}
