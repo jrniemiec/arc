@@ -1566,8 +1566,6 @@ func (m *Model) exitChatMode() {
 	m.chatStreaming = false
 	m.chatStreamBuf = ""
 	m.chatSharedBuf = nil
-	m.chatLastUsage = nil
-	m.chatLastElapsed = 0
 	m.chatPendingPrompt = ""
 	m.chatArticleCount = 0
 	m.chatGroundingMode = ""

@@ -3093,12 +3093,7 @@ func (m Model) renderStatusLine() string {
 		return m.renderAskXStatusLine()
 	}
 	if m.chatMode && !m.selectionMode && m.pendingConfirmMsg == "" {
-		// On the Workspaces sub-tab with nothing active, fall through to show
-		// "Workspaces · N total" consistently with Articles/Collections tabs.
-		if m.activeTab != tabLibrary || m.navSubTab != navSubTabWorkspaces ||
-			m.chatStreaming || m.ttsPlayer.Playing() || m.statusMsg != "" {
-			return m.renderChatStatusLine()
-		}
+		return m.renderChatStatusLine()
 	}
 	if m.ttsPlayer.Playing() && m.contentTTSText != "" && !m.selectionMode {
 		rate := m.cfg.TTSRate
@@ -3139,6 +3134,10 @@ func (m Model) renderStatusLine() string {
 				return fg(t.Dimmed, fmt.Sprintf(" Feeds · %d total", len(m.agentFeeds)))
 			}
 		}
+	}
+	// Idle fallback: show last workspace chat stats if available.
+	if !m.selectionMode && (m.chatLastUsage != nil || m.chatWorkspaceStats.Turns > 0) {
+		return m.renderChatStatusLine()
 	}
 	return ""
 }
