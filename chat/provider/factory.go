@@ -17,7 +17,7 @@ func New(p config.Profile, maxOutputTokens int) (chat.Provider, error) {
 	case "openai":
 		return NewOpenAIProvider(p.Model)
 	case "ollama":
-		return NewOllamaProvider(p.Host, p.Model)
+		return NewOllamaProvider(p.Host, p.Model, p.Info.ContextWindow)
 	default:
 		return nil, fmt.Errorf("unknown provider %q", p.Provider)
 	}

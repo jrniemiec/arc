@@ -16,12 +16,13 @@ import (
 )
 
 type OllamaProvider struct {
-	host  string
-	model string
-	http  *http.Client
+	host   string
+	model  string
+	numCtx int // 0 = use Ollama default
+	http   *http.Client
 }
 
-func NewOllamaProvider(host, model string) (*OllamaProvider, error) {
+func NewOllamaProvider(host, model string, numCtx int) (*OllamaProvider, error) {
 	if host == "" {
 		host = strings.TrimSpace(os.Getenv("ARC_OLLAMA_HOST"))
 	}
@@ -33,8 +34,9 @@ func NewOllamaProvider(host, model string) (*OllamaProvider, error) {
 		return nil, errors.New("ollama model is empty")
 	}
 	return &OllamaProvider{
-		host:  host,
-		model: model,
+		host:   host,
+		model:  model,
+		numCtx: numCtx,
 		http: &http.Client{
 			Timeout: 0,
 			Transport: &http.Transport{
@@ -53,10 +55,15 @@ type ollamaMsg struct {
 	Content string `json:"content"`
 }
 
+type ollamaOptions struct {
+	NumCtx int `json:"num_ctx,omitempty"`
+}
+
 type ollamaChatReq struct {
-	Model    string      `json:"model"`
-	Messages []ollamaMsg `json:"messages"`
-	Stream   bool        `json:"stream"`
+	Model    string        `json:"model"`
+	Messages []ollamaMsg   `json:"messages"`
+	Stream   bool          `json:"stream"`
+	Options  ollamaOptions `json:"options,omitempty"`
 }
 
 type ollamaChatResp struct {
@@ -79,7 +86,11 @@ func (p *OllamaProvider) buildReq(systemPrompt string, messages []chat.Message, 
 		}
 		reqMsgs = append(reqMsgs, ollamaMsg{Role: role, Content: m.Content})
 	}
-	return json.Marshal(ollamaChatReq{Model: p.model, Messages: reqMsgs, Stream: stream})
+	req := ollamaChatReq{Model: p.model, Messages: reqMsgs, Stream: stream}
+	if p.numCtx > 0 {
+		req.Options = ollamaOptions{NumCtx: p.numCtx}
+	}
+	return json.Marshal(req)
 }
 
 func (p *OllamaProvider) Chat(ctx context.Context, systemPrompt string, messages []chat.Message) (string, chat.Usage, error) {
