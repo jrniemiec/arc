@@ -4270,7 +4270,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			{cmd: "open", desc: "no grounding — general LLM knowledge"},
 		}
 
-	case "/profile", "/model", "/chat-profile", "/chat-model", "/correction-profile", "/correction-model":
+	case "/profile", "/model", "/chat-profile", "/chat-model", "/correction-profile", "/correction-model", "/workspace-profile", "/workspace-model":
 		var items []cmdCompletion
 		for name, p := range m.cfg.Profiles {
 			items = append(items, cmdCompletion{cmd: name, desc: p.Model})
@@ -4432,6 +4432,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 	case "/chat-profile", "/chat-model":
 		return m.cmdChatProfile(arg)
+	case "/workspace-profile", "/workspace-model":
+		return m.cmdWorkspaceProfile(arg)
 	case "/correction-profile", "/correction-model":
 		return m.cmdCorrectionProfile(arg)
 	case "/log", "/logs":
@@ -4814,6 +4816,9 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 				active = m.chatProfileOverride
 			} else if m.chatLoadedProfile != "" {
 				active = m.chatLoadedProfile
+			}
+			if active == "" {
+				active = m.cfg.Chat.Profile
 			}
 			if active != "" {
 				m.statusMsg = "profile: " + active
@@ -5877,6 +5882,33 @@ func (m *Model) cmdChatProfile(arg string) tea.Cmd {
 		}
 	}
 	m.statusMsg = "article chat profile → " + arg
+	return nil
+}
+
+// cmdWorkspaceProfile shows or sets the global default profile for workspace chat sessions.
+// The change is persisted to config.jsonc so it survives restarts.
+// Individual workspaces can override this via /model within that workspace's chat.
+func (m *Model) cmdWorkspaceProfile(arg string) tea.Cmd {
+	if arg == "" {
+		name := m.cfg.Chat.Profile
+		if name == "" {
+			name = "(default oai-mini)"
+		}
+		m.statusMsg = "workspace chat profile: " + name
+		return nil
+	}
+	if _, ok := m.cfg.Profiles[arg]; !ok {
+		m.setStatusError("✗ unknown profile: " + arg)
+		return nil
+	}
+	m.cfg.Chat.Profile = arg
+	if m.cfgPath != "" {
+		if err := config.PatchNestedStringField(m.cfgPath, "chat", "profile", arg); err != nil {
+			m.setStatusError("✗ workspace chat profile set in memory but could not persist: " + err.Error())
+			return nil
+		}
+	}
+	m.statusMsg = "workspace chat profile → " + arg
 	return nil
 }
 
@@ -7477,6 +7509,7 @@ var helpGroups = []struct {
 		{"/reset", "", "reset askX context (history stays visible, removed from LLM context)"},
 		{"/no-history", "", "toggle no-history mode: send queries without prior context (prompt turns orange)"},
 		{"/profile", "[name]", "show or set LLM profile for askX (persisted to config; alias: /model)"},
+		{"/workspace-profile", "[name]", "show or set global default profile for workspace chats (persisted to config; alias: /workspace-model)"},
 		{"/chat-profile", "[name]", "show or set global article chat profile (persisted to config; alias: /chat-model)"},
 		{"/correction-profile", "[name]", "show or set correction profile for Ctrl+G (persisted to config; alias: /correction-model)"},
 		{"/arc-home", "", "show active arc data root"},
