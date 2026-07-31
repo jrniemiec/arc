@@ -4806,6 +4806,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 				active = m.chatEngine.ProfileName()
 			} else if m.chatProfileOverride != "" {
 				active = m.chatProfileOverride
+			} else if m.chatLoadedProfile != "" {
+				active = m.chatLoadedProfile
 			}
 			if active != "" {
 				m.statusMsg = "profile: " + active
