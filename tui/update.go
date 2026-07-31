@@ -5870,6 +5870,12 @@ func (m *Model) cmdChatProfile(arg string) tea.Cmd {
 		return nil
 	}
 	m.cfg.ArticleChat.Profile = arg
+	if m.cfgPath != "" {
+		if err := config.PatchNestedStringField(m.cfgPath, "article_chat", "profile", arg); err != nil {
+			m.setStatusError("✗ article chat profile set in memory but could not persist: " + err.Error())
+			return nil
+		}
+	}
 	m.statusMsg = "article chat profile → " + arg
 	return nil
 }
@@ -7471,7 +7477,7 @@ var helpGroups = []struct {
 		{"/reset", "", "reset askX context (history stays visible, removed from LLM context)"},
 		{"/no-history", "", "toggle no-history mode: send queries without prior context (prompt turns orange)"},
 		{"/profile", "[name]", "show or set LLM profile for askX (persisted to config; alias: /model)"},
-		{"/chat-profile", "[name]", "show or set global article chat profile (alias: /chat-model)"},
+		{"/chat-profile", "[name]", "show or set global article chat profile (persisted to config; alias: /chat-model)"},
 		{"/correction-profile", "[name]", "show or set correction profile for Ctrl+G (persisted to config; alias: /correction-model)"},
 		{"/arc-home", "", "show active arc data root"},
 		{"/config", "", "show resolved configuration"},
