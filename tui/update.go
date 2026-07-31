@@ -7462,7 +7462,7 @@ var helpGroups = []struct {
 		{"/AskX", "[--profile <name>] <prompt>", "global LLM query (same as Ctrl+X)"},
 		{"/reset", "", "reset askX context (history stays visible, removed from LLM context)"},
 		{"/no-history", "", "toggle no-history mode: send queries without prior context (prompt turns orange)"},
-		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
+		{"/profile", "[name]", "show or set LLM profile for askX (persisted to config; alias: /model)"},
 		{"/chat-profile", "[name]", "show or set global article chat profile (alias: /chat-model)"},
 		{"/correction-profile", "[name]", "show or set correction profile for Ctrl+G (persisted to config; alias: /correction-model)"},
 		{"/arc-home", "", "show active arc data root"},
