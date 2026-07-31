@@ -1057,6 +1057,123 @@ func PatchStringField(path, key, value string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// PatchNestedStringField updates a string field nested inside a named object in a
+// .json/.jsonc config file without disturbing comments or surrounding whitespace.
+// parent is the key of the enclosing object (e.g. "askx"), key is the field within it.
+// If the parent object doesn't exist it is injected at the root level.
+// If the parent exists but lacks the key, the key is injected into the parent object.
+func PatchNestedStringField(path, parent, key, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+
+	parentPat := regexp.MustCompile(`"` + regexp.QuoteMeta(parent) + `"\s*:\s*\{`)
+	loc := parentPat.FindIndex(data)
+	if loc == nil {
+		// Parent key doesn't exist — inject at root level before final '}'.
+		idx := bytes.LastIndexByte(data, '}')
+		if idx < 0 {
+			return fmt.Errorf("malformed config: no closing brace found")
+		}
+		inject := fmt.Sprintf(",\n  %q: {%q: %s}\n", parent, key, string(encoded))
+		out := make([]byte, 0, len(data)+len(inject))
+		out = append(out, data[:idx]...)
+		out = append(out, inject...)
+		out = append(out, data[idx:]...)
+		return os.WriteFile(path, out, 0644)
+	}
+
+	// Find the '{' that opens the parent object (last byte of the match).
+	openAt := loc[1] - 1
+	closeAt := findMatchingBrace(data, openAt)
+	if closeAt < 0 {
+		return fmt.Errorf("malformed config: unmatched brace in %q section", parent)
+	}
+
+	// Within the parent object, try to replace an existing key.
+	keyPat := regexp.MustCompile(`"` + regexp.QuoteMeta(key) + `"\s*:\s*"[^"]*"`)
+	segment := data[openAt : closeAt+1]
+	replacement := []byte(`"` + key + `": ` + string(encoded))
+
+	if keyPat.Match(segment) {
+		newSegment := keyPat.ReplaceAll(segment, replacement)
+		out := make([]byte, 0, len(data)+len(newSegment)-len(segment))
+		out = append(out, data[:openAt]...)
+		out = append(out, newSegment...)
+		out = append(out, data[closeAt+1:]...)
+		return os.WriteFile(path, out, 0644)
+	}
+
+	// Key not found in parent — inject before closing '}'.
+	inner := bytes.TrimSpace(data[openAt+1 : closeAt])
+	var inject []byte
+	if len(inner) == 0 {
+		inject = []byte("\n    " + string(replacement) + "\n  ")
+	} else {
+		inject = []byte(",\n    " + string(replacement) + "\n  ")
+	}
+	out := make([]byte, 0, len(data)+len(inject))
+	out = append(out, data[:closeAt]...)
+	out = append(out, inject...)
+	out = append(out, data[closeAt:]...)
+	return os.WriteFile(path, out, 0644)
+}
+
+// findMatchingBrace returns the index of the '}' that closes the '{' at openAt,
+// correctly skipping strings and JSONC comments.
+func findMatchingBrace(data []byte, openAt int) int {
+	depth := 0
+	i := openAt
+	for i < len(data) {
+		switch {
+		case data[i] == '"':
+			i++
+			for i < len(data) {
+				if data[i] == '\\' {
+					i += 2
+					continue
+				}
+				if data[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+		case data[i] == '/' && i+1 < len(data) && data[i+1] == '/':
+			i += 2
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+		case data[i] == '/' && i+1 < len(data) && data[i+1] == '*':
+			i += 2
+			for i+1 < len(data) {
+				if data[i] == '*' && data[i+1] == '/' {
+					i += 2
+					break
+				}
+				i++
+			}
+		case data[i] == '{':
+			depth++
+			i++
+		case data[i] == '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+			i++
+		default:
+			i++
+		}
+	}
+	return -1
+}
+
 // DefaultConfigJSON returns the full default config serialized as indented JSON.
 // Used by `arc init` to write the initial config file.
 func DefaultConfigJSON() ([]byte, error) {

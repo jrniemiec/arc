@@ -3707,16 +3707,27 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					switch cmd {
 					case "/profile", "/model":
 						if arg == "" {
-							m.statusMsg = "profile: " + m.askxPromptPrefix()
+							name := m.cfg.AskX.Profile
+							if name == "" {
+								name = "(default haiku)"
+							}
+							m.statusMsg = "askx profile: " + name
 							return nil
 						}
 						if _, ok := m.cfg.Profiles[arg]; !ok {
 							m.setStatusError("unknown profile: " + arg)
 							return nil
 						}
-						m.askxSessionProfile = arg
+						m.cfg.AskX.Profile = arg
+						m.askxSessionProfile = ""
+						if m.cfgPath != "" {
+							if err := config.PatchNestedStringField(m.cfgPath, "askx", "profile", arg); err != nil {
+								m.setStatusError("✗ askx profile set in memory but could not persist: " + err.Error())
+								return nil
+							}
+						}
 						m.syncInputPrompt()
-						m.statusMsg = "profile → " + arg
+						m.statusMsg = "askx profile → " + arg
 						return nil
 					case "/no-history":
 						m.askxNoHistory = !m.askxNoHistory
@@ -4760,6 +4771,31 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 
 	case "/profile", "/model":
+		if m.askxOpen {
+			if arg == "" {
+				name := m.cfg.AskX.Profile
+				if name == "" {
+					name = "(default haiku)"
+				}
+				m.statusMsg = "askx profile: " + name
+				return nil
+			}
+			if _, ok := m.cfg.Profiles[arg]; !ok {
+				m.statusMsg = "✗ unknown profile: " + arg
+				return nil
+			}
+			m.cfg.AskX.Profile = arg
+			m.askxSessionProfile = ""
+			if m.cfgPath != "" {
+				if err := config.PatchNestedStringField(m.cfgPath, "askx", "profile", arg); err != nil {
+					m.setStatusError("✗ askx profile set in memory but could not persist: " + err.Error())
+					return nil
+				}
+			}
+			m.syncInputPrompt()
+			m.statusMsg = "askx profile → " + arg
+			return nil
+		}
 		if !m.chatMode {
 			m.statusMsg = "✗ /profile is only available in workspace chat"
 			return nil
