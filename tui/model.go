@@ -693,7 +693,9 @@ var globalCommands = []cmdCompletion{
 	{"/config-chat-edit", "", "open workspace chat/config.jsonc in $EDITOR"},
 	{"/stats", "", "show library stats"},
 	{"/models", "", "list available LLM profiles"},
-	{"/chat-profile", "[name]", "show or set global article chat profile"},
+	{"/workspace-profile", "[name]", "show or set global default profile for workspace chats — persisted to config"},
+	{"/workspace-model", "[name]", "alias for /workspace-profile"},
+	{"/chat-profile", "[name]", "show or set global default profile for article chats — persisted to config"},
 	{"/chat-model", "[name]", "alias for /chat-profile"},
 	{"/correction-profile", "[name]", "show or set correction profile (Ctrl+G) — persisted to config"},
 	{"/correction-model", "[name]", "alias for /correction-profile"},
@@ -757,7 +759,7 @@ var feedCommands = []cmdCompletion{
 
 // askxCommands are available when the AskX pane is open.
 var askxCommands = []cmdCompletion{
-	{"/profile", "[name]", "show or switch LLM profile for this session"},
+	{"/profile", "[name]", "show or set LLM profile for askX — persisted to config"},
 	{"/model", "[name]", "alias for /profile"},
 	{"/reset", "", "reset askX context (keeps history visible, removes from LLM context)"},
 	{"/no-history", "", "toggle no-history mode: send queries without prior context"},
