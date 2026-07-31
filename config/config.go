@@ -690,7 +690,7 @@ var builtinProfiles = map[string]Profile{
 		Info: ProfileInfo{
 			CostTier:      "local",
 			CostVsValue:   "Free if you run Ollama locally. Good for experimentation and offline use. Lower quality ceiling than cloud models for dense academic content.",
-			ContextWindow: 128_000,
+			ContextWindow: 64_000,
 		},
 	},
 	"qwen": {
