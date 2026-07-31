@@ -4771,6 +4771,12 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 
 	case "/profile", "/model":
+		if m.achatMode {
+			handled, c := m.dispatchArticleChatCommand(cmd, arg)
+			if handled {
+				return c
+			}
+		}
 		if m.askxOpen {
 			if arg == "" {
 				name := m.cfg.AskX.Profile
