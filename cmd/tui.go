@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,6 +34,12 @@ func runTUI(cmd *cobra.Command) error {
 	svc := svcFrom(cmd)
 	cfg := cfgFrom(cmd)
 
+	// Resolve the config file path so the TUI can patch fields in place.
+	cfgPath := cfgFile
+	if cfgPath == "" {
+		cfgPath = filepath.Join(arcHomeDir(), "config.jsonc")
+	}
+
 	// Intercept SIGINT so the Go runtime doesn't terminate the process
 	// before p.Run() returns. Bubbletea captures ctrl+c as a keystroke
 	// in raw mode, but a race with the OS signal can kill us first.
@@ -45,7 +52,7 @@ func runTUI(cmd *cobra.Command) error {
 	}()
 	defer signal.Stop(sig)
 
-	m := arctui.New(svc, cfg, themeMode)
+	m := arctui.New(svc, cfg, cfgPath, themeMode)
 	cleanup := arctui.SetupTerminal()
 	defer cleanup()
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())

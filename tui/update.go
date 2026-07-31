@@ -1213,7 +1213,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, keys.CorrectInput):
 		if !m.correcting && strings.TrimSpace(m.input.Value()) != "" {
 			m.correcting = true
-			m.statusMsg = "correcting…"
+			corrProf := m.cfg.CorrectionProfile
+			if corrProf == "" {
+				corrProf = "oai-mini"
+			}
+			m.statusMsg = corrProf + ": correcting…"
 			m.statusErr = false
 			// Strip command prefix (e.g. "/scratch ", "//") so the LLM only sees prose.
 			text := m.input.Value()
@@ -4255,7 +4259,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			{cmd: "open", desc: "no grounding — general LLM knowledge"},
 		}
 
-	case "/profile", "/model", "/chat-profile", "/chat-model":
+	case "/profile", "/model", "/chat-profile", "/chat-model", "/correction-profile", "/correction-model":
 		var items []cmdCompletion
 		for name, p := range m.cfg.Profiles {
 			items = append(items, cmdCompletion{cmd: name, desc: p.Model})
@@ -4417,6 +4421,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return nil
 	case "/chat-profile", "/chat-model":
 		return m.cmdChatProfile(arg)
+	case "/correction-profile", "/correction-model":
+		return m.cmdCorrectionProfile(arg)
 	case "/log", "/logs":
 		return m.cmdLog()
 	case "/chats-archive":
@@ -5821,6 +5827,32 @@ func (m *Model) cmdChatProfile(arg string) tea.Cmd {
 	}
 	m.cfg.ArticleChat.Profile = arg
 	m.statusMsg = "article chat profile → " + arg
+	return nil
+}
+
+// cmdCorrectionProfile shows or sets the profile used for Ctrl+G input corrections.
+// The change is persisted to config.jsonc so it survives restarts.
+func (m *Model) cmdCorrectionProfile(arg string) tea.Cmd {
+	if arg == "" {
+		name := m.cfg.CorrectionProfile
+		if name == "" {
+			name = "(default oai-mini)"
+		}
+		m.statusMsg = "correction profile: " + name
+		return nil
+	}
+	if _, ok := m.cfg.Profiles[arg]; !ok {
+		m.setStatusError("✗ unknown profile: " + arg)
+		return nil
+	}
+	m.cfg.CorrectionProfile = arg
+	if m.cfgPath != "" {
+		if err := config.PatchStringField(m.cfgPath, "correction_profile", arg); err != nil {
+			m.setStatusError("✗ correction profile set in memory but could not persist: " + err.Error())
+			return nil
+		}
+	}
+	m.statusMsg = "correction profile → " + arg
 	return nil
 }
 
@@ -7396,6 +7428,7 @@ var helpGroups = []struct {
 		{"/no-history", "", "toggle no-history mode: send queries without prior context (prompt turns orange)"},
 		{"/profile", "[name]", "show or switch LLM profile for this chat session"},
 		{"/chat-profile", "[name]", "show or set global article chat profile (alias: /chat-model)"},
+		{"/correction-profile", "[name]", "show or set correction profile for Ctrl+G (persisted to config; alias: /correction-model)"},
 		{"/arc-home", "", "show active arc data root"},
 		{"/config", "", "show resolved configuration"},
 		{"/config-view", "", "view config.jsonc in overlay"},

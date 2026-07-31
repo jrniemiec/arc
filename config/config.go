@@ -1,10 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/jrniemiec/arc/internal/jsonc"
 )
@@ -1023,6 +1025,36 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// PatchStringField updates a single top-level string field in a .json/.jsonc
+// config file without disturbing comments or surrounding whitespace.
+// If the key already exists its value is replaced in-place; if not, the field
+// is injected before the closing "}" of the root object.
+func PatchStringField(path, key, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	// Replace existing key (handles optional whitespace around colon/value).
+	pat := regexp.MustCompile(`(?m)"` + regexp.QuoteMeta(key) + `"\s*:\s*"[^"]*"`)
+	replacement := `"` + key + `": ` + string(encoded)
+	if pat.Match(data) {
+		data = pat.ReplaceAll(data, []byte(replacement))
+	} else {
+		// Inject before the final closing brace.
+		idx := bytes.LastIndexByte(data, '}')
+		if idx < 0 {
+			return fmt.Errorf("malformed config: no closing brace found")
+		}
+		inject := []byte(",\n  " + replacement + "\n")
+		data = append(data[:idx], append(inject, data[idx:]...)...)
+	}
+	return os.WriteFile(path, data, 0644)
 }
 
 // DefaultConfigJSON returns the full default config serialized as indented JSON.

@@ -374,8 +374,9 @@ type Model struct {
 	cursorVisible bool // toggles every 4 ticks (~400 ms) for blinking cursor
 
 	// Data
-	svc *service.Service
-	cfg config.Config
+	svc     *service.Service
+	cfg     config.Config
+	cfgPath string // path to config.jsonc, for in-place field updates
 
 	// Nav pane layout
 	navWidthOverride int  // 0 = use proportional; >0 = user-set width
@@ -694,6 +695,8 @@ var globalCommands = []cmdCompletion{
 	{"/models", "", "list available LLM profiles"},
 	{"/chat-profile", "[name]", "show or set global article chat profile"},
 	{"/chat-model", "[name]", "alias for /chat-profile"},
+	{"/correction-profile", "[name]", "show or set correction profile (Ctrl+G) — persisted to config"},
+	{"/correction-model", "[name]", "alias for /correction-profile"},
 	{"/ingest", "<url>", "add a new article"},
 	{"/log", "", "open/close debug log tail"},
 	{"/agent-run", "[--dry-run] [--focus \"...\"]", "start a fresh agent feed scan"},
@@ -1810,7 +1813,7 @@ func (m Model) splitPaneStartRow() int {
 }
 
 // New creates the initial Model.
-func New(svc *service.Service, cfg config.Config, themeMode string) Model {
+func New(svc *service.Service, cfg config.Config, cfgPath, themeMode string) Model {
 	DetectTerminal()
 	ApplyTheme(themeMode)
 	AdjustThemeForTerminal()
@@ -1854,6 +1857,7 @@ func New(svc *service.Service, cfg config.Config, themeMode string) Model {
 		cursorVisible:   true,
 		svc:             svc,
 		cfg:             cfg,
+		cfgPath:         cfgPath,
 		restoredState:   restored,
 		wsFocusName:     restored.WsFocus,
 		input:           ta,
