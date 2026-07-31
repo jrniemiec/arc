@@ -710,7 +710,7 @@ var builtinProfiles = map[string]Profile{
 		Info: ProfileInfo{
 			CostTier:      "local",
 			CostVsValue:   "Free local Gemma 3 4B via Ollama. Lightweight general-purpose model for summarization and chat.",
-			ContextWindow: 128_000,
+			ContextWindow: 64_000,
 		},
 	},
 }
