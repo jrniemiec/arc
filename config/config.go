@@ -829,6 +829,8 @@ func Load(path string) (Config, error) {
 		WorkspacePopulate  WorkspacePopulateConfig   `json:"workspace_populate"`
 		LogPath            string                    `json:"log_path"`
 		LogLevel           string                    `json:"log_level"`
+		CorrectionProfile  string                    `json:"correction_profile"`
+		CorrectionPrompt   string                    `json:"correction_prompt"`
 	}
 	if err := jsonc.Unmarshal(data, &overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -1012,6 +1014,12 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.LogLevel != "" {
 		cfg.LogLevel = overlay.LogLevel
+	}
+	if overlay.CorrectionProfile != "" {
+		cfg.CorrectionProfile = overlay.CorrectionProfile
+	}
+	if overlay.CorrectionPrompt != "" {
+		cfg.CorrectionPrompt = overlay.CorrectionPrompt
 	}
 
 	return cfg, nil
