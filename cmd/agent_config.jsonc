@@ -1,0 +1,52 @@
+{
+  // ── Interest profile ──────────────────────────────────────────
+  // Describe your interests in plain language.
+  // The agent uses this to decide which articles are worth ingesting.
+  // Example: "distributed systems, LLM architectures, Go performance"
+  "interest_profile": "",
+
+  // ── Learning goals (optional) ─────────────────────────────────
+  // Topics you're actively learning, with a depth level:
+  //   "building"  — hands-on, building from scratch
+  //   "exploring" — broad survey, not building yet
+  //   "awareness" — just keeping up with developments
+  "learning_goals": [
+    // { "topic": "distributed systems", "depth": "building" },
+    // { "topic": "LLM agents", "depth": "exploring" }
+  ],
+
+  // ── Feeds ─────────────────────────────────────────────────────
+  // RSS/Atom feeds to poll. Add as many as you like.
+  // Required: "url"
+  // Optional: "name"   — human-readable label for logs
+  //           "filter" — per-feed narrowing instruction for the LLM
+  //           "tags"   — only accept items with these RSS categories
+  //           "block_domains" — reject items from these hostnames
+  //           "disabled"      — skip this feed without removing it
+  "feeds": [
+    // {
+    //   "url": "https://example.com/feed.xml",
+    //   "name": "Example Blog",
+    //   "filter": "only posts about Go and Kubernetes"
+    // },
+    // {
+    //   "url": "https://news.ycombinator.com/rss",
+    //   "name": "Hacker News",
+    //   "block_domains": ["youtube.com"]
+    // }
+  ],
+
+  // ── Agent LLM profiles ────────────────────────────────────────
+  // LLM profile for filtering articles (default: haiku — cheap and fast)
+  "filter_profile": "haiku",
+
+  // LLM profile for summarizing ingested articles (default: haiku)
+  // Override to "sonnet" for higher-quality summaries
+  "summary_profile": "haiku",
+
+  // ── Language filter (optional) ────────────────────────────────
+  // Only accept articles in these languages (ISO 639-1 codes).
+  // Empty means accept all languages.
+  // Example: ["en", "de"]
+  "languages": []
+}

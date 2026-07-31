@@ -4,14 +4,55 @@ A terminal-first personal knowledge OS.
 
 Ingest articles from URLs, RSS feeds, and local files. Generate summaries, flash summaries, and flashcards. Search everything with full-text and semantic search. Chat with your knowledge base. Play content back via TTS. All in a single, pure-Go binary.
 
+## Installation
+
+**Homebrew (macOS):**
+```bash
+brew install jrniemiec/arc/arc
+```
+
+**From source:**
+```bash
+git clone https://github.com/jrniemiec/arc.git
+cd arc
+make build              # builds to ./bin/arc
+```
+
+**Go install:**
+```bash
+go install github.com/jrniemiec/arc@latest
+```
+
+Requires Go 1.25+. Pure Go — no CGo dependencies.
+
 ## Quick start
 
 ```bash
-make build                          # build to ./bin/arc
-arc init                            # create ~/.arc
+arc init                            # create ~/.arc, write default config
 arc ingest https://example.com/article
 arc                                 # launch the TUI
 ```
+
+### First run — `arc init`
+
+`arc init` creates the data directory and writes a fully annotated default config:
+
+1. Creates `~/.arc/` and `~/.arc/articles/`
+2. Writes `~/.arc/config.jsonc` with all available LLM profiles and pricing notes
+3. Prints API key setup instructions
+4. Prompts you to review and edit the config
+5. Validates the config before finishing
+
+### Data root
+
+By default arc stores everything under `~/.arc`. Override with:
+
+| Method | Example |
+|--------|---------|
+| `--data-root` flag | `arc --data-root /data/arc list` |
+| `ARC_HOME` env var | `export ARC_HOME=/data/arc` |
+
+`--data-root` takes priority over `ARC_HOME`. There is also `--articles-root` to override just the articles location independently.
 
 ## How it works
 
@@ -83,6 +124,20 @@ arc reprocess --collection ml-papers          # reprocess a collection
 
 **Summary styles:** `study-notes` · `bullets` · `technical` · `executive`
 **Flashcard styles:** `socratic` · `cloze`
+
+### Cookie jars (paywalled sites)
+
+To ingest articles behind paywalls (Medium, Substack, etc.), export cookies from your browser and point arc at them:
+
+```jsonc
+// in ~/.arc/config.jsonc
+"cookie_jars": {
+  "medium.com": "~/.arc/cookies/medium.txt",
+  "substack.com": "~/.arc/cookies/substack.txt"
+}
+```
+
+Cookie files use the Netscape/curl cookie jar format. Browser extensions like "Get cookies.txt" can export them.
 
 ## Search
 
@@ -208,6 +263,12 @@ Three provider backends, assignable per operation via profiles:
 
 Embedding: OpenAI `text-embedding-3-small`.
 
+### Current limitations
+
+- **Semantic search** requires OpenAI (for embeddings). Without `OPENAI_API_KEY`, only full-text search (FTS5) is available.
+- **Web search tools** in chat are Anthropic-only.
+- **Ollama** does not support tool calling. Workspace chat tools (`search_articles`, `read_article`, `list_articles`) and agent feed filtering are unavailable with Ollama — chat works as a plain conversation without knowledge base access.
+
 **Profiles** map a short name to provider + model + parameters:
 
 ```json
@@ -287,24 +348,11 @@ Run `arc profiles` to list all configured profiles.
 
 ```bash
 make build            # build to ./bin/arc
-make install          # build + symlink to ~/dev/bin/arc
 make test             # run all tests
 make fmt              # format code
 make vet              # go vet
 make clean            # remove ./bin/
-make install-scripts  # symlink helper scripts to ~/dev/bin/
 ```
-
-Requires Go 1.25+. Pure Go — no CGo dependencies.
-
-### Helper scripts
-
-Installed via `make install-scripts` to `~/dev/bin/`:
-
-- `arc-digest` — generate and display agent digest
-- `arc-digest-email` — email agent digest
-- `arc-digest-review` — review agent digest interactively
-- `arc-digest-rerun` — rerun agent with corrected decisions
 
 ### System dependencies
 

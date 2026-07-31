@@ -1174,6 +1174,15 @@ func findMatchingBrace(data []byte, openAt int) int {
 	return -1
 }
 
+// BuiltinProfiles returns a copy of the built-in profile map.
+func BuiltinProfiles() map[string]Profile {
+	out := make(map[string]Profile, len(builtinProfiles))
+	for k, v := range builtinProfiles {
+		out[k] = v
+	}
+	return out
+}
+
 // DefaultConfigJSON returns the full default config serialized as indented JSON.
 // Used by `arc init` to write the initial config file.
 func DefaultConfigJSON() ([]byte, error) {

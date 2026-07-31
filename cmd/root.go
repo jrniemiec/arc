@@ -63,6 +63,7 @@ Examples:
 // Execute runs the root command.
 func Execute() {
 	rootCmd.SilenceErrors = true // we log and print errors ourselves
+	rootCmd.SilenceUsage = true  // don't dump usage on runtime errors
 	if err := rootCmd.Execute(); err != nil {
 		clog.Error("arc error", "err", err)
 		fmt.Fprintf(os.Stderr, "arc: %s\n", err)
@@ -96,6 +97,18 @@ func openLibrary(cmd *cobra.Command, args []string) error {
 	if cmd.Name() == "help" {
 		return nil
 	}
+	// Config guard: if no config file exists, suggest arc init and exit
+	// directly — logging isn't initialized yet, so returning an error
+	// would produce duplicate/noisy output.
+	cfgPath := cfgFile
+	if cfgPath == "" {
+		cfgPath = filepath.Join(arcHomeDir(), "config.jsonc")
+	}
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "arc: no config found — run 'arc init' to set up arc\n")
+		os.Exit(1)
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
