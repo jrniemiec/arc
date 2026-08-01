@@ -7,8 +7,9 @@ import (
 
 // Usage holds token counts for a single LLM call.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens       int
+	OutputTokens      int
+	WebSearchRequests int // Anthropic server-side web searches ($0.01 each)
 }
 
 // ToolDef describes a tool the model may invoke.

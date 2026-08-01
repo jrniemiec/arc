@@ -115,6 +115,9 @@ type anthropicContent struct {
 type anthropicUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	ServerToolUse *struct {
+		WebSearchRequests int `json:"web_search_requests"`
+	} `json:"server_tool_use,omitempty"`
 }
 
 type anthropicResp struct {
@@ -229,6 +232,9 @@ func (p *AnthropicProvider) Chat(ctx context.Context, systemPrompt string, messa
 		InputTokens:  out.Usage.InputTokens,
 		OutputTokens: out.Usage.OutputTokens,
 	}
+	if out.Usage.ServerToolUse != nil {
+		u.WebSearchRequests = out.Usage.ServerToolUse.WebSearchRequests
+	}
 	return out.Content[0].Text, u, nil
 }
 
@@ -280,9 +286,15 @@ func (p *AnthropicProvider) ChatStream(
 		}
 		if event.Type == "message_start" && event.Message != nil {
 			u.InputTokens = event.Message.Usage.InputTokens
+			if event.Message.Usage.ServerToolUse != nil {
+				u.WebSearchRequests = event.Message.Usage.ServerToolUse.WebSearchRequests
+			}
 		}
 		if event.Type == "message_delta" && event.Usage != nil {
 			u.OutputTokens = event.Usage.OutputTokens
+			if event.Usage.ServerToolUse != nil {
+				u.WebSearchRequests = event.Usage.ServerToolUse.WebSearchRequests
+			}
 		}
 		if event.Type == "content_block_delta" && event.Delta != nil && event.Delta.Text != "" {
 			sb.WriteString(event.Delta.Text)
@@ -465,6 +477,9 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 		case "message_start":
 			if event.Message != nil {
 				u.InputTokens = event.Message.Usage.InputTokens
+				if event.Message.Usage.ServerToolUse != nil {
+					u.WebSearchRequests = event.Message.Usage.ServerToolUse.WebSearchRequests
+				}
 			}
 
 		case "content_block_start":
@@ -551,6 +566,9 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 		case "message_delta":
 			if event.Usage != nil {
 				u.OutputTokens = event.Usage.OutputTokens
+				if event.Usage.ServerToolUse != nil {
+					u.WebSearchRequests = event.Usage.ServerToolUse.WebSearchRequests
+				}
 			}
 			if event.Delta != nil && event.Delta.StopReason != "" {
 				stopReason = event.Delta.StopReason

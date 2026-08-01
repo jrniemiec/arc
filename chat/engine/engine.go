@@ -77,8 +77,9 @@ type Engine struct {
 	streaming bool
 
 	// session accounting
-	sessionIn  int
-	sessionOut int
+	sessionIn          int
+	sessionOut         int
+	sessionWebSearches int
 }
 
 // ChatOptions controls per-call behaviour.
@@ -360,6 +361,7 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 		// Accumulate usage.
 		turnUsage.InputTokens += resp.Usage.InputTokens
 		turnUsage.OutputTokens += resp.Usage.OutputTokens
+		turnUsage.WebSearchRequests += resp.Usage.WebSearchRequests
 
 		slog.Info("chat api call",
 			"workspace", e.workspaceName,
@@ -465,7 +467,7 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 	}
 
 	// --- 5. Log turn complete ---
-	costUSD := e.cfg.CalcCost(e.profile.Model, turnUsage.InputTokens, turnUsage.OutputTokens)
+	costUSD := e.cfg.CalcCost(e.profile.Model, turnUsage.InputTokens, turnUsage.OutputTokens) + webSearchCost(turnUsage.WebSearchRequests)
 	slog.Info("chat turn complete",
 		"workspace", e.workspaceName,
 		"turn", e.turnID,
@@ -480,6 +482,7 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 	e.mu.Lock()
 	e.sessionIn += turnUsage.InputTokens
 	e.sessionOut += turnUsage.OutputTokens
+	e.sessionWebSearches += turnUsage.WebSearchRequests
 	e.mu.Unlock()
 
 	_ = finalText // response text is in history; callers read it from there
@@ -653,7 +656,7 @@ func (e *Engine) WorkspaceName() string { return e.workspaceName }
 func (e *Engine) SessionStats() (inputTokens, outputTokens int, costUSD float64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	costUSD = e.cfg.CalcCost(e.profile.Model, e.sessionIn, e.sessionOut)
+	costUSD = e.cfg.CalcCost(e.profile.Model, e.sessionIn, e.sessionOut) + webSearchCost(e.sessionWebSearches)
 	return e.sessionIn, e.sessionOut, costUSD
 }
 
@@ -697,12 +700,16 @@ func (e *Engine) buildStrategy(opts ChatOptions) strategy.ContextStrategy {
 	return strategy.New(name, budget, e.systemPrompt, e.chatCfg.MaxUserMessages)
 }
 
+// webSearchCost returns the flat fee for Anthropic server-side web searches.
+func webSearchCost(n int) float64 { return float64(n) * 0.01 }
+
 // --- Event logging ---
 
 type chatCostInfo struct {
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	CostUSD      float64 `json:"cost_usd,omitempty"`
+	InputTokens       int     `json:"input_tokens"`
+	OutputTokens      int     `json:"output_tokens"`
+	WebSearchRequests int     `json:"web_search_requests,omitempty"`
+	CostUSD           float64 `json:"cost_usd,omitempty"`
 }
 
 func (e *Engine) appendEvent(v any) {
@@ -720,7 +727,7 @@ func (e *Engine) appendEvent(v any) {
 
 // appendAPICallEvent logs a single API call within a turn.
 func (e *Engine) appendAPICallEvent(u chat.Usage, round int) {
-	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens)
+	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens) + webSearchCost(u.WebSearchRequests)
 	e.appendEvent(struct {
 		TS            time.Time    `json:"ts"`
 		Type          string       `json:"type"`
@@ -739,16 +746,17 @@ func (e *Engine) appendAPICallEvent(u chat.Usage, round int) {
 		Profile:       e.profileName,
 		Model:         e.profile.Model,
 		Cost: chatCostInfo{
-			InputTokens:  u.InputTokens,
-			OutputTokens: u.OutputTokens,
-			CostUSD:      costUSD,
+			InputTokens:       u.InputTokens,
+			OutputTokens:      u.OutputTokens,
+			WebSearchRequests: u.WebSearchRequests,
+			CostUSD:           costUSD,
 		},
 	})
 }
 
 // appendTurnCompleteEvent logs the completion of an entire turn (all rounds).
 func (e *Engine) appendTurnCompleteEvent(u chat.Usage, rounds, toolCalls int, elapsed time.Duration) {
-	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens)
+	costUSD := e.cfg.CalcCost(e.profile.Model, u.InputTokens, u.OutputTokens) + webSearchCost(u.WebSearchRequests)
 	e.appendEvent(struct {
 		TS            time.Time    `json:"ts"`
 		Type          string       `json:"type"`
@@ -770,9 +778,10 @@ func (e *Engine) appendTurnCompleteEvent(u chat.Usage, rounds, toolCalls int, el
 		Profile:       e.profileName,
 		Model:         e.profile.Model,
 		Cost: chatCostInfo{
-			InputTokens:  u.InputTokens,
-			OutputTokens: u.OutputTokens,
-			CostUSD:      costUSD,
+			InputTokens:       u.InputTokens,
+			OutputTokens:      u.OutputTokens,
+			WebSearchRequests: u.WebSearchRequests,
+			CostUSD:           costUSD,
 		},
 		ElapsedMs: elapsed.Milliseconds(),
 	})
@@ -795,11 +804,12 @@ func (e *Engine) appendToolCapEvent() {
 
 // WorkspaceStats holds lifetime aggregated chat statistics for a workspace.
 type WorkspaceStats struct {
-	Turns        int
-	ToolCalls    int
-	InputTokens  int
-	OutputTokens int
-	CostUSD      float64
+	Turns             int
+	ToolCalls         int
+	InputTokens       int
+	OutputTokens      int
+	WebSearchRequests int
+	CostUSD           float64
 }
 
 // LoadWorkspaceStats scans events.jsonl and returns lifetime chat stats for the
@@ -819,9 +829,10 @@ func LoadWorkspaceStats(eventsPath, workspaceName string) (WorkspaceStats, error
 		WorkspaceName string `json:"workspace_name"`
 		ToolCalls     int    `json:"tool_calls"`
 		Cost          struct {
-			InputTokens  int     `json:"input_tokens"`
-			OutputTokens int     `json:"output_tokens"`
-			CostUSD      float64 `json:"cost_usd"`
+			InputTokens       int     `json:"input_tokens"`
+			OutputTokens      int     `json:"output_tokens"`
+			WebSearchRequests int     `json:"web_search_requests"`
+			CostUSD           float64 `json:"cost_usd"`
 		} `json:"cost"`
 	}
 
@@ -839,6 +850,7 @@ func LoadWorkspaceStats(eventsPath, workspaceName string) (WorkspaceStats, error
 		stats.ToolCalls += ev.ToolCalls
 		stats.InputTokens += ev.Cost.InputTokens
 		stats.OutputTokens += ev.Cost.OutputTokens
+		stats.WebSearchRequests += ev.Cost.WebSearchRequests
 		stats.CostUSD += ev.Cost.CostUSD
 	}
 	return stats, nil
