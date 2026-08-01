@@ -1523,7 +1523,11 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.activeTab = (m.activeTab + 1) % tabCount
 	case key.Matches(msg, keys.NavDown), key.Matches(msg, keys.Select):
-		m.focus = paneNavSubTab
+		if m.activeTab == tabHelp {
+			m.focus = paneNav
+		} else {
+			m.focus = paneNavSubTab
+		}
 	}
 	if m.activeTab == tabHelp {
 		return m.ensureHelpLoaded()
@@ -1534,6 +1538,11 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 // handleNavSubTabKey handles keys when the nav sub-tab bar has focus.
 // ↑ goes to the top tab bar; ↓/Enter drops into the nav list; ←/→ switch sub-tabs.
 func (m *Model) handleNavSubTabKey(msg tea.KeyMsg) tea.Cmd {
+	// Help tab uses vertical list in paneNav — redirect there.
+	if m.activeTab == tabHelp {
+		m.setFocusPane(paneNav)
+		return m.handleNavKey(msg)
+	}
 	switch {
 	case key.Matches(msg, keys.NavUp):
 		m.setFocusPane(paneTabBar)
@@ -1548,6 +1557,30 @@ func (m *Model) handleNavSubTabKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
+	// Help tab: vertical list of sections — up/down cycles, Enter/→ goes to content.
+	if m.activeTab == tabHelp {
+		switch {
+		case key.Matches(msg, keys.NavUp):
+			if m.helpSubTab == 0 {
+				m.setFocusPane(paneTabBar)
+				return nil
+			}
+			m.helpSubTab--
+			return m.loadHelpSection()
+		case key.Matches(msg, keys.NavDown):
+			if m.helpSubTab < helpSubTabCount-1 {
+				m.helpSubTab++
+				return m.loadHelpSection()
+			}
+			return nil
+		case key.Matches(msg, keys.Select), key.Matches(msg, keys.ContentTabNext):
+			m.setFocusPane(paneContent)
+			return nil
+		case key.Matches(msg, keys.ContentTabPrev):
+			return nil // no left action in vertical list
+		}
+		return nil
+	}
 	// Feed-specific operations in the Agent Feeds sub-tab.
 	if m.activeTab == tabAgent && m.agentSubTab == agentSubTabFeeds && msg.Type == tea.KeyRunes {
 		switch msg.String() {
@@ -1793,9 +1826,6 @@ func (m *Model) navLeft() tea.Cmd {
 	case tabStats:
 		m.statsSubTab = (m.statsSubTab - 1 + statsSubTabCount) % statsSubTabCount
 		return nil
-	case tabHelp:
-		m.helpSubTab = (m.helpSubTab - 1 + helpSubTabCount) % helpSubTabCount
-		return m.loadHelpSection()
 	default:
 		if m.chatMode {
 			m.exitChatMode()
@@ -1816,9 +1846,6 @@ func (m *Model) navRight() tea.Cmd {
 	case tabStats:
 		m.statsSubTab = (m.statsSubTab + 1) % statsSubTabCount
 		return nil
-	case tabHelp:
-		m.helpSubTab = (m.helpSubTab + 1) % helpSubTabCount
-		return m.loadHelpSection()
 	default:
 		if m.chatMode {
 			m.exitChatMode()
@@ -1832,7 +1859,7 @@ func (m *Model) navRight() tea.Cmd {
 // so pressing UP should transfer focus to the tab bar instead.
 func (m *Model) navAtTop() bool {
 	if m.activeTab == tabHelp {
-		return true // help nav has no scrollable list
+		return m.helpSubTab == 0
 	}
 	if m.activeTab == tabAgent {
 		switch m.agentSubTab {
@@ -8140,11 +8167,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 						m.statsSubTab = sub
 					}
 				case tabHelp:
-					if sub := helpNavSubTabHitTest(msg.X); sub >= 0 {
-						m.focus = paneNav
-						m.helpSubTab = sub
-						return m.loadHelpSection()
-					}
+					// Help tab has no horizontal sub-tab bar; clicks handled via clickNavRow.
+					break
 				}
 				return nil
 			}
@@ -8222,6 +8246,14 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 // Other tabs: topBarHeight + 2 (top bar + label).
 // In Library tabs, row 0 is the scratch row.
 func (m *Model) clickNavRow(y int) tea.Cmd {
+	// Help tab: vertical list starts at topBarHeight (no sub-tab bar).
+	if m.activeTab == tabHelp {
+		if sub := helpNavRowHitTest(y); sub >= 0 {
+			m.helpSubTab = sub
+			return m.loadHelpSection()
+		}
+		return nil
+	}
 	contentStartRow := topBarHeight + 2
 	if m.activeTab == tabLibrary {
 		contentStartRow = topBarHeight + 3

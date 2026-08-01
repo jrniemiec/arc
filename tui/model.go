@@ -255,11 +255,11 @@ func (h helpSubTab) String() string {
 	case helpSubTabTutorial:
 		return "Tutorial"
 	case helpSubTabTUICmds:
-		return "TUI Cmds"
+		return "TUI Commands"
 	case helpSubTabTUIKeys:
 		return "TUI Keys"
 	case helpSubTabCLICmds:
-		return "CLI Cmds"
+		return "CLI Commands"
 	default:
 		return "?"
 	}

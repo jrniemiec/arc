@@ -577,9 +577,7 @@ func (m Model) renderNavPane(height int) []string {
 		lines = append(lines, "")
 		lines = append(lines, m.renderNavStats(height-2)...)
 	case tabHelp:
-		lines = append(lines, m.renderHelpNavSubTabBar())
-		lines = append(lines, "")
-		lines = append(lines, m.renderNavHelp(height-2)...)
+		lines = append(lines, m.renderNavHelpList(height)...)
 	default:
 		// Other tabs keep a single label header.
 		headerLabel := m.activeTab.String()
@@ -3338,89 +3336,52 @@ func (m Model) renderResourceOverlay() string {
 
 // ── Help tab ─────────────────────────────────────────────────────────────────
 
-// renderHelpNavSubTabBar renders the Readme | Tutorial | TUI Cmds | TUI Keys | CLI Cmds sub-tab row.
-func (m Model) renderHelpNavSubTabBar() string {
-	t := ActiveTheme
-	w := m.navWidth()
-	var parts []string
-	visibleWidth := 0
-	for i := helpSubTab(0); i < helpSubTabCount; i++ {
-		label := i.String()
-		text := " " + label + " "
-		if i == m.helpSubTab {
-			text = "[" + label + "]"
-		}
-		textWidth := len([]rune(text))
-		if visibleWidth+textWidth > w {
-			break
-		}
-		if i == m.helpSubTab {
-			if m.focus == paneNavSubTab {
-				parts = append(parts, fgBold(t.Accent, text))
-			} else {
-				parts = append(parts, fgBold(t.TabActive, text))
-			}
-		} else {
-			parts = append(parts, fg(t.TabInactive, text))
-		}
-		visibleWidth += textWidth
-		if int(i) < int(helpSubTabCount)-1 {
-			sep := "  "
-			if visibleWidth+len(sep) > w {
-				break
-			}
-			parts = append(parts, fg(t.Dimmed, sep))
-			visibleWidth += len(sep)
-		}
-	}
-	return strings.Join(parts, "")
+// helpNavDescriptions maps each help sub-tab to a short description.
+var helpNavDescriptions = [helpSubTabCount]string{
+	helpSubTabReadme:   "Project overview, installation, and architecture.",
+	helpSubTabTutorial: "Step-by-step getting started guide.",
+	helpSubTabTUICmds:  "All / commands available in the TUI.",
+	helpSubTabTUIKeys:  "Keyboard shortcuts and navigation.",
+	helpSubTabCLICmds:  "All arc CLI subcommands and flags.",
 }
 
-// helpNavSubTabHitTest returns the helpSubTab at column x, or -1 if none.
-func helpNavSubTabHitTest(x int) helpSubTab {
-	col := 0
-	for i := helpSubTab(0); i < helpSubTabCount; i++ {
-		label := i.String()
-		width := len(label) + 2
-		if x >= col && x < col+width {
-			return i
-		}
-		col += width
-		if int(i) < int(helpSubTabCount)-1 {
-			col += 2
-		}
-	}
-	return -1
-}
-
-// renderNavHelp renders a brief description of the active help section.
-func (m Model) renderNavHelp(maxLines int) []string {
+// renderNavHelpList renders help sections as a vertical selectable list.
+func (m Model) renderNavHelpList(maxLines int) []string {
 	t := ActiveTheme
-
-	descriptions := [helpSubTabCount]string{
-		helpSubTabReadme:   "Project overview, installation, and architecture.",
-		helpSubTabTutorial: "Step-by-step getting started guide.",
-		helpSubTabTUICmds:  "All / commands available in the TUI.",
-		helpSubTabTUIKeys:  "Keyboard shortcuts and navigation.",
-		helpSubTabCLICmds:  "All arc CLI subcommands and flags.",
-	}
 
 	var lines []string
-	desc := descriptions[m.helpSubTab]
-	lines = append(lines, fg(t.NavDimmed, "  "+desc))
-	lines = append(lines, "")
-
-	if !m.helpLoaded {
-		lines = append(lines, fg(t.NavDimmed, "  loading…"))
-	} else {
-		n := len(m.helpDocLines)
-		lines = append(lines, fg(t.NavDimmed, fmt.Sprintf("  %d lines", n)))
+	for i := helpSubTab(0); i < helpSubTabCount; i++ {
+		label := i.String()
+		if i == m.helpSubTab {
+			marker := "▶"
+			if m.focus == paneNav {
+				lines = append(lines, fgBold(t.Accent, " "+marker+" "+label))
+			} else {
+				lines = append(lines, fgBold(t.TabActive, " "+marker+" "+label))
+			}
+		} else {
+			lines = append(lines, fg(t.TabInactive, "   "+label))
+		}
 	}
+
+	// Blank line + description of active section.
+	lines = append(lines, "")
+	lines = append(lines, fg(t.NavDimmed, "  "+helpNavDescriptions[m.helpSubTab]))
 
 	for len(lines) < maxLines {
 		lines = append(lines, "")
 	}
 	return lines[:maxLines]
+}
+
+// helpNavRowHitTest returns the helpSubTab at nav row y, or -1 if none.
+// Row 0 in the nav area (y == topBarHeight) maps to the first help section.
+func helpNavRowHitTest(y int) helpSubTab {
+	row := y - topBarHeight
+	if row >= 0 && row < int(helpSubTabCount) {
+		return helpSubTab(row)
+	}
+	return -1
 }
 
 // renderContentHelp renders the scrollable help document in the content pane.
