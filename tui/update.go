@@ -19,6 +19,7 @@ import (
 
 	agentpkg "github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/internal/help"
 	"github.com/jrniemiec/arc/service"
 	"github.com/jrniemiec/arc/store"
 	storefs "github.com/jrniemiec/arc/store/fs"
@@ -633,6 +634,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statsLoaded = true
 		}
 
+	case helpLoadedMsg:
+		if msg.section == m.helpSubTab {
+			m.helpDocLines = msg.lines
+			m.helpDocScroll = 0
+			m.helpDocCursor = 0
+			m.helpLoaded = true
+		}
+
+	case helpFetchedMsg:
+		if msg.err == nil && msg.section == m.helpSubTab {
+			m.helpDocLines = strings.Split(msg.content, "\n")
+			m.helpDocScroll = 0
+		}
+
 	case chromeOpenedMsg:
 		if msg.err == nil && msg.windowID != "" {
 			m.chromeWindowIDs = append(m.chromeWindowIDs, msg.windowID)
@@ -811,6 +826,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.contentTTSText = ""
+		// Drain help paragraph-block queue.
+		if len(m.helpTTSQueue) > 0 && m.focus == paneContent && m.activeTab == tabHelp {
+			next := m.helpTTSQueue[0]
+			m.helpTTSQueue = m.helpTTSQueue[1:]
+			m.helpDocCursor = next.cursorLine
+			m.scrollHelpToCursor(m.helpViewHeight())
+			m.helpTTSText = next.text
+			text := tts.Strip(m.helpTTSText)
+			playFn := m.ttsPlayer.Play(text)
+			m.ttsGen = m.ttsPlayer.Gen()
+			m.ttsCurrentText = text
+			cmds = append(cmds, func() tea.Msg {
+				done := playFn()
+				return ttsDoneMsg{err: done.Err, gen: done.Gen}
+			})
+			break
+		}
+		m.helpTTSText = ""
 		// Drain chat paragraph-block queue.
 		if len(m.chatTTSQueue) > 0 && m.focus == paneContent && m.chatMode {
 			next := m.chatTTSQueue[0]
@@ -1190,6 +1223,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.setFocusPane(paneNav)
 			return nil
 		}
+		// Help tab: Esc goes to nav, never to command input.
+		if m.activeTab == tabHelp && (m.focus == paneContent || m.focus == paneNav || m.focus == paneNavSubTab) {
+			m.setFocusPane(paneNav)
+			return nil
+		}
 		m.input.SetValue("")
 		m.input.CursorEnd()
 		m.pastedBlob = ""
@@ -1259,6 +1297,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case tabStats:
 			m.statsLoaded = false
 			batch = append(batch, loadStats(m.svc))
+		case tabHelp:
+			m.helpLoaded = false
+			batch = append(batch, m.loadHelpSection(), m.fetchHelpSection())
 		}
 		m.statusMsg = "↻ refreshed"
 		return tea.Batch(batch...)
@@ -1483,6 +1524,9 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 		m.activeTab = (m.activeTab + 1) % tabCount
 	case key.Matches(msg, keys.NavDown), key.Matches(msg, keys.Select):
 		m.focus = paneNavSubTab
+	}
+	if m.activeTab == tabHelp {
+		return m.ensureHelpLoaded()
 	}
 	return nil
 }
@@ -1749,6 +1793,9 @@ func (m *Model) navLeft() tea.Cmd {
 	case tabStats:
 		m.statsSubTab = (m.statsSubTab - 1 + statsSubTabCount) % statsSubTabCount
 		return nil
+	case tabHelp:
+		m.helpSubTab = (m.helpSubTab - 1 + helpSubTabCount) % helpSubTabCount
+		return m.loadHelpSection()
 	default:
 		if m.chatMode {
 			m.exitChatMode()
@@ -1769,6 +1816,9 @@ func (m *Model) navRight() tea.Cmd {
 	case tabStats:
 		m.statsSubTab = (m.statsSubTab + 1) % statsSubTabCount
 		return nil
+	case tabHelp:
+		m.helpSubTab = (m.helpSubTab + 1) % helpSubTabCount
+		return m.loadHelpSection()
 	default:
 		if m.chatMode {
 			m.exitChatMode()
@@ -1781,6 +1831,9 @@ func (m *Model) navRight() tea.Cmd {
 // navAtTop returns true when the nav cursor is already at the first item,
 // so pressing UP should transfer focus to the tab bar instead.
 func (m *Model) navAtTop() bool {
+	if m.activeTab == tabHelp {
+		return true // help nav has no scrollable list
+	}
 	if m.activeTab == tabAgent {
 		switch m.agentSubTab {
 		case agentSubTabFeeds:
@@ -3193,6 +3246,9 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	if m.activeTab == tabAgent {
 		return m.handleAgentContentKey(msg)
+	}
+	if m.activeTab == tabHelp {
+		return m.handleHelpContentKey(msg)
 	}
 	total := len(m.contentLines)
 	slog.Debug("content key → generic scroll",
@@ -8014,16 +8070,32 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				m.chatAutoScroll = m.chatScroll >= maxScroll
 				return nil
 			}
-			m.contentScroll += delta
-			if m.contentScroll < 0 {
-				m.contentScroll = 0
-			}
-			maxScroll := len(m.contentLines) - m.contentViewHeight()
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.contentScroll > maxScroll {
-				m.contentScroll = maxScroll
+			if m.activeTab == tabHelp {
+				total := len(m.helpDocLines)
+				viewH := m.helpViewHeight()
+				m.helpDocCursor += delta
+				if m.helpDocCursor < 0 {
+					m.helpDocCursor = 0
+				}
+				if m.helpDocCursor >= total {
+					m.helpDocCursor = total - 1
+				}
+				if m.helpDocCursor < 0 {
+					m.helpDocCursor = 0
+				}
+				m.scrollHelpToCursor(viewH)
+			} else {
+				m.contentScroll += delta
+				if m.contentScroll < 0 {
+					m.contentScroll = 0
+				}
+				maxScroll := len(m.contentLines) - m.contentViewHeight()
+				if maxScroll < 0 {
+					maxScroll = 0
+				}
+				if m.contentScroll > maxScroll {
+					m.contentScroll = maxScroll
+				}
 			}
 			return nil
 		}
@@ -8041,6 +8113,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					m.activeTab = t
 					m.focus = paneTabBar
 					m.previewFocused = false
+					if t == tabHelp {
+						return m.ensureHelpLoaded()
+					}
 				}
 				return nil
 			}
@@ -8063,6 +8138,12 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					if sub := statsNavSubTabHitTest(msg.X); sub >= 0 {
 						m.focus = paneNav
 						m.statsSubTab = sub
+					}
+				case tabHelp:
+					if sub := helpNavSubTabHitTest(msg.X); sub >= 0 {
+						m.focus = paneNav
+						m.helpSubTab = sub
+						return m.loadHelpSection()
 					}
 				}
 				return nil
@@ -9567,6 +9648,194 @@ func (m *Model) cmdContentTTSAdjustRate(delta int) tea.Cmd {
 	m.ttsPlayer.Stop()
 
 	text := tts.Strip(m.contentTTSText)
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// ── Help tab ─────────────────────────────────────────────────────────────────
+
+// loadHelpSection loads the current help sub-tab's content.
+// Returns a Cmd that delivers a helpLoadedMsg with embedded content.
+func (m *Model) loadHelpSection() tea.Cmd {
+	sec := m.helpSubTab
+	m.helpLoaded = false
+	cacheDir := help.CacheDir(m.cfg.DataRoot)
+	return func() tea.Msg {
+		content := help.Content(help.Section(sec), cacheDir)
+		return helpLoadedMsg{
+			section: sec,
+			lines:   strings.Split(content, "\n"),
+		}
+	}
+}
+
+// fetchHelpSection fetches the latest help content from GitHub in the background.
+func (m *Model) fetchHelpSection() tea.Cmd {
+	sec := m.helpSubTab
+	cacheDir := help.CacheDir(m.cfg.DataRoot)
+	return func() tea.Msg {
+		content, err := help.FetchAndCache(help.Section(sec), cacheDir)
+		return helpFetchedMsg{
+			section: sec,
+			content: content,
+			err:     err,
+		}
+	}
+}
+
+// ensureHelpLoaded loads help content if not already loaded for the current sub-tab.
+func (m *Model) ensureHelpLoaded() tea.Cmd {
+	if m.helpLoaded {
+		return nil
+	}
+	return m.loadHelpSection()
+}
+
+// handleHelpContentKey handles cursor navigation and TTS in the help content pane.
+func (m *Model) handleHelpContentKey(msg tea.KeyMsg) tea.Cmd {
+	total := len(m.helpDocLines)
+	viewH := m.helpViewHeight()
+
+	switch {
+	case msg.Type == tea.KeyRunes && msg.String() == "g", key.Matches(msg, keys.Home):
+		m.helpDocCursor = 0
+		m.helpDocScroll = 0
+	case msg.Type == tea.KeyRunes && msg.String() == "G", key.Matches(msg, keys.End):
+		if total > 0 {
+			m.helpDocCursor = total - 1
+		}
+		m.scrollHelpToCursor(viewH)
+	case key.Matches(msg, keys.NavUp):
+		if m.helpDocCursor > 0 {
+			m.helpDocCursor--
+			m.scrollHelpToCursor(viewH)
+		}
+	case key.Matches(msg, keys.NavDown):
+		if m.helpDocCursor < total-1 {
+			m.helpDocCursor++
+			m.scrollHelpToCursor(viewH)
+		}
+	case key.Matches(msg, keys.PageUp):
+		step := viewH / 2
+		m.helpDocCursor -= step
+		if m.helpDocCursor < 0 {
+			m.helpDocCursor = 0
+		}
+		m.scrollHelpToCursor(viewH)
+	case key.Matches(msg, keys.PageDown):
+		step := viewH / 2
+		m.helpDocCursor += step
+		if m.helpDocCursor >= total {
+			m.helpDocCursor = total - 1
+		}
+		if m.helpDocCursor < 0 {
+			m.helpDocCursor = 0
+		}
+		m.scrollHelpToCursor(viewH)
+	case key.Matches(msg, keys.ContentTabPrev):
+		m.helpSubTab = (m.helpSubTab - 1 + helpSubTabCount) % helpSubTabCount
+		return m.loadHelpSection()
+	case key.Matches(msg, keys.ContentTabNext):
+		m.helpSubTab = (m.helpSubTab + 1) % helpSubTabCount
+		return m.loadHelpSection()
+	case key.Matches(msg, keys.Command):
+		m.focus = paneCommand
+		m.cursorVisible = true
+		m.input.SetValue("/")
+		m.input.CursorEnd()
+		m.updateCompletions()
+		return nil
+	case key.Matches(msg, keys.Help):
+		m.setStatusLines(m.contextKeys(false))
+		return nil
+	case msg.Type == tea.KeyRunes:
+		switch msg.String() {
+		case "s":
+			return m.cmdHelpTTS()
+		case "[":
+			return m.cmdHelpTTSAdjustRate(-20)
+		case "]":
+			return m.cmdHelpTTSAdjustRate(+20)
+		}
+	}
+	return nil
+}
+
+// helpViewHeight returns the visible line count for the help content pane.
+func (m *Model) helpViewHeight() int {
+	h := m.height - 6 - m.completionCount() - 2 // chrome + title + sep
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
+// scrollHelpToCursor adjusts helpDocScroll so that helpDocCursor is visible.
+func (m *Model) scrollHelpToCursor(viewH int) {
+	if m.helpDocCursor < m.helpDocScroll {
+		m.helpDocScroll = m.helpDocCursor
+	} else if m.helpDocCursor >= m.helpDocScroll+viewH {
+		m.helpDocScroll = m.helpDocCursor - viewH + 1
+	}
+}
+
+// cmdHelpTTS speaks help content from the cursor position.
+func (m *Model) cmdHelpTTS() tea.Cmd {
+	if m.ttsPlayer.Playing() {
+		m.stopTTS()
+		m.statusMsg = ""
+		return nil
+	}
+	if len(m.helpDocLines) == 0 {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	blocks := buildResourceTTSBlocks(m.helpDocLines, m.helpDocCursor)
+	if len(blocks) == 0 {
+		m.statusMsg = "nothing to speak"
+		return nil
+	}
+
+	m.helpTTSQueue = blocks[1:]
+	m.helpDocCursor = blocks[0].cursorLine
+	m.scrollHelpToCursor(m.helpViewHeight())
+	m.helpTTSText = blocks[0].text
+
+	text := tts.Strip(m.helpTTSText)
+	playFn := m.ttsPlayer.Play(text)
+	m.ttsGen = m.ttsPlayer.Gen()
+	m.ttsCurrentText = text
+
+	return func() tea.Msg {
+		done := playFn()
+		return ttsDoneMsg{err: done.Err, gen: done.Gen}
+	}
+}
+
+// cmdHelpTTSAdjustRate changes the TTS rate and restarts help playback.
+func (m *Model) cmdHelpTTSAdjustRate(delta int) tea.Cmd {
+	if !m.ttsPlayer.Playing() || m.helpTTSText == "" {
+		return nil
+	}
+	newRate := m.cfg.TTSRate + delta
+	if newRate < 100 {
+		newRate = 100
+	}
+	if newRate > 500 {
+		newRate = 500
+	}
+	m.cfg.TTSRate = newRate
+	m.ttsPlayer.SetRate(newRate)
+	m.ttsPlayer.Stop()
+
+	text := tts.Strip(m.helpTTSText)
 	playFn := m.ttsPlayer.Play(text)
 	m.ttsGen = m.ttsPlayer.Gen()
 	m.ttsCurrentText = text

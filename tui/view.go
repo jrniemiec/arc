@@ -576,6 +576,10 @@ func (m Model) renderNavPane(height int) []string {
 		lines = append(lines, m.renderStatsNavSubTabBar())
 		lines = append(lines, "")
 		lines = append(lines, m.renderNavStats(height-2)...)
+	case tabHelp:
+		lines = append(lines, m.renderHelpNavSubTabBar())
+		lines = append(lines, "")
+		lines = append(lines, m.renderNavHelp(height-2)...)
 	default:
 		// Other tabs keep a single label header.
 		headerLabel := m.activeTab.String()
@@ -1251,6 +1255,8 @@ func (m Model) renderContentPane(height, width int) []string {
 			lines = m.renderContentAgent(contentH, width)
 		case tabStats:
 			lines = m.renderContentStats(contentH, width)
+		case tabHelp:
+			lines = m.renderContentHelp(contentH, width)
 		default:
 			lines = m.renderContentPlaceholder(contentH, width)
 		}
@@ -3113,6 +3119,14 @@ func (m Model) renderStatusLine() string {
 		label := fmt.Sprintf("♪ article  say  %d wpm  [ slower  ] faster", rate)
 		return renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
 	}
+	if m.ttsPlayer.Playing() && m.helpTTSText != "" && !m.selectionMode {
+		rate := m.cfg.TTSRate
+		if rate <= 0 {
+			rate = 200
+		}
+		label := fmt.Sprintf("♪ help  say  %d wpm  [ slower  ] faster", rate)
+		return renderWaveIndicator(m.spinnerFrame, label, t.StreamingText, t.Dimmed)
+	}
 	if m.selectionMode {
 		return fgBold(t.Accent, truncate(" selection mode — drag to select · Cmd+C to copy · Ctrl+S or Esc to exit", m.width))
 	}
@@ -3320,4 +3334,171 @@ func (m Model) renderResourceOverlay() string {
 		out = append(out, "")
 	}
 	return strings.Join(out, "\n")
+}
+
+// ── Help tab ─────────────────────────────────────────────────────────────────
+
+// renderHelpNavSubTabBar renders the Readme | Tutorial | TUI Cmds | TUI Keys | CLI Cmds sub-tab row.
+func (m Model) renderHelpNavSubTabBar() string {
+	t := ActiveTheme
+	w := m.navWidth()
+	var parts []string
+	visibleWidth := 0
+	for i := helpSubTab(0); i < helpSubTabCount; i++ {
+		label := i.String()
+		text := " " + label + " "
+		if i == m.helpSubTab {
+			text = "[" + label + "]"
+		}
+		textWidth := len([]rune(text))
+		if visibleWidth+textWidth > w {
+			break
+		}
+		if i == m.helpSubTab {
+			if m.focus == paneNavSubTab {
+				parts = append(parts, fgBold(t.Accent, text))
+			} else {
+				parts = append(parts, fgBold(t.TabActive, text))
+			}
+		} else {
+			parts = append(parts, fg(t.TabInactive, text))
+		}
+		visibleWidth += textWidth
+		if int(i) < int(helpSubTabCount)-1 {
+			sep := "  "
+			if visibleWidth+len(sep) > w {
+				break
+			}
+			parts = append(parts, fg(t.Dimmed, sep))
+			visibleWidth += len(sep)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+// helpNavSubTabHitTest returns the helpSubTab at column x, or -1 if none.
+func helpNavSubTabHitTest(x int) helpSubTab {
+	col := 0
+	for i := helpSubTab(0); i < helpSubTabCount; i++ {
+		label := i.String()
+		width := len(label) + 2
+		if x >= col && x < col+width {
+			return i
+		}
+		col += width
+		if int(i) < int(helpSubTabCount)-1 {
+			col += 2
+		}
+	}
+	return -1
+}
+
+// renderNavHelp renders a brief description of the active help section.
+func (m Model) renderNavHelp(maxLines int) []string {
+	t := ActiveTheme
+
+	descriptions := [helpSubTabCount]string{
+		helpSubTabReadme:   "Project overview, installation, and architecture.",
+		helpSubTabTutorial: "Step-by-step getting started guide.",
+		helpSubTabTUICmds:  "All / commands available in the TUI.",
+		helpSubTabTUIKeys:  "Keyboard shortcuts and navigation.",
+		helpSubTabCLICmds:  "All arc CLI subcommands and flags.",
+	}
+
+	var lines []string
+	desc := descriptions[m.helpSubTab]
+	lines = append(lines, fg(t.NavDimmed, "  "+desc))
+	lines = append(lines, "")
+
+	if !m.helpLoaded {
+		lines = append(lines, fg(t.NavDimmed, "  loading…"))
+	} else {
+		n := len(m.helpDocLines)
+		lines = append(lines, fg(t.NavDimmed, fmt.Sprintf("  %d lines", n)))
+	}
+
+	for len(lines) < maxLines {
+		lines = append(lines, "")
+	}
+	return lines[:maxLines]
+}
+
+// renderContentHelp renders the scrollable help document in the content pane.
+// Uses the same cursor + word-wrap pattern as article content rendering.
+func (m Model) renderContentHelp(height, width int) []string {
+	t := ActiveTheme
+
+	if !m.helpLoaded {
+		lines := []string{fgBold(t.ContentTitle, m.helpSubTab.String()), "", fg(t.ContentDimmed, "Loading…")}
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return lines[:height]
+	}
+
+	// Title + separator.
+	var lines []string
+	lines = append(lines, fgBold(t.ContentTitle, m.helpSubTab.String()))
+	lines = append(lines, sep(width))
+
+	viewH := height - 2 // title + sep
+	if viewH < 1 {
+		viewH = 1
+	}
+
+	// Render from helpDocScroll with cursor marker, matching article content pattern.
+	visual := 0
+	for i := m.helpDocScroll; i < len(m.helpDocLines) && visual < viewH; i++ {
+		wrapped := wordWrap(m.helpDocLines[i], width-3)
+		if len(wrapped) == 0 {
+			wrapped = []string{""}
+		}
+		isCursor := i == m.helpDocCursor
+		for wi, wl := range wrapped {
+			if visual >= viewH {
+				break
+			}
+			if isCursor && wi == 0 {
+				markerColor := lipgloss.Color(t.InputPrompt)
+				if m.focus == paneContent {
+					markerColor = "#FFD700"
+				}
+				lines = append(lines, fgBold(markerColor, "▶ ")+fg(t.TopBarText, wl))
+			} else if isCursor {
+				lines = append(lines, "  "+fg(t.TopBarText, wl))
+			} else {
+				lines = append(lines, fg(t.Dimmed, "  ")+fg(t.ContentText, wl))
+			}
+			visual++
+		}
+	}
+
+	// Pad to full height.
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	lines = lines[:height]
+
+	// Scroll indicator — bottom-right corner.
+	if len(m.helpDocLines) > 0 && (m.helpDocScroll > 0 || m.helpDocScroll+viewH < len(m.helpDocLines)) {
+		pct := 0
+		maxScroll := len(m.helpDocLines) - 1
+		if maxScroll > 0 {
+			pct = m.helpDocCursor * 100 / maxScroll
+		}
+		indicator := fmt.Sprintf("line %d/%d (%d%%) ", m.helpDocCursor+1, len(m.helpDocLines), pct)
+		lastIdx := height - 1
+		base := lines[lastIdx]
+		baseVisible := lipgloss.Width(base)
+		indW := len([]rune(indicator))
+		if indW <= width {
+			pad := width - baseVisible - indW
+			if pad < 0 {
+				pad = 0
+			}
+			lines[lastIdx] = base + strings.Repeat(" ", pad) + fg(t.ContentDimmed, indicator)
+		}
+	}
+
+	return lines[:height]
 }

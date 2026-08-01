@@ -61,6 +61,7 @@ const (
 	tabLibrary tab = iota
 	tabAgent
 	tabStats
+	tabHelp
 	tabCount // sentinel — number of tabs
 )
 
@@ -72,6 +73,8 @@ func (t tab) String() string {
 		return "Agent"
 	case tabStats:
 		return "Stats"
+	case tabHelp:
+		return "Help"
 	default:
 		return "?"
 	}
@@ -232,6 +235,38 @@ func (s statsSubTab) String() string {
 		return "?"
 	}
 }
+
+// helpSubTab identifies the active sub-tab inside the Help nav pane.
+type helpSubTab int
+
+const (
+	helpSubTabReadme    helpSubTab = iota
+	helpSubTabTutorial
+	helpSubTabTUICmds
+	helpSubTabTUIKeys
+	helpSubTabCLICmds
+	helpSubTabCount
+)
+
+func (h helpSubTab) String() string {
+	switch h {
+	case helpSubTabReadme:
+		return "Readme"
+	case helpSubTabTutorial:
+		return "Tutorial"
+	case helpSubTabTUICmds:
+		return "TUI Cmds"
+	case helpSubTabTUIKeys:
+		return "TUI Keys"
+	case helpSubTabCLICmds:
+		return "CLI Cmds"
+	default:
+		return "?"
+	}
+}
+
+// helpSubTabToSection maps helpSubTab to help.Section.
+func helpSubTabToSection(h helpSubTab) int { return int(h) }
 
 // navRowKind distinguishes collection header rows from article rows.
 type navRowKind int
@@ -464,6 +499,15 @@ type Model struct {
 	// Stats
 	stats       service.Stats
 	statsLoaded bool
+
+	// Help
+	helpSubTab     helpSubTab
+	helpDocLines   []string // content lines for current section
+	helpDocScroll  int      // scroll offset into helpDocLines
+	helpDocCursor  int      // highlighted line index (for TTS cursor)
+	helpLoaded     bool     // true after initial content load
+	helpTTSText    string             // text of the help block currently playing
+	helpTTSQueue   []resourceTTSBlock // paragraph blocks still to be spoken
 
 	// Browser
 	chromeWindowIDs []string // IDs of Chrome windows opened via 'o', closed on exit
@@ -895,6 +939,17 @@ type achatScanDoneMsg struct {
 type statsLoadedMsg struct {
 	stats service.Stats
 	err   string
+}
+
+type helpLoadedMsg struct {
+	section helpSubTab
+	lines   []string
+}
+
+type helpFetchedMsg struct {
+	section helpSubTab
+	content string
+	err     error
 }
 
 type contentLoadedMsg struct {
@@ -1687,6 +1742,8 @@ func (m *Model) stopTTS() {
 	m.resourceTTSQueue = nil
 	m.contentTTSText = ""
 	m.contentTTSQueue = nil
+	m.helpTTSText = ""
+	m.helpTTSQueue = nil
 	m.chatTTSText = ""
 	m.chatTTSQueue = nil
 	m.chatTTSCursor = 0
