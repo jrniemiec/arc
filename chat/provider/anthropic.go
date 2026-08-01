@@ -89,9 +89,11 @@ type anthropicToolReq struct {
 }
 
 type anthropicToolDef struct {
+	Type        string          `json:"type,omitempty"`
 	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	MaxUses     int             `json:"max_uses,omitempty"`
 }
 
 // anthropicContentBlock is used for building mixed-content messages.
@@ -300,6 +302,8 @@ func (p *AnthropicProvider) ChatStream(
 // buildToolMessages translates internal Message types to the Anthropic wire
 // format. tool-result messages become role:"user" with a tool_result content
 // block. Assistant messages with ToolCalls become mixed content (text + tool_use).
+// Assistant messages with RawContent (containing server tool blocks like web
+// search results with encrypted_content) are passed through verbatim.
 func buildToolMessages(messages []chat.Message) ([]anthropicRichMsg, error) {
 	out := make([]anthropicRichMsg, 0, len(messages))
 	for _, m := range messages {
@@ -318,6 +322,11 @@ func buildToolMessages(messages []chat.Message) ([]anthropicRichMsg, error) {
 				return nil, err
 			}
 			out = append(out, anthropicRichMsg{Role: "user", Content: content})
+
+		case m.Role == "assistant" && len(m.RawContent) > 0:
+			// RawContent preserves server tool blocks (web search results
+			// with encrypted_content) that must be sent back verbatim.
+			out = append(out, anthropicRichMsg{Role: "assistant", Content: m.RawContent})
 
 		case m.Role == "assistant" && len(m.ToolCalls) > 0:
 			blocks := make([]anthropicContentBlock, 0, 1+len(m.ToolCalls))
@@ -376,14 +385,22 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 		systemBlock, _ = json.Marshal(sb)
 	}
 
-	// Translate tool definitions.
+	// Translate tool definitions. Server tools (Type != "") use a
+	// different wire shape: type + name, no description/input_schema.
 	var apiTools []anthropicToolDef
 	for _, t := range tools {
-		apiTools = append(apiTools, anthropicToolDef{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		})
+		if t.Type != "" {
+			apiTools = append(apiTools, anthropicToolDef{
+				Type: t.Type,
+				Name: t.Name,
+			})
+		} else {
+			apiTools = append(apiTools, anthropicToolDef{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			})
+		}
 	}
 
 	r := anthropicToolReq{
@@ -414,11 +431,12 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 		return chat.StreamResponse{}, err
 	}
 
-	// Parse SSE stream, handling both text and tool_use blocks.
+	// Parse SSE stream, handling text, tool_use, and server tool blocks.
 	var (
 		contentBlocks []chat.ContentBlock
 		currentBlock  chat.ContentBlock
-		inputBuf      strings.Builder // accumulates partial JSON for tool_use input
+		inputBuf      strings.Builder    // accumulates partial JSON for tool_use/server_tool_use input
+		rawCB         json.RawMessage    // raw content_block JSON for server tool blocks
 		u             chat.Usage
 		stopReason    string
 	)
@@ -450,7 +468,12 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 			}
 
 		case "content_block_start":
-			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
+			if event.ContentBlock == nil {
+				currentBlock = chat.ContentBlock{Type: "text"}
+				continue
+			}
+			switch event.ContentBlock.Type {
+			case "tool_use":
 				currentBlock = chat.ContentBlock{
 					Type:        "tool_use",
 					ToolUseID:   event.ContentBlock.ID,
@@ -460,7 +483,31 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 				if onToolStart != nil {
 					_ = onToolStart(event.ContentBlock.Name)
 				}
-			} else {
+
+			case "server_tool_use":
+				currentBlock = chat.ContentBlock{
+					Type:        "server_tool_use",
+					ToolUseID:   event.ContentBlock.ID,
+					ToolUseName: event.ContentBlock.Name,
+				}
+				inputBuf.Reset()
+				if onToolStart != nil {
+					_ = onToolStart(event.ContentBlock.Name)
+				}
+
+			case "web_search_tool_result":
+				currentBlock = chat.ContentBlock{
+					Type: "web_search_tool_result",
+				}
+				// Capture the raw content_block JSON — it contains
+				// encrypted_content that must be passed back verbatim.
+				var raw struct {
+					CB json.RawMessage `json:"content_block"`
+				}
+				_ = json.Unmarshal([]byte(data), &raw)
+				rawCB = raw.CB
+
+			default:
 				currentBlock = chat.ContentBlock{Type: "text"}
 			}
 
@@ -481,8 +528,22 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 			}
 
 		case "content_block_stop":
-			if currentBlock.Type == "tool_use" {
+			switch currentBlock.Type {
+			case "tool_use":
 				currentBlock.ToolUseInput = json.RawMessage(inputBuf.String())
+
+			case "server_tool_use":
+				currentBlock.ToolUseInput = json.RawMessage(inputBuf.String())
+				// Reconstruct the raw block for multi-turn replay.
+				currentBlock.Raw = buildServerToolUseRaw(
+					currentBlock.ToolUseID,
+					currentBlock.ToolUseName,
+					currentBlock.ToolUseInput,
+				)
+
+			case "web_search_tool_result":
+				currentBlock.Raw = rawCB
+				rawCB = nil
 			}
 			contentBlocks = append(contentBlocks, currentBlock)
 			currentBlock = chat.ContentBlock{}
@@ -505,6 +566,24 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 		StopReason: stopReason,
 		Usage:      u,
 	}, nil
+}
+
+// buildServerToolUseRaw reconstructs a server_tool_use content block as raw
+// JSON for multi-turn replay.
+func buildServerToolUseRaw(id, name string, input json.RawMessage) json.RawMessage {
+	block := struct {
+		Type  string          `json:"type"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}{
+		Type:  "server_tool_use",
+		ID:    id,
+		Name:  name,
+		Input: input,
+	}
+	data, _ := json.Marshal(block)
+	return data
 }
 
 type cacheCtrl struct {

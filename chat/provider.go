@@ -12,24 +12,32 @@ type Usage struct {
 }
 
 // ToolDef describes a tool the model may invoke.
+// For Anthropic server tools (e.g. web_search), Type is set and
+// Description/InputSchema are empty — the server handles execution.
 type ToolDef struct {
+	Type        string          `json:"type,omitempty"`
 	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 }
 
 // ContentBlock represents one block in a model response.
-// Either Text or ToolUse fields are populated, never both.
+// Type is "text", "tool_use", "server_tool_use", or "web_search_tool_result".
 type ContentBlock struct {
-	Type string // "text" or "tool_use"
+	Type string
 
 	// Text block.
 	Text string
 
-	// Tool-use block.
+	// Tool-use block (client-side tool_use).
 	ToolUseID    string
 	ToolUseName  string
 	ToolUseInput json.RawMessage
+
+	// Raw preserves the original JSON block for server tool content
+	// (server_tool_use, web_search_tool_result) that must be passed back
+	// verbatim on subsequent turns (e.g. encrypted_content).
+	Raw json.RawMessage
 }
 
 // StreamResponse is the complete result of a streamed tool-aware request.

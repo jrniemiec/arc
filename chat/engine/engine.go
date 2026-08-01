@@ -370,9 +370,10 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 			"stop_reason", resp.StopReason)
 		e.appendAPICallEvent(resp.Usage, round)
 
-		// --- 3b. Extract text and tool calls ---
+		// --- 3b. Extract text, tool calls, and server tool blocks ---
 		var textParts []string
 		var toolCalls []chat.ToolCall
+		var hasServerToolBlocks bool
 		for _, block := range resp.Content {
 			switch block.Type {
 			case "text":
@@ -383,6 +384,8 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 					Name:  block.ToolUseName,
 					Input: block.ToolUseInput,
 				})
+			case "server_tool_use", "web_search_tool_result":
+				hasServerToolBlocks = true
 			}
 		}
 		assistantText := strings.Join(textParts, "")
@@ -391,12 +394,19 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 		if resp.StopReason == "end_turn" || len(toolCalls) == 0 {
 			finalText = assistantText
 			now := time.Now()
-			auditMsgs = append(auditMsgs, chat.Message{
+			msg := chat.Message{
 				Role:    chat.RoleAssistant,
 				Content: assistantText,
 				Profile: e.profileName,
 				Time:    now,
-			})
+			}
+			// If the response contains server tool blocks (web search),
+			// build RawContent so they can be replayed on subsequent turns
+			// (required for encrypted_content in search results).
+			if hasServerToolBlocks {
+				msg.RawContent = buildRawContent(resp.Content)
+			}
+			auditMsgs = append(auditMsgs, msg)
 			break
 		}
 
@@ -871,4 +881,41 @@ func LoadAskXStats(eventsPath string) (WorkspaceStats, error) {
 		stats.CostUSD += ev.Cost.CostUSD
 	}
 	return stats, nil
+}
+
+// buildRawContent constructs a JSON content-block array from the response
+// blocks, suitable for sending back to Anthropic on subsequent turns.
+// Text and client tool_use blocks are reconstructed; server tool blocks
+// (server_tool_use, web_search_tool_result) use their preserved Raw JSON.
+func buildRawContent(blocks []chat.ContentBlock) json.RawMessage {
+	var rawBlocks []json.RawMessage
+	for _, b := range blocks {
+		switch b.Type {
+		case "server_tool_use", "web_search_tool_result":
+			if len(b.Raw) > 0 {
+				rawBlocks = append(rawBlocks, b.Raw)
+			}
+		case "text":
+			if b.Text != "" {
+				raw, _ := json.Marshal(struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}{Type: "text", Text: b.Text})
+				rawBlocks = append(rawBlocks, raw)
+			}
+		case "tool_use":
+			raw, _ := json.Marshal(struct {
+				Type  string          `json:"type"`
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			}{Type: "tool_use", ID: b.ToolUseID, Name: b.ToolUseName, Input: b.ToolUseInput})
+			rawBlocks = append(rawBlocks, raw)
+		}
+	}
+	if len(rawBlocks) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(rawBlocks)
+	return data
 }

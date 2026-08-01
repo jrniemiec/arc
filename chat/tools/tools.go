@@ -70,13 +70,22 @@ var searchLibraryDef = chat.ToolDef{
 	}),
 }
 
+// webSearchDef is the Anthropic server-side web search tool.
+// Unlike client tools, it has a Type and no Description/InputSchema —
+// the server handles execution and returns results inline.
+var webSearchDef = chat.ToolDef{
+	Type: "web_search_20250305",
+	Name: "web_search",
+}
+
 // ToolSet returns tool definitions filtered by grounding mode.
-// web_search is not a custom tool — it uses Anthropic's native server-side
-// web search, enabled via a feature flag on the request.
 func ToolSet(mode string) []chat.ToolDef {
 	tools := []chat.ToolDef{readArticleDef, searchWorkspaceDef}
 	if mode == prompt.ModeCorpusFirst || mode == prompt.ModeOpen {
 		tools = append(tools, searchLibraryDef)
+	}
+	if mode == prompt.ModeOpen {
+		tools = append(tools, webSearchDef)
 	}
 	return tools
 }

@@ -31,6 +31,13 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // assistant only: tool invocations requested
 	ToolCallID string     `json:"tool_call_id,omitempty"` // tool-result only: correlates to ToolCall.ID
 
+	// RawContent stores the complete Anthropic content block array for
+	// assistant messages that contain server tool results (e.g. web search).
+	// When set, the provider uses it directly instead of reconstructing
+	// from Content/ToolCalls — required for multi-turn replay of
+	// encrypted_content in web search results.
+	RawContent json.RawMessage `json:"raw_content,omitempty"`
+
 	// Commented messages are kept in history but excluded from LLM context.
 	Commented bool `json:"commented,omitempty"`
 }
