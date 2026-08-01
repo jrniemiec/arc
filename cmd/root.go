@@ -60,6 +60,11 @@ Examples:
 	},
 }
 
+// SetVersion sets the version string displayed by --version.
+func SetVersion(v string) {
+	rootCmd.Version = v
+}
+
 // Execute runs the root command.
 func Execute() {
 	rootCmd.SilenceErrors = true // we log and print errors ourselves

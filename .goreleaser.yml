@@ -1,0 +1,48 @@
+version: 2
+
+project_name: arc
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: arc
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: jrniemiec
+    name: arc
+
+brews:
+  - name: arc
+    repository:
+      owner: jrniemiec
+      name: homebrew-arc
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/jrniemiec/arc"
+    description: "Terminal-first personal knowledge OS"
+    license: "MIT"
+    install: |
+      bin.install "arc"
+    test: |
+      system "#{bin}/arc", "--version"
