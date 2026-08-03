@@ -1,18 +1,38 @@
 # arc
 
-Your personal knowledge engine.
+> Terminal-first personal knowledge OS. Filesystem-native, LLM-agnostic, keyboard-driven.
 
-Arc is a personal knowledge OS that runs entirely from your terminal. Feed it articles, documents, PDFs, books — anything in digital form — and it distills them into summaries, audio-ready flash briefs, and flashcards. Search everything with full-text and semantic search. Chat with your knowledge using any LLM. Listen to it on the go with text-to-speech. Single install, keyboard-driven.
+`arc` ingests articles, PDFs, RSS feeds, and local files, and distills each
+into a summary and a **flash** — a two-to-three sentence synthesis derived
+from the summary, useful for quick triage, RAG context, and audio playback. Content is indexed for hybrid
+full-text and semantic search and can be queried conversationally through
+OpenAI, Anthropic, or local Ollama models. Single binary, no runtime
+dependencies.
 
-**A real UI, not just a CLI.** The primary interface is a full terminal UI — browse your library, read articles, manage collections, chat with workspaces, run searches, and play audio, all without leaving the terminal. A complete CLI sits underneath for scripting and automation.
+**TUI-first, CLI-complete.** The primary interface is a full terminal UI —
+library browsing, reading, collection management, search, workspace chat,
+and audio playback. A complete CLI sits underneath for scripting and
+automation; both are backed by the same service layer.
 
-**Articles, collections, workspaces.** Articles are the atomic unit — captured content with summaries, flashcards, and metadata. Collections group them by topic. Workspaces are research environments: attach articles and resources, then have a persistent conversation grounded in your curated material.
+**Articles, collections, workspaces.** Articles are the atomic unit:
+captured content plus summaries, flashes, and metadata. Collections group
+articles by topic; an article may belong to several. Workspaces are research
+environments — attached articles and resources, a persistent conversation
+grounded in that material, and generated outcome documents.
 
-**An agent that reads for you.** Configure RSS/Atom feeds and an interest profile, and an autonomous agent filters and ingests the most relevant new content automatically. Your library grows while you sleep.
+**Autonomous ingestion.** A feed agent polls configured RSS/Atom sources,
+filters items against an interest profile via LLM, and ingests approved
+articles unattended. Filter decisions are logged and can be overridden and
+re-run.
 
-**Chat with your knowledge, your way.** Use OpenAI, Anthropic, or local Ollama models — choose the right model for each task. Three chat modes (quick queries, per-article deep dives, workspace conversations) and three grounding modes: pure RAG from your articles only, hybrid with LLM knowledge filling gaps, or fully open with live internet search.
+**Three chat modes, three grounding modes.** Single-shot queries,
+per-article context, or multi-turn workspace conversations with tool use.
+Grounding is selectable per workspace: `corpus-only` (pure RAG),
+`corpus-first` (hybrid), or `open` (with internet search).
 
-**Everything is configurable.** Profiles, grounding modes, context strategies, summary styles, TTS voices — all accessible from both the TUI and the CLI.
+**Configurable per operation.** Profiles, grounding modes, context
+strategies, summary styles, and TTS settings are set in `config.jsonc` and
+reachable from both the TUI and the CLI.
 
 ---
 
