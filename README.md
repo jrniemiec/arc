@@ -44,6 +44,9 @@ derived artifacts, rebuildable at any time with `arc reindex`. A corrupted
 index, a failed schema change, or a switch of embedding provider costs
 nothing but the time to rebuild — and the library remains readable with
 `cat`, `grep`, and `rg` whether or not arc is installed.
+Original source is retained alongside extracted text, so `arc open` can hand
+any article to its native viewer — browser, PDF reader, or `$EDITOR` — when
+the extraction isn't enough.
 
 **Models are assigned per operation, not per application.** Named profiles
 map to a provider, model, and parameters; each pipeline stage, chat mode,
@@ -117,6 +120,7 @@ than an afterthought.
 - **Text-to-speech** — macOS `say(1)`, flash summaries optimized for audio, content preprocessed
 - **MCP server** — expose your knowledge base to Claude Desktop or Claude Code
 - **Batch ingestion** — ingest from a file of URLs; duplicates skipped, errors logged per-item
+- **Native viewer dispatch** — `arc open` routes by content type: HTML to the browser, PDF to the system PDF viewer, text and Markdown to `$EDITOR`; originals are retained alongside extracted text
 - **Cookie jars** — Netscape-format cookie files for paywalled sites (Medium, Substack, etc.)
 - **Cost tracking** — every LLM call logged with operation, model, tokens, and USD cost
 - **Input correction** — `Ctrl+G` sends chat input to an LLM for spell/grammar correction
