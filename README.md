@@ -3,7 +3,7 @@
 > Terminal-first personal knowledge OS. Filesystem-native, LLM-agnostic, keyboard-driven.
 
 `arc` ingests articles, PDFs, RSS feeds, and local files, and distills each
-into a summary and a **flash** — a two-to-three sentence synthesis derived
+into a summary and a **flash** — a 3-5 sentence synthesis derived
 from the summary, useful for quick triage, RAG context, and audio playback. Content is indexed for hybrid
 full-text and semantic search and can be queried conversationally through
 OpenAI, Anthropic, or local Ollama models. Single binary, no runtime
@@ -80,6 +80,7 @@ than an afterthought.
 
 ## Contents
 
+- [Design](#design)
 - [Features](#features)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -624,7 +625,7 @@ Press `Ctrl+G` in any chat input to fix typos and grammar via LLM. Configure in 
 | `f` | Favorite |
 | `s` | Speak (TTS) |
 | `c` | Chat (article chat) |
-| `o` | Open source URL in browser |
+| `o` | Open original source in native viewer |
 | `v` | View in terminal |
 | `Ctrl+G` | Fix input typos via LLM |
 | `?` | Show all key bindings |
@@ -661,8 +662,6 @@ macOS text-to-speech via `say(1)`. Content is preprocessed: markdown stripped, c
 ```jsonc
 { "tts_voice": "Samantha", "tts_rate": 200 }
 ```
-
-Flash summaries are specifically optimized for audio playback — 3-5 sentences, no jargon, no URLs.
 
 In the TUI, press `s` on any article to hear its flash summary.
 
@@ -798,7 +797,7 @@ arc search <query>            hybrid search (FTS5 + vector)
   --limit <n>                   max results (default: 20)
   --no-semantic                 FTS5 keyword search only
 
-arc open <slug>               open article source in browser/viewer
+arc open <slug>               open original source in native viewer (browser, PDF reader, or $EDITOR)
 
 arc delete [slug]             delete article
   --agent-run <id>              delete all articles from a specific agent run
