@@ -1,8 +1,18 @@
 # arc
 
-A terminal-first personal knowledge OS.
+Your personal knowledge engine.
 
-Ingest articles from URLs, RSS feeds, and local files. Generate summaries, flash summaries, and flashcards. Search everything with full-text and semantic search. Chat with your knowledge base. Play content back via TTS. All in a single, pure-Go binary.
+Arc is a personal knowledge OS that runs entirely from your terminal. Feed it articles, documents, PDFs, books — anything in digital form — and it distills them into summaries, audio-ready flash briefs, and flashcards. Search everything with full-text and semantic search. Chat with your knowledge using any LLM. Listen to it on the go with text-to-speech. Single install, keyboard-driven.
+
+**A real UI, not just a CLI.** The primary interface is a full terminal UI — browse your library, read articles, manage collections, chat with workspaces, run searches, and play audio, all without leaving the terminal. A complete CLI sits underneath for scripting and automation.
+
+**Articles, collections, workspaces.** Articles are the atomic unit — captured content with summaries, flashcards, and metadata. Collections group them by topic. Workspaces are research environments: attach articles and resources, then have a persistent conversation grounded in your curated material.
+
+**An agent that reads for you.** Configure RSS/Atom feeds and an interest profile, and an autonomous agent filters and ingests the most relevant new content automatically. Your library grows while you sleep.
+
+**Chat with your knowledge, your way.** Use OpenAI, Anthropic, or local Ollama models — choose the right model for each task. Three chat modes (quick queries, per-article deep dives, workspace conversations) and three grounding modes: pure RAG from your articles only, hybrid with LLM knowledge filling gaps, or fully open with live internet search.
+
+**Everything is configurable.** Profiles, grounding modes, context strategies, summary styles, TTS voices — all accessible from both the TUI and the CLI.
 
 ## Installation
 
@@ -101,29 +111,6 @@ arc agent run --dry-run             # preview what would be ingested
 arc agent digest                    # readable summary of what was ingested
 ```
 
-**7. Batch ingestion**
-
-```bash
-# ingest many URLs at once from a file (one per line)
-arc ingest --file urls.txt
-```
-
-**8. Listen to your articles**
-
-In the TUI, press `s` on any article to hear its flash summary via macOS TTS. Configure voice and rate in `config.jsonc`:
-
-```json
-{ "tts_voice": "Samantha", "tts_rate": 200 }
-```
-
-**9. Launch the TUI**
-
-```bash
-arc                                 # TUI is the default when interactive
-```
-
-The TUI is the primary interface — browse articles, manage collections and workspaces, chat, search, and play audio, all keyboard-driven.
-
 ### Data root
 
 By default arc stores everything under `~/.arc`. Override with:
@@ -205,17 +192,6 @@ arc reprocess --collection ml-papers          # reprocess a collection
 arc reprocess --missing                       # only articles missing variants
 ```
 
-### Batch ingestion
-
-Ingest many URLs at once from a file (one URL or file path per line, `#` comments and blank lines ignored):
-
-```bash
-arc ingest --file urls.txt
-arc cat urls.txt | arc ingest --file -        # or pipe from stdin
-```
-
-Duplicates are automatically skipped. Errors are logged per-item without aborting the batch. Slugs are printed to stdout; progress to stderr.
-
 ### Supported sources
 
 - **URLs** — with cookie jar support for paywalled sites
@@ -227,21 +203,7 @@ Duplicates are automatically skipped. Errors are logged per-item without abortin
 **Summary styles:** `study-notes` · `bullets` · `technical` · `executive`
 **Flashcard styles:** `socratic` · `cloze`
 
-Arc detects incomplete or paywalled content (teasers) and flags them for review.
-
-### Cookie jars (paywalled sites)
-
-To ingest articles behind paywalls (Medium, Substack, etc.), export cookies from your browser and point arc at them:
-
-```jsonc
-// in ~/.arc/config.jsonc
-"cookie_jars": {
-  "medium.com": "~/.arc/cookies/medium.txt",
-  "substack.com": "~/.arc/cookies/substack.txt"
-}
-```
-
-Cookie files use the Netscape/curl cookie jar format. Browser extensions like "Get cookies.txt" can export them.
+Arc detects incomplete or paywalled content (teasers) and flags them for review. Cookie jars can be configured for paywalled sites (Medium, Substack, etc.) — see the Configuration section.
 
 ## Search
 
@@ -261,35 +223,18 @@ Results show source badges: `[fts]`, `[vector]`, `[both]`.
 Collections group articles by topic. An article can belong to many collections.
 
 ```bash
-arc collections list                           # list all collections
-arc collections list "ml*"                     # filter by pattern
 arc collections create ml-papers               # create a collection
 arc collections add <slug> ml-papers           # add an article
-arc collections remove <slug> ml-papers        # remove an article
+arc collections list                           # list all collections
 arc collections show ml-papers                 # show collection details
-arc collections read ml-papers                 # read articles in a collection
-arc collections search "transformers"          # search within a collection
-arc collections rename ml-papers ml-research   # rename a collection
 arc collections delete ml-papers               # delete (keeps articles)
-arc collections delete ml-papers --purge       # delete collection and its articles
-```
 
-### Descriptions
-
-```bash
-arc collections describe ml-papers "Papers on machine learning"
-arc collections describe-all                   # bulk edit descriptions
-arc collections generate-description ml-papers # LLM-generated description
-arc collections generate-description-all       # generate for all collections
-```
-
-### LLM-assisted organization
-
-```bash
+# LLM-assisted organization
 arc collections suggest --apply                # auto-create collections from your library
 arc collections assign --apply                 # auto-assign uncollected articles
-arc collections assign --uncollected-fresh     # assign only recently ingested articles
 ```
+
+Additional subcommands: `remove`, `read`, `search`, `rename`, `describe`, `generate-description`. Run `arc collections --help` for the full list.
 
 ## Workspaces
 
@@ -331,29 +276,7 @@ arc workspace chat "attention research" --clear          # clear history first
 arc workspace chat "attention research" --strategy summarize  # compress old turns
 ```
 
-### Workspace chat configuration
-
-```bash
-arc workspace chat-config "attention research" --profile opus
-arc workspace chat-config "attention research" --grounding-mode corpus-only
-arc workspace chat-config "attention research" --strategy token-budget --context-limit 8000
-arc workspace chat-config "attention research" --max-output-tokens 4096
-arc workspace chat-config "attention research" --list-modes  # show available grounding modes
-```
-
-### Custom system prompt
-
-```bash
-arc workspace system "attention research" "You are a research assistant specializing in NLP."
-arc workspace system "attention research"   # print current prompt
-```
-
-### Outcomes
-
-```bash
-arc workspace outcomes "attention research"              # list generated outputs
-arc workspace outcomes "attention research" --read notes.md  # read a specific outcome
-```
+Additional subcommands: `chat-config`, `system`, `outcomes`, `describe`, `rename`, `archive`. Run `arc workspace --help` for the full list.
 
 ## Chat
 
@@ -651,211 +574,10 @@ make dist VERSION=x.y.z  # build release tarballs
 
 ## CLI reference
 
-### Ingestion
+Every command supports `--help` for full flag documentation. For a complete reference:
 
-```
-arc ingest <url|file|->       full ingestion pipeline
-  --title <text>                override article title
-  --collection <slug>           add to collection on ingest
-  --summary-style <style>       summary style (study-notes, bullets, technical, executive)
-  --profile <name>              LLM profile override
-  --flashcards / --no-flashcards  enable/disable flashcard generation
-  --no-embed                    skip vector embedding
-  --file <path|->               batch mode: file with one URL per line
-  --show-summary                print summary after ingest
-  --show-flash                  print flash summary after ingest
-  --dry-run                     extract only, no writes
-  --force                       re-ingest even if already exists
-  -q, --quiet                   suppress progress output
-
-arc extract <url|file|->      extract plain text (stdout)
-arc summarize [slug]          generate summary
-  --style <style>               summary style
-  --profile <name>              LLM profile
-  --write                       write to article directory
-  --json                        JSON output
-
-arc flash [slug]              generate flash summary
-  --profile <name>              LLM profile
-  --write                       write to article directory
-  --from-body                   generate from body instead of summary
-  --json                        JSON output
-
-arc flashcards [slug]         generate flashcards
-  --style <style>               flashcard style (socratic, cloze)
-  --profile <name>              LLM profile
-  --write                       write to article directory
-  --from-body                   generate from body instead of summary
-  --json                        JSON output
-
-arc reprocess [slug]          re-run pipeline on existing articles
-  --all                         reprocess all articles
-  --collection <slug>           reprocess articles in a collection
-  --missing                     only articles missing variants
-  --refetch                     re-fetch source content
-  --clean                       remove old variants before regenerating
-  --body <file|->               replace body from file
-  --no-summary                  skip summary generation
-  --no-flash                    skip flash generation
-  --no-flashcards               skip flashcard generation
-  --no-embed                    skip vector embedding
-  --json                        JSON output
-
-arc reindex                   rebuild SQLite + vector index from filesystem
-  --no-embed                    skip vector embedding
-```
-
-### Reading and browsing
-
-```
-arc list                      list articles
-  --collection <slug>           filter by collection
-  --tag <tag>                   filter by tag
-  --unread                      only unread articles
-  --unplayed                    only unplayed articles
-  --uncollected                 articles not in any collection
-  --uncollected-fresh           uncollected + recently ingested
-  --agent                       only agent-ingested articles
-  --agent-run <id>              articles from a specific agent run
-  --slugs                       print slugs only
-  --json                        JSON output
-
-arc read <slug>               read article content
-  --summary                     read summary instead of body
-  --flash                       read flash summary
-  --flashcards                  read flashcards
-  --model <name>                select specific model variant
-  --style <name>                select specific style variant
-
-arc search <query>            hybrid search (FTS5 + vector)
-  --collection <slug>           search within a collection
-  --tag <tag>                   filter by tag
-  --limit <n>                   max results (default: 20)
-  --no-semantic                 FTS5 keyword search only
-
-arc open <slug>               open article source in browser/viewer
-arc delete [slug]             delete article
-  --agent-run <id>              delete all articles from a specific agent run
-  --dry-run                     preview what would be deleted
-```
-
-### Collections
-
-```
-arc collections list [pattern]                list collections
-arc collections create <slug>                 create a collection
-arc collections show <slug>                   show collection details
-arc collections add <slug> <collection>       add article to collection
-arc collections remove <slug> <collection>    remove article from collection
-arc collections read <slug>                   read collection articles
-arc collections search <query>                search within a collection
-arc collections rename <old> <new>            rename a collection
-arc collections delete <slug>                 delete a collection
-  --force                                       skip confirmation
-  --purge                                       also delete articles unique to this collection
-arc collections describe <slug> [text]        set collection description
-arc collections describe-all                  bulk edit descriptions
-arc collections generate-description <slug>   LLM-generate a description
-arc collections generate-description-all      generate descriptions for all
-arc collections suggest                       LLM-assisted collection creation
-  --apply                                       apply suggestions immediately
-  --all / --uncollected                         scope
-  --count <n> --min <n> --limit <n>             tuning
-  --profile <name>                              LLM profile
-arc collections assign [slug]                 LLM-assisted article assignment
-  --apply                                       apply assignments immediately
-  --all / --uncollected-fresh                   scope
-  --limit <n>                                   max articles to process
-  --profile <name>                              LLM profile
-```
-
-### Workspaces
-
-```
-arc workspace new <name> [description]        create a workspace
-arc workspace list                            list workspaces
-  --all                                         include archived
-arc workspace show <name>                     show workspace details
-arc workspace describe <name> [text]          set description
-arc workspace rename <old> <new>              rename workspace
-arc workspace system <name> [text]            set/view custom system prompt
-arc workspace archive <name>                  archive workspace
-arc workspace delete <name>                   delete workspace
-  --force                                       skip confirmation
-arc workspace add <name>                      add content to workspace
-  --article <slug,...>                          add articles
-  --collection <slug,...>                       add collections
-  --resource <path|url,...>                     add files or URLs
-  --into <subdir>                               resource subdirectory
-  --comment <text>                              annotation
-arc workspace remove <name>                   remove content from workspace
-  --article <slug,...>                          remove articles
-  --collection <slug,...>                       remove collections
-  --resource <name,...>                         remove resources
-  --all-articles / --all-collections            remove all
-  --dry-run                                     preview changes
-arc workspace outcomes <name>                 list generated outputs
-  --read <file>                                 read a specific outcome
-arc workspace populate <name>                 LLM-assisted content selection
-  --hint <text>                                 refine selection focus
-  --include-collections                         also suggest collections
-  --dry-run                                     preview without applying
-  --edit                                        review before applying
-  --profile <name>                              LLM profile
-arc workspace chat <name>                     start chat session
-  -p, --profile <name>                          LLM profile
-  --strategy <strategy>                         context strategy
-  --context-limit <tokens>                      token budget
-  --no-stream                                   disable streaming
-  --clear                                       clear history before starting
-  -D, --debug                                   debug mode
-arc workspace chat-config <name>              configure chat settings
-  --profile <name>                              LLM profile
-  --strategy <strategy>                         context strategy (tail, token-budget, summarize)
-  --context-limit <tokens>                      token budget
-  --max-output-tokens <tokens>                  response length cap
-  --max-user-messages <n>                       tail strategy: turns to keep
-  --summarizer-profile <name>                   profile for history compaction
-  --verbatim-ratio <float>                      summarize: fraction kept verbatim
-  --grounding-mode <mode>                       corpus-only, corpus-first, open
-  --list-modes                                  show available grounding modes
-```
-
-### Agent
-
-```
-arc agent run                 poll feeds + ingest
-  --dry-run                     filter only, no ingestion
-  --focus <text>                temporary interest emphasis
-  --decisions <file>            re-run with user-overridden decisions
-  --json                        JSON output
-  -v, --verbose                 verbose output
-arc agent log                 show recent agent runs
-  -n, --number <n>              number of runs to show (default: 10)
-arc agent digest              human-readable digest of latest run
-  --summary                     include full summaries
-  --flash                       include flash summaries (default)
-  --run <id>                    specific run ID
-  --tts                         TTS-friendly output
-arc agent stats               per-feed signal/noise statistics
-```
-
-### System
-
-```
-arc init                      guided setup wizard
-arc stats                     knowledge base statistics
-  --json                        JSON output
-arc profiles                  list LLM profiles with pricing
-  --json                        JSON output
-arc config                    show active configuration
-  --json                        JSON output
-arc home                      print data root path
-arc mcp                       start MCP server
-  --http <addr>                 HTTP+SSE transport (default: stdio)
-arc help [section]            show documentation
-                                sections: readme, tutorial, tui-commands, tui-keys, cli-commands
-arc tui                       launch TUI explicitly
+```bash
+arc help cli-commands
 ```
 
 ## Project structure
