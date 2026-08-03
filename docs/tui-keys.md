@@ -33,7 +33,7 @@
 
 ## Article actions (nav pane)
 
-  o              open source URL in browser
+  o              open original source in native viewer
   O              open URL without tracking
   v              view article in overlay
   r              mark as read

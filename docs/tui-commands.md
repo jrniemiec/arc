@@ -46,7 +46,7 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /clear                        clear active filter
   /tags                         list all tags
   /collections                  list all collections
-  /open                         open source URL in browser
+  /open                         open original source in native viewer
   /read                         mark as read
   /unread                       mark as unread
   /favorite                     toggle favorite
