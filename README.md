@@ -36,6 +36,45 @@ reachable from both the TUI and the CLI.
 
 ---
 
+## Design
+
+**The filesystem is the source of truth.** Articles are plain text and JSON
+in a flat directory tree. SQLite, the FTS5 index, and the vector store are
+derived artifacts, rebuildable at any time with `arc reindex`. A corrupted
+index, a failed schema change, or a switch of embedding provider costs
+nothing but the time to rebuild — and the library remains readable with
+`cat`, `grep`, and `rg` whether or not arc is installed.
+
+**Models are assigned per operation, not per application.** Named profiles
+map to a provider, model, and parameters; each pipeline stage, chat mode,
+and utility function selects its own. Bulk summarization can run on a cheap
+model while workspace chat runs on an expensive one. Every call is logged to
+an append-only event log with token counts and USD cost, so the tradeoff is
+measurable rather than assumed.
+
+**Summary variants are resolved at read time.** Multiple summaries per
+article coexist as `summary.<style>.<model>.txt`; preference order lives in
+config and is applied when the article is read, not when it is written.
+Changing one config line changes which variant every article serves, with no
+migration, no per-article state, and no reprocessing.
+
+**The agent's decisions are reviewable.** Feed filtering writes its
+accept/skip reasoning to a file that can be edited and replayed with
+`--decisions`. Per-feed signal-to-noise statistics are tracked across runs.
+Automation is auditable and correctable rather than opaque.
+
+**Grounding is a per-workspace setting.** `corpus-only` restricts answers to
+the local corpus, `corpus-first` falls back to model knowledge, `open`
+permits live search. The appropriate posture differs by research question,
+so it is configuration rather than a fixed property of the tool.
+
+**One service layer, three front ends.** The TUI, the CLI, and the MCP
+server are thin surfaces over a shared service package. No capability exists
+in one and not the others, and scripted use is a first-class path rather
+than an afterthought.
+
+---
+
 ## Contents
 
 - [Features](#features)
