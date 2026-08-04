@@ -36,9 +36,10 @@ func TestTokenBudget_AllFits(t *testing.T) {
 }
 
 func TestTokenBudget_DropsOldestToFit(t *testing.T) {
-	// Each message is ~500 tokens; budget fits only 2.
+	// Each large message is ~500 tokens, the small ones ~1. The budget fits
+	// both small messages but not a single large one, so both are dropped.
 	large := approxContent(500)
-	s := &TokenBudgetStrategy{Budget: 1200}
+	s := &TokenBudgetStrategy{Budget: 500}
 	h := &chat.History{Msgs: []chat.Message{
 		uMsg(large), aMsg(large),
 		uMsg("u2"), aMsg("a2"),
