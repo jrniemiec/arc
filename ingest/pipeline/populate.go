@@ -77,12 +77,13 @@ func WorkspacePopulate(
 		return PopulateResult{}, fmt.Errorf("profile: %w", err)
 	}
 	p, err := llm.New(llm.ProviderConfig{
-		Provider: prof.Provider,
-		Model:    prof.Model,
-		Host:     prof.Host,
-		APIKey:   resolveAPIKey(prof.Provider),
-		Think:    prof.Think,
-		Thinking: prof.Thinking,
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           prof.Think,
+		Thinking:        prof.Thinking,
+		MaxOutputTokens: prof.MaxOutputTokens,
 	})
 	if err != nil {
 		return PopulateResult{}, fmt.Errorf("llm provider: %w", err)

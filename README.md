@@ -278,7 +278,14 @@ Per-profile fields:
 | `host` | Ollama | URL | Defaults to `http://localhost:11434` |
 | `think` | Ollama | bool | Enable reasoning mode (Qwen3, DeepSeek-R1) |
 | `thinking` | Anthropic | `""` \| `disabled` \| `adaptive` | `""` omits the parameter; `disabled` is the default for the built-in profiles |
+| `max_output_tokens` | all | int | Response cap (`max_tokens`). 0 uses the provider default of 4096. Not the same as `info.context_window`, which is the input side and is metadata only |
 | `legacy` | all | bool | Superseded model, kept for reproducing older artifacts. Sorts to the bottom of pickers; still fully usable |
+
+Thinking is selected by **choosing a profile**, not a flag: `opus` and `sonnet` run without it,
+`opus-think` and `sonnet-think` run with adaptive thinking and a larger `max_output_tokens` — the
+budget has to grow because `max_tokens` caps thinking and response text together. Because everything
+in arc selects by profile name, `--profile opus-think` works on any command, and the same name can be
+set in workspace chat config, agent config, or `ingest.summary_profile`.
 
 Run `arc profiles` to list all configured profiles with pricing info. Profiles are grouped by
 provider, most capable first, with legacy models last — the same order as the TUI `/model` picker.

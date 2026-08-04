@@ -9221,12 +9221,13 @@ func doCorrection(text string, cfg config.Config) tea.Cmd {
 		slog.Debug("correction: contacting LLM", "profile", profileCode, "provider", prof.Provider, "model", prof.Model)
 		apiKey := correctionResolveAPIKey(prof.Provider)
 		prov, err := llm.New(llm.ProviderConfig{
-			Provider: prof.Provider,
-			Model:    prof.Model,
-			Host:     prof.Host,
-			APIKey:   apiKey,
-			Think:    prof.Think,
-			Thinking: prof.Thinking,
+			Provider:        prof.Provider,
+			Model:           prof.Model,
+			Host:            prof.Host,
+			APIKey:          apiKey,
+			Think:           prof.Think,
+			Thinking:        prof.Thinking,
+			MaxOutputTokens: prof.MaxOutputTokens,
 		})
 		if err != nil {
 			return correctionDoneMsg{err: fmt.Errorf("correction: %w", err)}

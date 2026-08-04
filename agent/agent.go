@@ -551,11 +551,12 @@ func resolveFilterChat(opts RunOptions) (feed.ChatFunc, error) {
 
 	apiKey := resolveAPIKey(p.Provider)
 	provider, err := llmlib.New(llmlib.ProviderConfig{
-		Provider: p.Provider,
-		Model:    p.Model,
-		Host:     p.Host,
-		APIKey:   apiKey,
-		Thinking: p.Thinking,
+		Provider:        p.Provider,
+		Model:           p.Model,
+		Host:            p.Host,
+		APIKey:          apiKey,
+		Thinking:        p.Thinking,
+		MaxOutputTokens: p.MaxOutputTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("init filter LLM provider: %w", err)

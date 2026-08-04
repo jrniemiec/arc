@@ -65,12 +65,13 @@ func Summarize(ctx context.Context, cfg config.Config, req SummarizeRequest) (Su
 	}
 
 	p, err := llm.New(llm.ProviderConfig{
-		Provider: prof.Provider,
-		Model:    prof.Model,
-		Host:     prof.Host,
-		APIKey:   resolveAPIKey(prof.Provider),
-		Think:    prof.Think,
-		Thinking: prof.Thinking,
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           prof.Think,
+		Thinking:        prof.Thinking,
+		MaxOutputTokens: prof.MaxOutputTokens,
 	})
 	if err != nil {
 		return SummarizeResult{}, fmt.Errorf("llm provider: %w", err)
@@ -114,12 +115,13 @@ func Flash(ctx context.Context, cfg config.Config, req FlashRequest) (FlashResul
 	}
 
 	p, err := llm.New(llm.ProviderConfig{
-		Provider: prof.Provider,
-		Model:    prof.Model,
-		Host:     prof.Host,
-		APIKey:   resolveAPIKey(prof.Provider),
-		Think:    prof.Think,
-		Thinking: prof.Thinking,
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           prof.Think,
+		Thinking:        prof.Thinking,
+		MaxOutputTokens: prof.MaxOutputTokens,
 	})
 	if err != nil {
 		return FlashResult{}, fmt.Errorf("llm provider: %w", err)
@@ -167,12 +169,13 @@ func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (
 	}
 
 	p, err := llm.New(llm.ProviderConfig{
-		Provider: prof.Provider,
-		Model:    prof.Model,
-		Host:     prof.Host,
-		APIKey:   resolveAPIKey(prof.Provider),
-		Think:    prof.Think,
-		Thinking: prof.Thinking,
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           prof.Think,
+		Thinking:        prof.Thinking,
+		MaxOutputTokens: prof.MaxOutputTokens,
 	})
 	if err != nil {
 		return FlashcardsResult{}, fmt.Errorf("llm provider: %w", err)
@@ -433,11 +436,12 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	// ── 3. Build LLM providers ────────────────────────────────────────────
 	newProvider := func(prof config.Profile) (llm.Provider, error) {
 		return llm.New(llm.ProviderConfig{
-			Provider: prof.Provider,
-			Model:    prof.Model,
-			Host:     prof.Host,
-			APIKey:   resolveAPIKey(prof.Provider),
-			Thinking: prof.Thinking,
+			Provider:        prof.Provider,
+			Model:           prof.Model,
+			Host:            prof.Host,
+			APIKey:          resolveAPIKey(prof.Provider),
+			Thinking:        prof.Thinking,
+			MaxOutputTokens: prof.MaxOutputTokens,
 		})
 	}
 
@@ -1018,6 +1022,15 @@ func estimateIngestCost(text string, cfg config.Config, flashcardsEnabled bool) 
 	return nChunks, usd
 }
 
+// profileMaxOutput returns the profile's output cap, falling back to the
+// caller's default when the profile does not set one.
+func profileMaxOutput(prof config.Profile, fallback int) int {
+	if prof.MaxOutputTokens > 0 {
+		return prof.MaxOutputTokens
+	}
+	return fallback
+}
+
 // lookupProfile resolves a profile name from config. Returns an error if not found.
 func lookupProfile(cfg config.Config, name string) (config.Profile, error) {
 	p, ok := cfg.Profile(name)
@@ -1081,7 +1094,7 @@ func CollectionSuggest(ctx context.Context, cfg config.Config, req CollectionSug
 		APIKey:          resolveAPIKey(prof.Provider),
 		Think:           false,
 		Thinking:        prof.Thinking,
-		MaxOutputTokens: 16384,
+		MaxOutputTokens: profileMaxOutput(prof, 16384),
 		Timeout:         5 * time.Minute,
 	})
 	if err != nil {
@@ -1186,12 +1199,13 @@ func CollectionArticleSuggest(ctx context.Context, cfg config.Config, req Collec
 		return nil, fmt.Errorf("profile: %w", err)
 	}
 	p, err := llm.New(llm.ProviderConfig{
-		Provider: prof.Provider,
-		Model:    prof.Model,
-		Host:     prof.Host,
-		APIKey:   resolveAPIKey(prof.Provider),
-		Think:    prof.Think,
-		Thinking: prof.Thinking,
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           prof.Think,
+		Thinking:        prof.Thinking,
+		MaxOutputTokens: prof.MaxOutputTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("llm provider: %w", err)
@@ -1259,12 +1273,13 @@ func CollectionDescribe(ctx context.Context, cfg config.Config, req CollectionDe
 		return "", fmt.Errorf("profile: %w", err)
 	}
 	p, err := llm.New(llm.ProviderConfig{
-		Provider: prof.Provider,
-		Model:    prof.Model,
-		Host:     prof.Host,
-		APIKey:   resolveAPIKey(prof.Provider),
-		Think:    prof.Think,
-		Thinking: prof.Thinking,
+		Provider:        prof.Provider,
+		Model:           prof.Model,
+		Host:            prof.Host,
+		APIKey:          resolveAPIKey(prof.Provider),
+		Think:           prof.Think,
+		Thinking:        prof.Thinking,
+		MaxOutputTokens: prof.MaxOutputTokens,
 	})
 	if err != nil {
 		return "", fmt.Errorf("llm provider: %w", err)
@@ -1406,7 +1421,7 @@ func CollectionAssign(ctx context.Context, cfg config.Config, req CollectionAssi
 		APIKey:          resolveAPIKey(prof.Provider),
 		Think:           false,
 		Thinking:        prof.Thinking,
-		MaxOutputTokens: 16384,
+		MaxOutputTokens: profileMaxOutput(prof, 16384),
 		Timeout:         5 * time.Minute,
 	})
 	if err != nil {

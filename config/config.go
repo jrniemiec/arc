@@ -142,6 +142,16 @@ type Profile struct {
 	// Ollama-only.
 	Thinking string `json:"thinking,omitempty"`
 
+	// MaxOutputTokens caps the response length for this profile, overriding the
+	// caller's default. 0 uses the provider default (4096). Note this is the
+	// output cap sent as `max_tokens`, not Info.ContextWindow, which describes
+	// the input side and is metadata only.
+	//
+	// Thinking-enabled profiles need a larger value than their non-thinking
+	// counterparts: on Anthropic, `max_tokens` caps thinking and response text
+	// together, so a budget sized for text alone truncates mid-answer.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+
 	// Legacy marks a superseded model kept only for reproducing or comparing
 	// against artifacts already generated with it. Legacy profiles sort to the
 	// bottom of pickers; they remain fully usable.
@@ -725,6 +735,34 @@ var builtinProfiles = map[string]Profile{
 			CostVsValue:   "Recommended for production summarization. Best coherence and reduction quality on long articles. Quality compounds in map-reduce — worth the cost.",
 			ContextWindow: 1_000_000,
 			Pricing:       &ProfilePricing{Input: 5.00, Output: 25.00, CachedInput: 0.50},
+		},
+	},
+	// opus-think and sonnet-think share their base profile's model and pricing —
+	// only the thinking mode and output budget differ. Keep the pricing blocks in
+	// sync: CalcCost matches on the model string, and two profiles claiming the
+	// same model at different prices would resolve nondeterministically.
+	"opus-think": {
+		Provider:        "anthropic",
+		Model:           "claude-opus-5",
+		Thinking:        ThinkingAdaptive,
+		MaxOutputTokens: 16384,
+		Info: ProfileInfo{
+			CostTier:      "premium",
+			CostVsValue:   "Opus 5 with adaptive thinking. Claude reasons before answering — worth testing on dense or long articles where the reduction step is a judgment call. Slower, and thinking tokens bill as output.",
+			ContextWindow: 1_000_000,
+			Pricing:       &ProfilePricing{Input: 5.00, Output: 25.00, CachedInput: 0.50},
+		},
+	},
+	"sonnet-think": {
+		Provider:        "anthropic",
+		Model:           "claude-sonnet-5",
+		Thinking:        ThinkingAdaptive,
+		MaxOutputTokens: 16384,
+		Info: ProfileInfo{
+			CostTier:      "medium",
+			CostVsValue:   "Sonnet 5 with adaptive thinking. Slower and pricier per call than sonnet; use when a task needs reasoning rather than extraction.",
+			ContextWindow: 1_000_000,
+			Pricing:       &ProfilePricing{Input: 3.00, Output: 15.00, CachedInput: 0.30},
 		},
 	},
 	"opus-4-6": {
