@@ -326,3 +326,42 @@ func TestContextKeysScopesFlashcardKeys(t *testing.T) {
 		t.Errorf("universal lists `space` %d times, want 1", n)
 	}
 }
+
+// /help used to early-return "no commands available for this tab" unless the
+// Library tab was active. The agent group's commands dispatch from any tab and
+// the system/chats groups are global, so that hid working commands from the
+// tab they belong to.
+func TestHelpLinesNotGatedOnTab(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tab  tab
+	}{
+		{"library", tabLibrary},
+		{"agent", tabAgent},
+		{"stats", tabStats},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &Model{activeTab: tc.tab}
+
+			all := strings.Join(m.helpLines(""), "\n")
+			if strings.Contains(all, "no commands available") {
+				t.Fatalf("/help refused to list commands on the %s tab", tc.name)
+			}
+			for _, want := range []string{"agent:", "/agent-run", "system:", "/config"} {
+				if !strings.Contains(all, want) {
+					t.Errorf("/help output missing %q on the %s tab", want, tc.name)
+				}
+			}
+
+			// Group and command filters have to work here too.
+			grp := strings.Join(m.helpLines("agent"), "\n")
+			if !strings.Contains(grp, "/feed-add") {
+				t.Errorf("/help agent missing /feed-add on the %s tab: %q", tc.name, grp)
+			}
+			one := strings.Join(m.helpLines("agent /agent-run"), "\n")
+			if !strings.Contains(one, "/agent-run") || strings.Contains(one, "/feed-add") {
+				t.Errorf("/help agent /agent-run did not narrow on the %s tab: %q", tc.name, one)
+			}
+		})
+	}
+}

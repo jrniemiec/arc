@@ -8073,14 +8073,14 @@ func (m *Model) contextKeys(all bool) []string {
 	return out
 }
 
-// helpLines returns context-sensitive help for the active tab.
-// arg="" shows all groups; "article" shows article commands;
-// "article /read" shows just the /read entry.
+// helpLines returns command help. arg="" shows all groups; "article" shows
+// article commands; "article /read" shows just the /read entry.
+//
+// Not gated on the active tab: the agent group's commands dispatch from any
+// tab, and the system and chats groups are global. Refusing to list them
+// outside the Library tab hid /agent-run and /feed-add from the Agent tab,
+// which is exactly where someone would look for them.
 func (m *Model) helpLines(arg string) []string {
-	if m.activeTab != tabLibrary {
-		return []string{"no commands available for this tab"}
-	}
-
 	renderGroup := func(g struct {
 		name     string
 		commands []cmdCompletion
