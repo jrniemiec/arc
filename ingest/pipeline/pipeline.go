@@ -802,10 +802,18 @@ func (a *briefAdapter) Chat(ctx context.Context, system, prompt string) (string,
 	}
 	start := time.Now()
 	var out string
-	var u llm.Usage
+	// total accumulates across attempts. A failed attempt can still have been
+	// billed — a response that used its whole budget on thinking and returned
+	// no text block is an error here but real tokens at the provider — so
+	// overwriting per attempt would under-report the cost of a retried call.
+	// Transport-level failures report zero usage, so summing is safe.
+	var total llm.Usage
 	var err error
 	for attempt := 1; attempt <= maxChunkRetries; attempt++ {
+		var u llm.Usage
 		out, u, err = a.p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
+		total.InputTokens += u.InputTokens
+		total.OutputTokens += u.OutputTokens
 		if err == nil {
 			break
 		}
@@ -821,9 +829,9 @@ func (a *briefAdapter) Chat(ctx context.Context, system, prompt string) (string,
 		}
 	}
 	if err == nil && a.onDone != nil {
-		a.onDone(time.Since(start), u)
+		a.onDone(time.Since(start), total)
 	}
-	return out, briefllm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens}, err
+	return out, briefllm.Usage{InputTokens: total.InputTokens, OutputTokens: total.OutputTokens}, err
 }
 
 // summarizeText uses brief's paragraph-aware chunking and map-reduce summarization.
