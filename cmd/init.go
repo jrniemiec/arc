@@ -118,6 +118,7 @@ func (w *wizard) run() error {
 		"summary_profile", cfg.Ingest.SummaryProfile,
 		"summary_style", cfg.Ingest.SummaryStyle,
 		"flash_profile", cfg.Ingest.FlashProfile,
+		"flashcards", cfg.Ingest.Flashcards,
 		"flashcard_profile", cfg.Ingest.FlashcardProfile,
 		"flashcard_style", cfg.Ingest.FlashcardStyle,
 		"embed_profile", cfg.Ingest.EmbedProfile,
@@ -347,10 +348,19 @@ func (w *wizard) stepIngest(cfg *config.Config) error {
 	w.print("Generates question/answer pairs for active recall.\n")
 	w.print("Needs structured JSON output — some models handle this better.\n")
 	w.print("Recommendation: models with strong instruction following.\n\n")
-	w.print("Note: flashcards are off by default. This sets which model to use\n")
-	w.print("when you ask for them — with 'arc ingest --flashcards', or\n")
-	w.print("'arc flashcards <slug> --write' on an article you already have.\n")
-	w.print("Set ingest.flashcards to true to generate them on every ingest.\n\n")
+
+	// Generating a deck for every article costs a call per ingest, so this is
+	// off unless asked for. The model and style below apply either way — they
+	// are also what 'arc flashcards <slug>' uses on demand.
+	w.print("If you answer no, you can still make them per article with\n")
+	w.print("'arc ingest --flashcards' or 'arc flashcards <slug> --write'.\n\n")
+	fcOn := w.prompt("Generate on every ingest? [y/N]: ")
+	cfg.Ingest.Flashcards = strings.ToLower(strings.TrimSpace(fcOn)) == "y"
+	if cfg.Ingest.Flashcards {
+		w.print("  → on for every ingest\n\n")
+	} else {
+		w.print("  → on request only\n\n")
+	}
 
 	flashcardProfile := w.pickModel("oai-mini", "haiku")
 	cfg.Ingest.FlashcardProfile = flashcardProfile
