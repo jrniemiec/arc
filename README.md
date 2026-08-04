@@ -206,6 +206,8 @@ Config lives at `~/.arc/config.jsonc` (JSONC — comments allowed). Override pat
   "profiles": {
     "oai-mini":   { "provider": "openai", "model": "gpt-4o-mini" },
     "opus":       { "provider": "anthropic", "model": "claude-opus-5", "thinking": "disabled" },
+    "opus-think": { "provider": "anthropic", "model": "claude-opus-5", "thinking": "adaptive",
+                    "max_output_tokens": 16384 },
     "haiku":      { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" },
     "opus-4-6":   { "provider": "anthropic", "model": "claude-opus-4-6", "legacy": true },
     "llama":      { "provider": "ollama", "model": "llama3.1:8b" }

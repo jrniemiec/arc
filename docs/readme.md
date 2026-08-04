@@ -66,7 +66,20 @@ Three provider backends, assignable per operation via profiles:
 
 Embedding: OpenAI text-embedding-3-small.
 
-Configure profiles in ~/.arc/config.jsonc. Run `arc profiles` to list all configured profiles.
+Anthropic extended thinking is selected by profile rather than a flag:
+
+  opus, sonnet             no thinking
+  opus-think, sonnet-think adaptive thinking, larger output budget
+  opus-4-6, sonnet-4-6     previous generation, kept to reproduce older
+                           summaries and flashcards
+
+Thinking makes Claude reason before answering — slower, and the reasoning
+tokens bill as output. Any profile name works anywhere a profile is
+accepted: --profile on any command, ingest config, workspace chat config,
+agent config, or the TUI /model picker.
+
+Configure profiles in ~/.arc/config.jsonc. Run `arc profiles` to list all configured profiles,
+grouped by provider with superseded models last.
 
 ## MCP server
 
