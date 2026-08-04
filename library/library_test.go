@@ -11,28 +11,40 @@ import (
 	"github.com/jrniemiec/arc/store"
 )
 
-// testdataArticles returns the path to the test article fixtures.
-func testdataArticles(t *testing.T) string {
+// testdataArticles copies the article fixtures into dst and returns dst.
+// Reindex writes back to meta.json (num_id backfill), so tests have to run
+// against a copy — pointing at ../testdata directly means every test run
+// dirties checked-in files.
+func testdataArticles(t *testing.T, dst string) string {
 	t.Helper()
 	// Walk up from library/ to find testdata/
-	root, err := filepath.Abs("../testdata/articles")
+	src, err := filepath.Abs("../testdata/articles")
 	if err != nil {
 		t.Fatalf("resolve testdata path: %v", err)
 	}
-	if _, err := os.Stat(root); err != nil {
-		t.Fatalf("testdata not found at %s: %v", root, err)
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("testdata not found at %s: %v", src, err)
 	}
-	return root
+	if err := os.CopyFS(dst, os.DirFS(src)); err != nil {
+		t.Fatalf("copy testdata to %s: %v", dst, err)
+	}
+	return dst
 }
 
-// openTestLibrary creates a Library backed by a temp SQLite db and the testdata fixtures.
+// openTestLibrary creates a Library backed by a temp SQLite db and a private
+// copy of the testdata fixtures.
 func openTestLibrary(t *testing.T) *library.Library {
 	t.Helper()
 	ctx := context.Background()
 
 	tmpDir := t.TempDir()
 	cfg := config.Default()
-	cfg.ArticlesRoot = testdataArticles(t)
+	// DataRoot has to be redirected too, not just the paths derived from it
+	// below: num_id allocation writes <DataRoot>/next_id, which otherwise
+	// lands in the developer's real ~/.arc and fails outright on a machine
+	// that has no ~/.arc at all.
+	cfg.DataRoot = tmpDir
+	cfg.ArticlesRoot = testdataArticles(t, filepath.Join(tmpDir, "articles"))
 	cfg.DBPath = filepath.Join(tmpDir, "arc.db")
 	cfg.VectorPath = filepath.Join(tmpDir, "index")
 	cfg.EventsPath = filepath.Join(tmpDir, "events.jsonl")
