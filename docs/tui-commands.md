@@ -55,6 +55,10 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /collection-remove <slug>     remove article from a collection
   /delete [slug]                delete article (selected or by name)
   /reprocess                    regenerate summary/flash
+  /flashcards [--style X] [--profile Y] [--count N]
+                                generate flashcards for the selected article
+  /flashcards-delete [--style X] [--model Y]
+                                delete flashcards (confirms first)
   /ingest <url>                 add a new article
 
 ## Collection commands (Collections sub-tab)

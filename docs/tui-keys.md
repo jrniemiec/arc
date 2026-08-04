@@ -82,6 +82,12 @@
   [              decrease TTS rate
   ]              increase TTS rate
 
+Flashcards (cursor on a card, Cards section):
+
+  space          reveal/hide the answer under the cursor
+  A              reveal/hide every answer
+  D              delete the deck (confirms first)
+
 ## Agent content pane (run history)
 
   j / ↓          move down

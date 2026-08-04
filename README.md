@@ -436,7 +436,7 @@ arc flashcards 20260521-article --style cloze --count 20 --write
 arc flashcards 20260521-article --from-body --write   # from body instead of summary
 ```
 
-In the TUI, `/flashcards` generates for the selected article. Articles without a deck don't show a `[Cards]` tab.
+Articles without a deck don't show a `[Cards]` tab.
 
 Generating requires a summary unless `--from-body` is given; a missing summary is an error, shown in red in the TUI status bar.
 
@@ -473,7 +473,7 @@ arc flashcards --delete 20260521-article --model claude-haiku-4-5-20251001   # o
 arc flashcards --delete 20260521-article --dry-run                            # preview
 ```
 
-Or `/flashcards-delete` in the TUI, or `D` on a card. Removing the last variant clears the flashcard fields in `meta.json` and re-indexes the article, so search and `arc list` stay honest.
+Removing the last variant clears the flashcard fields in `meta.json` and re-indexes the article, so search and `arc list` stay honest.
 
 ---
 
@@ -715,17 +715,21 @@ Press `Ctrl+G` in any chat input to fix typos and grammar via LLM. Configure in 
 |---|---|
 | `j` / `k` | Navigate up/down |
 | `Tab` | Cycle panes |
-| `/` | Search |
+| `/` | Open command input |
 | `Enter` | Select / open |
-| `d` | Delete |
-| `m` | Mark read/played |
-| `f` | Favorite |
+| `space` | Expand / collapse |
+| `D` | Delete the selected article / collection / workspace |
+| `r` / `u` | Mark read / unread |
+| `f` / `*` | Toggle favorite |
 | `s` | Speak (TTS) |
 | `c` | Chat (article chat) |
 | `o` | Open original source in native viewer |
 | `v` | View in terminal |
 | `Ctrl+G` | Fix input typos via LLM |
-| `?` | Show all key bindings |
+| `?` | Key bindings for the current context |
+| `/?` | Every key binding |
+
+`?` and `/?` are the authoritative list; this table is a summary.
 
 ---
 
