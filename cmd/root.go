@@ -41,7 +41,7 @@ var rootCmd = &cobra.Command{
 Pipeline commands can be composed with Unix pipes:
   arc extract <url>            extract plain text → stdout
   arc summarize [slug]         summarize article or piped text → stdout
-  arc ingest <url|file>        full pipeline: extract → summarize → flash → flashcards → index
+  arc ingest <url|file>        full pipeline: extract → summarize → flash → [flashcards] → index
 
 Examples:
   arc ingest https://example.com/article

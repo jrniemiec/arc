@@ -48,7 +48,10 @@ var ingestCmd = &cobra.Command{
 	Use:   "ingest <url|file|->",
 	Short: "Ingest an article from a URL, file, or stdin",
 	Long: `Ingest fetches and processes an article through the full pipeline:
-  extract → summarize → flash → flashcards → embed → index
+  extract → summarize → flash → [flashcards] → embed → index
+
+The flashcard stage is skipped unless ingest.flashcards is true in config or
+--flashcards is passed; it is off by default.
 
 Files written to ~/.arc/articles/<slug>/:
   body.txt                          extracted plain text
@@ -57,7 +60,7 @@ Files written to ~/.arc/articles/<slug>/:
   meta.json                         title, author, model, style, tags
   summary.<style>.<model>.txt       generated summary
   flash.<model>.txt                 generated flash summary
-  flashcards.<style>.<model>.json   generated flashcards
+  flashcards.<style>.<model>.json   generated flashcards (when enabled)
 
 Databases updated:
   SQLite  — article metadata and FTS5 full-text index (summary + flashcard questions)

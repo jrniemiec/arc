@@ -305,7 +305,7 @@ func (w *wizard) stepProviders() error {
 func (w *wizard) stepIngest(cfg *config.Config) error {
 	w.printSection("Step 3: Ingestion pipeline")
 	w.print("When you ingest an article, arc runs this pipeline:\n")
-	w.print("  extract → summarize → flash summary → flashcards → embed\n\n")
+	w.print("  extract → summarize → flash summary → [flashcards] → embed\n\n")
 	w.print("Each phase has different LLM requirements.\n")
 
 	// ── Summarize model ─────────────────
@@ -347,6 +347,10 @@ func (w *wizard) stepIngest(cfg *config.Config) error {
 	w.print("Generates question/answer pairs for active recall.\n")
 	w.print("Needs structured JSON output — some models handle this better.\n")
 	w.print("Recommendation: models with strong instruction following.\n\n")
+	w.print("Note: flashcards are off by default. This sets which model to use\n")
+	w.print("when you ask for them — with 'arc ingest --flashcards', or\n")
+	w.print("'arc flashcards <slug> --write' on an article you already have.\n")
+	w.print("Set ingest.flashcards to true to generate them on every ingest.\n\n")
 
 	flashcardProfile := w.pickModel("oai-mini", "haiku")
 	cfg.Ingest.FlashcardProfile = flashcardProfile

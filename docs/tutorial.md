@@ -21,7 +21,11 @@ OpenAI is needed for embeddings (semantic search). Anthropic or OpenAI for summa
 
   arc ingest https://example.com/interesting-article
 
-This runs the full pipeline: extract → summarize → flash → flashcards → embed → index.
+This runs the full pipeline: extract → summarize → flash → [flashcards] → embed → index.
+
+Flashcards are the one optional stage — `ingest.flashcards` is `false` by
+default, so no deck is generated unless you pass `--flashcards` or flip that
+setting. You can also add one later with `arc flashcards <slug> --write`.
 
 ## 4. Launch the TUI
 

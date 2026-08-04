@@ -7899,9 +7899,6 @@ func (m *Model) contextKeys(all bool) []string {
 		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
 		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
 		{"h / ←", "", "previous content tab"},
-		{"space", "", "reveal/hide the flashcard answer under the cursor"},
-		{"A", "", "reveal/hide all flashcard answers"},
-		{"D", "", "delete flashcards (on a card, confirms first)"},
 		{"ctrl+l", "", "toggle scratch pane"},
 		{"ctrl+x", "", "toggle global askX pane"},
 		{"ctrl+r", "", "refresh current view"},
@@ -7923,6 +7920,13 @@ func (m *Model) contextKeys(all bool) []string {
 		{"D", "", "delete article"},
 		{"a", "", "move to attic"},
 		{"b", "", "restore from attic"},
+	}
+
+	// Content pane, on the Cards section of an article that has a deck.
+	flashcardKeys := []cmdCompletion{
+		{"space", "", "reveal/hide the answer under the cursor"},
+		{"A", "", "reveal/hide every answer"},
+		{"D", "", "delete this deck (confirms first)"},
 	}
 
 	collectionKeys := []cmdCompletion{
@@ -8014,6 +8018,8 @@ func (m *Model) contextKeys(all bool) []string {
 		out = append(out, "")
 		out = append(out, renderSection("articles:", articleKeys)...)
 		out = append(out, "")
+		out = append(out, renderSection("flashcards (on a card):", flashcardKeys)...)
+		out = append(out, "")
 		out = append(out, renderSection("collections:", collectionKeys)...)
 		out = append(out, "")
 		out = append(out, renderSection("workspaces:", workspaceKeys)...)
@@ -8055,6 +8061,12 @@ func (m *Model) contextKeys(all bool) []string {
 	var out []string
 	if len(contextCmds) > 0 {
 		out = append(out, renderSection(contextLabel, contextCmds)...)
+		out = append(out, "")
+	}
+	// Only advertise the card keys when the selected article actually has a deck —
+	// the same condition that decides whether the [Cards] tab is drawn.
+	if m.contentHas[ctCards] {
+		out = append(out, renderSection("flashcards (on a card):", flashcardKeys)...)
 		out = append(out, "")
 	}
 	out = append(out, renderSection("universal:", universal)...)

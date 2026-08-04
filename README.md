@@ -87,6 +87,7 @@ than an afterthought.
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Ingestion](#ingestion)
+- [Flashcards](#flashcards)
 - [Search](#search)
 - [Collections](#collections)
 - [Workspaces](#workspaces)
@@ -107,9 +108,9 @@ than an afterthought.
 ## Features
 
 - **Full TUI** — Bubble Tea-based, keyboard-driven, browse/read/search/chat without leaving the terminal
-- **Ingestion pipeline** — URL, PDF, local file, or stdin; extract → summarize → flash → flashcards → embed → index
+- **Ingestion pipeline** — URL, PDF, local file, or stdin; extract → summarize → flash → [flashcards] → embed → index (flashcards off by default)
 - **Multi-variant summaries** — multiple styles (study-notes, bullets, technical, executive) and models per article; preferred variant resolved at read time from config
-- **Flashcards** — socratic and cloze styles, generated from summaries or body text
+- **Flashcards** — opt-in per article, socratic and cloze styles, card count scaled to article length; browsable in the TUI with progressive reveal, questions indexed for search
 - **Hybrid search** — FTS5 full-text + vector semantic search; results tagged `[fts]`, `[vector]`, `[both]`
 - **Collections** — group articles by topic; LLM-assisted creation and assignment
 - **Workspaces** — research environments with attached articles, collections, resources, persistent chat, and generated outcomes
@@ -220,6 +221,12 @@ Config lives at `~/.arc/config.jsonc` (JSONC — comments allowed). Override pat
     "summary_style": "study-notes",
     "flashcard_style": "socratic",
     "flashcards": false,
+    "flashcard_counts": [
+      { "max_words": 500,  "cards": 5 },
+      { "max_words": 1500, "cards": 8 },
+      { "max_words": 3000, "cards": 12 },
+      { "max_words": 0,    "cards": 15 }
+    ],
     "min_words": 300
   },
 
@@ -337,8 +344,10 @@ By default arc stores everything under `~/.arc`. Override with:
 ## Ingestion
 
 ```
-URL / file / stdin → extract → summarize → flash → flashcards → embed → index
+URL / file / stdin → extract → summarize → flash → [flashcards] → embed → index
 ```
+
+The flashcard stage is skipped unless you ask for it — `ingest.flashcards` is `false` by default. See [Flashcards](#flashcards).
 
 Each stage is independent and composable via Unix pipes:
 
@@ -400,7 +409,71 @@ flashcards.socratic.claude-sonnet-5.json
 
 The preferred variant is resolved at read time from `preferred_models` and `preferred_styles` in config. Change the config and the change applies to every article instantly — no per-article state.
 
+Flashcards resolve through the same path. A deck generated with a profile whose model ranks below an existing variant in `preferred_models` is written to disk but never shown — regenerate with a higher-ranked profile, or delete the variant that outranks it.
+
 Arc detects incomplete or paywalled content (teasers) and flags them for review.
+
+---
+
+## Flashcards
+
+Flashcards are opt-in. Ingestion has a flashcard stage, but it is off by default — `ingest.flashcards` is `false` — so `arc ingest <url>` writes no deck. There is no backfill of existing articles and no auto-generation by collection or tag.
+
+### At ingest time
+
+```bash
+arc ingest <url> --flashcards        # generate a deck for this article
+arc ingest <url> --no-flashcards     # skip, even when the config default is on
+```
+
+Set `ingest.flashcards` to `true` in `config.jsonc` to make the stage run for every ingest; `--no-flashcards` then opts individual articles out. Count and style come from config — the ingest flags are on/off only.
+
+### After the fact
+
+```bash
+arc flashcards 20260521-article --write               # default style, count scaled to length
+arc flashcards 20260521-article --style cloze --count 20 --write
+arc flashcards 20260521-article --from-body --write   # from body instead of summary
+```
+
+In the TUI, `/flashcards` generates for the selected article. Articles without a deck don't show a `[Cards]` tab.
+
+Generating requires a summary unless `--from-body` is given; a missing summary is an error, shown in red in the TUI status bar.
+
+### Card count
+
+Left unspecified, models produce anywhere from 6 to 28 cards for the same article. The target count is scaled to article length via `ingest.flashcard_counts`:
+
+| Article length | Cards |
+|---|---|
+| < 500 words | 5 |
+| < 1500 words | 8 |
+| < 3000 words | 12 |
+| longer | 15 |
+
+`--count` overrides for a single run. Rules are matched in order; `max_words: 0` is the catch-all. Drop the catch-all and longer articles fall back to letting the model decide.
+
+### Browsing
+
+Cards render in the content pane, collapsed — the question is visible, the answer hidden until you ask for it.
+
+| Key | Action |
+|---|---|
+| `space` | Reveal/hide the answer under the cursor |
+| `A` | Reveal/hide all answers |
+| `D` | Delete the deck (asks for confirmation) |
+
+`space` and `D` do nothing when the cursor is not on a card.
+
+### Deleting
+
+```bash
+arc flashcards --delete 20260521-article
+arc flashcards --delete 20260521-article --model claude-haiku-4-5-20251001   # one variant
+arc flashcards --delete 20260521-article --dry-run                            # preview
+```
+
+Or `/flashcards-delete` in the TUI, or `D` on a card. Removing the last variant clears the flashcard fields in `meta.json` and re-indexes the article, so search and `arc list` stay honest.
 
 ---
 
@@ -416,6 +489,8 @@ arc search "golang" --tag programming --limit 50       # filter by tag, custom l
 ```
 
 Results show source badges: `[fts]`, `[vector]`, `[both]`.
+
+Flashcard questions are indexed in FTS5 alongside title, body, and summary, so a deck is findable by the concepts it drills even when the wording appears nowhere else in the article. Databases created before this are migrated in place on first open — the FTS table gains a fourth column with existing rows preserved. Run `arc reindex` afterwards to populate card text for articles already on disk.
 
 ---
 
@@ -770,8 +845,12 @@ arc flash [slug]              generate flash summary
 arc flashcards [slug]         generate flashcards
   --style <style>               flashcard style (socratic, cloze)
   --profile <name>              LLM profile
+  --count <n>                   target number of cards (default: scaled to length)
   --write                       write to article directory
   --from-body                   generate from body instead of summary
+  --delete                      delete flashcards instead of generating them
+  --model <name>                with --delete: only remove this model's variant
+  --dry-run                     with --delete: show what would be removed
   --json                        JSON output
 
 arc reprocess [slug]          re-run pipeline on existing articles
@@ -973,7 +1052,7 @@ store/
   vector/      Semantic search vector store
   event/       Append-only event log
 ingest/
-  pipeline/    Extract → summarize → flash → flashcards → embed → index
+  pipeline/    Extract → summarize → flash → [flashcards] → embed → index
   extractor/   URL/PDF/file content extraction
   feed/        RSS/Atom feed parsing
   embed/       Vector embedding generation

@@ -14,7 +14,8 @@
 
 ## Ingestion
 
-  arc ingest <url|file|->       full pipeline: extract → summarize → flash → flashcards → index
+  arc ingest <url|file|->       full pipeline: extract → summarize → flash → [flashcards] → index
+                                flashcards off by default; see ingest.flashcards
     --title <text>                override article title
     --collection <slug>           add to collection on ingest
     --summary-style <style>       summary style (study-notes, bullets, technical, executive)
@@ -44,8 +45,12 @@
   arc flashcards [slug]         generate or regenerate flashcards
     --style <style>               flashcard style (socratic, cloze)
     --profile <name>              LLM profile
+    --count <n>                   target number of cards (default: scaled to length)
     --write                       write to article directory
     --from-body                   generate from body instead of summary
+    --delete                      delete flashcards instead of generating them
+    --model <name>                with --delete: only remove this model's variant
+    --dry-run                     with --delete: show what would be removed
 
   arc reprocess [slug]          re-run pipeline on existing articles
     --all                         process all articles

@@ -260,3 +260,69 @@ func stripANSI(s string) string {
 	}
 	return b.String()
 }
+
+// The card keys are content-pane keys that only work when the cursor sits on a
+// card. Listing them under "universal" advertises them on the Collections,
+// Workspaces and Agent tabs, where they do nothing — and puts a second `space`
+// and a second `D` in a list that already binds both.
+func TestContextKeysScopesFlashcardKeys(t *testing.T) {
+	joined := func(lines []string) string { return strings.Join(lines, "\n") }
+
+	// The universal section only — sections are separated by a blank line, and
+	// in the full listing universal is followed by several others.
+	universalOnly := func(lines []string) string {
+		var sec []string
+		in := false
+		for _, l := range lines {
+			switch {
+			case strings.HasPrefix(l, "universal:"):
+				in = true
+			case in && strings.TrimSpace(l) == "":
+				return joined(sec)
+			}
+			if in {
+				sec = append(sec, l)
+			}
+		}
+		return joined(sec)
+	}
+
+	// An article with no deck must not advertise the card keys at all.
+	m := &Model{width: 100}
+	out := joined(m.contextKeys(false))
+	for _, key := range []string{"reveal/hide the answer", "reveal/hide every answer", "delete this deck"} {
+		if strings.Contains(out, key) {
+			t.Errorf("card key %q offered for an article with no deck", key)
+		}
+	}
+
+	// With a deck loaded they appear, in their own section.
+	m.contentHas[ctCards] = true
+	out = joined(m.contextKeys(false))
+	if !strings.Contains(out, "flashcards (on a card):") {
+		t.Error("no flashcards section for an article that has a deck")
+	}
+	for _, key := range []string{"reveal/hide the answer", "reveal/hide every answer", "delete this deck"} {
+		if !strings.Contains(out, key) {
+			t.Errorf("card key %q missing", key)
+		}
+	}
+
+	// They must live in their own section, never in universal.
+	if u := universalOnly(m.contextKeys(false)); strings.Contains(u, "reveal/hide") {
+		t.Error("card keys leaked into the universal section")
+	}
+
+	// The full listing (/?) carries the section regardless of what is selected.
+	all := joined((&Model{width: 100}).contextKeys(true))
+	if !strings.Contains(all, "flashcards (on a card):") {
+		t.Error("/? full listing is missing the flashcards section")
+	}
+
+	// `space` and `D` are bound universally too; the universal list must
+	// describe each exactly once or the help contradicts itself.
+	u := universalOnly((&Model{width: 100}).contextKeys(true))
+	if n := strings.Count(u, "\n  space "); n != 1 {
+		t.Errorf("universal lists `space` %d times, want 1", n)
+	}
+}

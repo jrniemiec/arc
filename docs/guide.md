@@ -22,7 +22,9 @@ The setup wizard walks you through configuration:
 arc ingest https://example.com/interesting-article
 ```
 
-This runs the full pipeline: extract text, generate a summary, a flash summary (optimized for audio), flashcards, and a vector embedding for semantic search. The article lands in `~/.arc/articles/<date>-<slug>/`.
+This runs the full pipeline: extract text, generate a summary, a flash summary (optimized for audio), and a vector embedding for semantic search. The article lands in `~/.arc/articles/<date>-<slug>/`.
+
+Flashcards are opt-in and off by default. Add `--flashcards` to generate a deck during ingest, set `ingest.flashcards` to `true` to make it the default, or generate one later with `arc flashcards <slug> --write`.
 
 ## 2. Browse what you have
 
