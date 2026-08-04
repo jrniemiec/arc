@@ -495,6 +495,14 @@ type Model struct {
 	contentHas      [ctCount]bool   // which sections exist
 	contentFiles    store.Files
 	contentLoading  bool
+	contentCardIDs  []string        // parallel to contentLines; card owning each line ("" = none)
+	revealedCards   map[string]bool // card IDs whose answers are shown; space toggles one, A toggles all
+	cardsSlug       string          // article the reveal set belongs to; a change clears it
+	jumpToCards     bool            // after the next content load, scroll to the Cards section
+	pendingCardFocus string         // after the next content load, put the cursor on this card
+	pendingScroll   int             // scroll offset to restore alongside pendingCardFocus
+	cardsRunning    bool            // flashcard generation in flight — drives the status-line spinner
+	cardsLabel      string          // current step of that generation
 
 	// Stats
 	stats       service.Stats
@@ -769,6 +777,8 @@ var articleCommands = []cmdCompletion{
 	{"/collection-remove", "<slug>", "remove article from a collection"},
 	{"/delete", "[slug]", "delete article (selected or by name)"},
 	{"/reprocess", "", "regenerate summary/flash"},
+	{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article"},
+	{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards for the selected article"},
 	{"/ingest", "<url>", "add a new article"},
 }
 
@@ -954,6 +964,7 @@ type helpFetchedMsg struct {
 
 type contentLoadedMsg struct {
 	lines   []string
+	cardIDs []string // parallel to lines; card owning each line ("" = none)
 	offsets [ctCount]int
 	has     [ctCount]bool
 	files   store.Files
@@ -1134,6 +1145,7 @@ type cmdDoneMsg struct {
 	statusLines        []string
 	err                string
 	reloadNav          bool      // true = reload article nav after completion
+	reloadCards        bool      // true = reload the content document (new card file on disk)
 	reloadCollections  bool      // true = reload collections tree after completion
 	reloadWorkspaces   bool      // true = reload workspace list after completion
 	navItems           []navItem // non-nil = replace navItems with this
@@ -2158,20 +2170,39 @@ func (m Model) Init() tea.Cmd {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// loadContentFor builds the content document for an article directory, passing
+// the current card reveal state and pane width. Every caller goes through here
+// so the two rendering inputs stay in one place.
+func (m *Model) loadContentFor(root string) tea.Cmd {
+	return loadContent(root, m.cfg.PreferredStyles, m.cfg.PreferredModels, m.revealedCards, m.contentPaneWidth())
+}
+
+// contentPaneWidth is the usable text width of the content pane: total width
+// less the nav pane and the divider.
+func (m *Model) contentPaneWidth() int {
+	w := m.width - m.navWidth() - 1
+	if w < 40 {
+		w = 40
+	}
+	return w
+}
+
 // loadContent fires an async cmd to build a single concatenated document:
 // Flash → Summary → Body → Cards, each preceded by a section header.
 // Section order matches the natural reading flow: skim first, detail last.
-func loadContent(root string, styles, models []string) tea.Cmd {
+func loadContent(root string, styles, models []string, revealed map[string]bool, width int) tea.Cmd {
 	return func() tea.Msg {
 		files := storefs.ProbeFiles(root)
 		files.Summary = storefs.ResolveSummary(root, styles, models)
 		files.Flash = storefs.ResolveFlash(root, models)
 		files.Flashcards = storefs.ResolveFlashcards(root, styles, models)
+		slug := filepath.Base(root)
 
 		// Section order for display
 		order := []contentTab{ctFlash, ctSummary, ctBody, ctCards}
 
 		var lines []string
+		var cardIDs []string // parallel to lines; "" for lines owned by no card
 		var offsets [ctCount]int
 		var has [ctCount]bool
 
@@ -2191,14 +2222,31 @@ func loadContent(root string, styles, models []string) tea.Cmd {
 			}
 			has[ct] = true
 			offsets[ct] = len(lines)
-			// Section header
-			lines = append(lines, "── "+ct.String()+" ──")
-			lines = append(lines, "")
-			lines = append(lines, splitLines(string(data))...)
+
+			// Cards are JSON on disk; every other section is already prose.
+			var body []string
+			var bodyIDs []string
+			header := "── " + ct.String() + " ──"
+			if ct == ctCards {
+				body, bodyIDs = renderCards(data, slug, revealed, width)
+				header = cardsHeader(data, slug, revealed)
+			} else {
+				body = splitLines(string(data))
+				bodyIDs = make([]string, len(body))
+			}
+
+			lines = append(lines, header, "")
+			lines = append(lines, body...)
 			lines = append(lines, "") // blank line between sections
+
+			// Keep cardIDs the same length as lines: 2 header lines, the body
+			// mapping, then the trailing separator.
+			cardIDs = append(cardIDs, "", "")
+			cardIDs = append(cardIDs, bodyIDs...)
+			cardIDs = append(cardIDs, "")
 		}
 
-		return contentLoadedMsg{lines: lines, offsets: offsets, has: has, files: files}
+		return contentLoadedMsg{lines: lines, cardIDs: cardIDs, offsets: offsets, has: has, files: files}
 	}
 }
 

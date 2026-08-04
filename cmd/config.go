@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -54,6 +55,7 @@ Examples:
 		fmt.Fprintf(w, "  summary_max_tokens:%d\n", cfg.Ingest.SummaryMaxTokens)
 		fmt.Fprintf(w, "  flash_max_tokens:  %d\n", cfg.Ingest.FlashMaxTokens)
 		fmt.Fprintf(w, "  flashcard_max_tokens: %d\n", cfg.Ingest.FlashcardMaxTokens)
+		fmt.Fprintf(w, "  flashcard_counts:  %s\n", formatCardCounts(cfg))
 		fmt.Fprintln(w)
 
 		fmt.Fprintf(w, "Summary styles:\n")
@@ -76,4 +78,22 @@ Examples:
 
 		return nil
 	},
+}
+
+// formatCardCounts renders the flashcard count buckets as "<500:5 <1500:8 …".
+// A max_words of 0 is the catch-all and prints as "rest".
+func formatCardCounts(cfg config.Config) string {
+	rules := cfg.Ingest.FlashcardCounts
+	if len(rules) == 0 {
+		return "(built-in defaults)"
+	}
+	parts := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if r.MaxWords == 0 {
+			parts = append(parts, fmt.Sprintf("rest:%d", r.Cards))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("<%d:%d", r.MaxWords, r.Cards))
+	}
+	return strings.Join(parts, "  ")
 }

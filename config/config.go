@@ -261,6 +261,7 @@ type IngestConfig struct {
 	// Flashcard tuning
 	FlashcardMaxTokens int                             `json:"flashcard_max_tokens"` // max output tokens; default 2048
 	FlashcardStyles    map[string]FlashcardStyleConfig `json:"flashcard_styles"`     // per-style system prompts
+	FlashcardCounts    []FlashcardCountRule            `json:"flashcard_counts"`     // target card count by article length
 
 	// Flashcard generation.
 	// When false (the default), flashcards are skipped unless --flashcards is passed explicitly.
@@ -282,6 +283,42 @@ type IngestConfig struct {
 // FlashcardStyleConfig holds the system prompt for one flashcard style.
 type FlashcardStyleConfig struct {
 	SystemPrompt string `json:"system_prompt"`
+}
+
+// FlashcardCountRule maps an article length to a target number of flashcards.
+// Rules are evaluated in order; the first whose MaxWords exceeds the article's
+// word count wins. MaxWords == 0 means "no upper bound" and acts as the final
+// catch-all.
+type FlashcardCountRule struct {
+	MaxWords int `json:"max_words"`
+	Cards    int `json:"cards"`
+}
+
+// builtinFlashcardCounts scales card count to article length.
+//
+// Left unspecified, models produced 6-28 cards (median 19) — enough to make
+// review tedious. These buckets cut a typical article to 12.
+var builtinFlashcardCounts = []FlashcardCountRule{
+	{MaxWords: 500, Cards: 5},
+	{MaxWords: 1500, Cards: 8},
+	{MaxWords: 3000, Cards: 12},
+	{MaxWords: 0, Cards: 15},
+}
+
+// CardCountForWords returns the target flashcard count for an article of the
+// given length. Returns 0 when no rule matches, which leaves the count to the
+// model.
+func (c *Config) CardCountForWords(words int) int {
+	rules := c.Ingest.FlashcardCounts
+	if len(rules) == 0 {
+		rules = builtinFlashcardCounts
+	}
+	for _, r := range rules {
+		if r.MaxWords == 0 || words < r.MaxWords {
+			return r.Cards
+		}
+	}
+	return 0
 }
 
 // ArticleChatConfig holds defaults for per-article chat sessions.
@@ -881,6 +918,7 @@ func Default() Config {
 			FlashMaxTokens:     256,
 			FlashcardMaxTokens: 2048,
 			FlashcardStyles:    builtinFlashcardStyles,
+			FlashcardCounts:    builtinFlashcardCounts,
 			MinWords:           300,
 		},
 		PreferredModels: []string{
@@ -1032,6 +1070,9 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Ingest.FlashcardMaxTokens != 0 {
 		cfg.Ingest.FlashcardMaxTokens = overlay.Ingest.FlashcardMaxTokens
+	}
+	if len(overlay.Ingest.FlashcardCounts) > 0 {
+		cfg.Ingest.FlashcardCounts = overlay.Ingest.FlashcardCounts
 	}
 	if overlay.Ingest.MinWords != 0 {
 		cfg.Ingest.MinWords = overlay.Ingest.MinWords

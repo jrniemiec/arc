@@ -3,11 +3,14 @@ package library
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/flashcards"
 	"github.com/jrniemiec/arc/store"
 	"github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/store/sqlite"
@@ -202,7 +205,7 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 			}
 		}
 
-		if err := l.db.Upsert(ctx, a, summaryText); err != nil {
+		if err := l.db.Upsert(ctx, a, summaryText, l.cardQuestions(a)); err != nil {
 			return fmt.Errorf("upsert %s: %w", id, err)
 		}
 
@@ -235,11 +238,31 @@ func (l *Library) IndexSlugs(ctx context.Context, slugs []string) error {
 				summaryText = text
 			}
 		}
-		if err := l.db.Upsert(ctx, a, summaryText); err != nil {
+		if err := l.db.Upsert(ctx, a, summaryText, l.cardQuestions(a)); err != nil {
 			return fmt.Errorf("upsert %s: %w", id, err)
 		}
 	}
 	return nil
+}
+
+// cardQuestions returns the article's flashcard questions joined for full-text
+// indexing, or "" when the article has no cards or they fail to parse. Answers
+// are left out: they restate the summary, which is already indexed, and would
+// dilute the ranking.
+func (l *Library) cardQuestions(a store.Article) string {
+	if a.Files.Flashcards == "" {
+		return ""
+	}
+	data, err := l.fs.ReadFlashcards(a)
+	if err != nil {
+		return ""
+	}
+	cards, err := flashcards.Parse(a.ID, data)
+	if err != nil {
+		slog.Debug("skipping unparseable flashcards for FTS", "slug", a.ID, "err", err)
+		return ""
+	}
+	return strings.Join(flashcards.Fronts(cards), "\n")
 }
 
 // MarkRead records that an article was read at time t.

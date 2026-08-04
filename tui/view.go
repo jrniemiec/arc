@@ -1565,12 +1565,20 @@ func (m Model) renderContentLibrary(height, width int) []string {
 
 // renderContentTabs renders the [Flash] [Summary] [Body] [Cards] tab strip
 // with a right-aligned "s speak" hint when the content pane is focused.
+//
+// Cards is omitted entirely when the article has no flashcards: generation is
+// manual and opt-in, so absence is the normal state and a permanently dimmed
+// tab would be noise. The other tabs stay dimmed-but-visible — a missing
+// summary or flash is a pipeline gap worth surfacing.
 func (m Model) renderContentTabs(width int) string {
 	t := ActiveTheme
 	var parts []string
 	active := m.activeSection()
 	tabs := []contentTab{ctFlash, ctSummary, ctBody, ctCards}
 	for _, ct := range tabs {
+		if ct == ctCards && !m.contentHas[ctCards] {
+			continue
+		}
 		label := "[" + ct.String() + "]"
 		if ct == active && m.contentHas[ct] {
 			parts = append(parts, fgBold(t.ContentTabActive, label))
@@ -3097,6 +3105,11 @@ func (m Model) renderStatusLine() string {
 		frames := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 		spin := frames[m.spinnerFrame%len(frames)]
 		return fg(t.StreamingText, " "+spin+" "+m.ingestLabel)
+	}
+	// Flashcard generation is an LLM call, so it gets the same leading spinner
+	// as the other streaming operations (article chat, askX, workspace chat).
+	if m.cardsRunning && !m.selectionMode {
+		return renderWaveIndicatorLeading(m.spinnerFrame, m.cardsLabel, t.StreamingText, t.Dimmed)
 	}
 	// Article chat and askX pane take priority over workspace chat — both are
 	// focused split-pane states that should own the status bar while active.

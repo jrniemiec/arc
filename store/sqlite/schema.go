@@ -56,10 +56,13 @@ CREATE TABLE IF NOT EXISTS relations (
     PRIMARY KEY (from_id, to_id, type)
 );
 
+-- Column order matters: Search uses snippet(articles_fts, 2, …) to excerpt the
+-- summary by index. New columns go on the end.
 CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
     article_id,
     title,
     summary,
+    cards,
     tokenize = 'porter unicode61'
 );
 

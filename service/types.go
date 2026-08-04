@@ -163,9 +163,26 @@ type FlashcardsRequest struct {
 	Text     string // raw text (set when piping)
 	Style    string // "socratic" | "cloze"
 	Profile  string // profile name override
+	Count    int    // target card count; 0 derives it from article length
 	FromBody bool   // use body instead of summary (slug mode only)
 	Write    bool   // write flashcard file into the article directory (slug mode only)
 	Progress func(string)
+}
+
+// DeleteFlashcardsRequest describes a flashcard deletion.
+// Style and Model are optional filters; empty means "every variant".
+type DeleteFlashcardsRequest struct {
+	Slug   string
+	Style  string
+	Model  string
+	DryRun bool
+}
+
+// DeleteFlashcardsResult reports what was removed.
+type DeleteFlashcardsResult struct {
+	Deleted   []string // absolute paths, deleted (or matched, when DryRun)
+	Remaining int      // decks still on disk afterwards
+	Cards     int      // cards in the deleted decks, for reporting
 }
 
 // FlashcardsResult holds the output of a flashcard operation.
@@ -173,6 +190,7 @@ type FlashcardsResult struct {
 	JSON      []byte
 	Style     string
 	Model     string
+	Count     int // cards produced
 	CostUSD   float64
 	Written   bool
 	WritePath string

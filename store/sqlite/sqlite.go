@@ -58,6 +58,13 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	defer s.pool.Put(conn)
 
+	// The FTS table gained a "cards" column. CREATE VIRTUAL TABLE IF NOT EXISTS
+	// leaves an existing 3-column table alone, so rebuild it before the schema
+	// script runs — otherwise every insert fails on column count.
+	if err := migrateArticlesFTS(conn); err != nil {
+		return fmt.Errorf("articles_fts migration: %w", err)
+	}
+
 	if err := sqlitex.ExecuteScript(conn, schema, nil); err != nil {
 		return err
 	}
@@ -81,8 +88,47 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
+// migrateArticlesFTS upgrades a pre-existing 3-column articles_fts table to the
+// 4-column shape that includes card questions.
+//
+// Existing rows are carried across with an empty cards column rather than
+// dropped: search keeps working immediately after the upgrade, and the next
+// `arc reindex` fills in the card text. A no-op when the table is absent or
+// already current.
+func migrateArticlesFTS(conn *sqlite.Conn) error {
+	var sql string
+	err := sqlitex.Execute(conn,
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='articles_fts'`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				sql = stmt.ColumnText(0)
+				return nil
+			},
+		})
+	if err != nil {
+		return err
+	}
+	if sql == "" || strings.Contains(sql, "cards") {
+		return nil // absent (schema will create it) or already migrated
+	}
+
+	return sqlitex.ExecuteScript(conn, `
+		ALTER TABLE articles_fts RENAME TO articles_fts_old;
+		CREATE VIRTUAL TABLE articles_fts USING fts5(
+		    article_id,
+		    title,
+		    summary,
+		    cards,
+		    tokenize = 'porter unicode61'
+		);
+		INSERT INTO articles_fts (article_id, title, summary, cards)
+		    SELECT article_id, title, summary, '' FROM articles_fts_old;
+		DROP TABLE articles_fts_old;
+	`, nil)
+}
+
 // Upsert inserts or replaces an article and its tags, collections, and FTS entry.
-func (s *Store) Upsert(ctx context.Context, a store.Article, summaryText string) error {
+func (s *Store) Upsert(ctx context.Context, a store.Article, summaryText, cardsText string) error {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return err
@@ -90,12 +136,12 @@ func (s *Store) Upsert(ctx context.Context, a store.Article, summaryText string)
 	defer s.pool.Put(conn)
 
 	endFn := sqlitex.Transaction(conn)
-	err = s.upsertTx(conn, a, summaryText)
+	err = s.upsertTx(conn, a, summaryText, cardsText)
 	endFn(&err)
 	return err
 }
 
-func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string) error {
+func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText, cardsText string) error {
 	// Upsert article row
 	err := sqlitex.Execute(conn, `
 		INSERT INTO articles (
@@ -179,8 +225,8 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText string)
 		_ = err // best-effort: row may not exist yet
 	}
 	if err := sqlitex.Execute(conn,
-		`INSERT INTO articles_fts (article_id, title, summary) VALUES (?, ?, ?)`,
-		&sqlitex.ExecOptions{Args: []any{a.ID, a.Title, summaryText}}); err != nil {
+		`INSERT INTO articles_fts (article_id, title, summary, cards) VALUES (?, ?, ?, ?)`,
+		&sqlitex.ExecOptions{Args: []any{a.ID, a.Title, summaryText, cardsText}}); err != nil {
 		return fmt.Errorf("fts insert: %w", err)
 	}
 

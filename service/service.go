@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/flashcards"
 	"github.com/jrniemiec/arc/ingest/embed"
 	"github.com/jrniemiec/arc/ingest/extractor"
 	"github.com/jrniemiec/arc/ingest/pipeline"
@@ -1413,6 +1414,9 @@ func (s *Service) Flash(ctx context.Context, req FlashRequest) (FlashResult, err
 func (s *Service) Flashcards(ctx context.Context, req FlashcardsRequest) (FlashcardsResult, error) {
 	text := req.Text
 	var articleDir string
+	// sourceWords sizes the deck. Prefer the body: summaries are compressed and
+	// flatten length differences between a 1400-word and a 5000-word article.
+	sourceWords := len(strings.Fields(req.Text))
 
 	if req.Slug != "" {
 		a, err := s.lib.Get(ctx, req.Slug)
@@ -1428,16 +1432,30 @@ func (s *Service) Flashcards(ctx context.Context, req FlashcardsRequest) (Flashc
 			return FlashcardsResult{}, fmt.Errorf("read article: %w", err)
 		}
 		articleDir = filepath.Join(s.cfg.ArticlesRoot, req.Slug)
+
+		sourceWords = len(strings.Fields(text))
+		if !req.FromBody {
+			// text is the summary; re-read the body purely to size the deck.
+			if body, err := s.lib.ReadBody(a); err == nil {
+				sourceWords = len(strings.Fields(body))
+			}
+		}
 	}
 
 	if strings.TrimSpace(text) == "" {
 		return FlashcardsResult{}, fmt.Errorf("no text to generate flashcards from")
 	}
 
+	count := req.Count
+	if count <= 0 {
+		count = s.cfg.CardCountForWords(sourceWords)
+	}
+
 	pr, err := pipeline.Flashcards(ctx, s.cfg, pipeline.FlashcardsRequest{
 		Text:     text,
 		Style:    req.Style,
 		Profile:  req.Profile,
+		Count:    count,
 		Progress: req.Progress,
 	})
 	if err != nil {
@@ -1448,6 +1466,7 @@ func (s *Service) Flashcards(ctx context.Context, req FlashcardsRequest) (Flashc
 		JSON:    pr.JSON,
 		Style:   pr.Style,
 		Model:   pr.Model,
+		Count:   pr.Count,
 		CostUSD: s.cfg.CalcCost(pr.Model, pr.Usage.InputTokens, pr.Usage.OutputTokens),
 	}
 
@@ -1459,9 +1478,113 @@ func (s *Service) Flashcards(ctx context.Context, req FlashcardsRequest) (Flashc
 		}
 		result.Written = true
 		result.WritePath = fpath
+
+		// Record the variant in meta.json so `arc list` and the SQLite index
+		// know the article has cards. Without this the file exists but nothing
+		// outside the article directory reports it.
+		if err := s.updateMetaModels(req.Slug, metaModelUpdate{
+			FlashcardModel: pr.Model,
+			FlashcardStyle: pr.Style,
+		}); err != nil {
+			slog.Warn("flashcards written but meta.json not updated", "slug", req.Slug, "err", err)
+		}
 	}
 
 	return result, nil
+}
+
+// DeleteFlashcards removes flashcard decks from an article.
+//
+// With no Style or Model filter it removes every deck — "I don't want cards for
+// this article" and "clear this before regenerating" are the cases that matter.
+// Filters narrow it to a single variant.
+func (s *Service) DeleteFlashcards(ctx context.Context, req DeleteFlashcardsRequest) (DeleteFlashcardsResult, error) {
+	if req.Slug == "" {
+		return DeleteFlashcardsResult{}, fmt.Errorf("no article specified")
+	}
+
+	a, err := s.lib.Get(ctx, req.Slug)
+	if err != nil {
+		return DeleteFlashcardsResult{}, fmt.Errorf("get article %s: %w", req.Slug, err)
+	}
+	articleDir := filepath.Join(s.cfg.ArticlesRoot, req.Slug)
+
+	all := fs.ListFlashcards(articleDir)
+	if len(all) == 0 {
+		return DeleteFlashcardsResult{}, fmt.Errorf("article %s has no flashcards", req.Slug)
+	}
+
+	var matched []string
+	for _, path := range all {
+		style, model, ok := fs.ParseFlashcardsName(path)
+		if !ok {
+			continue
+		}
+		if req.Style != "" && req.Style != style {
+			continue
+		}
+		if req.Model != "" && req.Model != model {
+			continue
+		}
+		matched = append(matched, path)
+	}
+	if len(matched) == 0 {
+		return DeleteFlashcardsResult{}, fmt.Errorf("no flashcards match style=%q model=%q", req.Style, req.Model)
+	}
+
+	result := DeleteFlashcardsResult{
+		Deleted:   matched,
+		Remaining: len(all) - len(matched),
+		Cards:     countCardsIn(matched),
+	}
+	if req.DryRun {
+		return result, nil
+	}
+
+	for _, path := range matched {
+		if err := os.Remove(path); err != nil {
+			return result, fmt.Errorf("remove %s: %w", filepath.Base(path), err)
+		}
+		slog.Info("deleted flashcards", "slug", req.Slug, "file", filepath.Base(path))
+	}
+
+	// With no decks left, meta.json must stop advertising cards or `arc list`
+	// reports a variant that is gone. updateMetaModels only sets non-empty
+	// fields, so clearing needs a direct read-modify-write.
+	if result.Remaining == 0 {
+		metaPath := filepath.Join(articleDir, "meta.json")
+		if m, err := fs.ReadMeta(metaPath); err == nil {
+			m.FlashcardModel = ""
+			m.FlashcardStyle = ""
+			if err := fs.WriteMeta(articleDir, m); err != nil {
+				slog.Warn("flashcards deleted but meta.json not updated", "slug", req.Slug, "err", err)
+			}
+		}
+	}
+
+	// Re-index so the deleted questions leave the FTS index rather than
+	// matching searches until the next full reindex.
+	if err := s.lib.IndexSlugs(ctx, []string{a.ID}); err != nil {
+		slog.Warn("flashcards deleted but article not re-indexed", "slug", req.Slug, "err", err)
+	}
+
+	return result, nil
+}
+
+// countCardsIn totals the cards across a set of flashcard files, for reporting.
+// Unreadable files count as zero rather than failing the delete.
+func countCardsIn(paths []string) int {
+	total := 0
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if cards, err := flashcards.Parse("", data); err == nil {
+			total += len(cards)
+		}
+	}
+	return total
 }
 
 // BatchIngest ingests multiple URLs or files listed one per line in a file or stdin.

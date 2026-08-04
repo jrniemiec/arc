@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -127,7 +128,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Trigger content load for the selected item.
 		if m.navCursor >= 0 && m.navCursor < len(m.navItems) && m.navItems[m.navCursor].root != "" {
 			m.contentLoading = true
-			cmds = append(cmds, loadContent(m.navItems[m.navCursor].root, m.cfg.PreferredStyles, m.cfg.PreferredModels))
+			cmds = append(cmds, m.loadContentFor(m.navItems[m.navCursor].root))
 		}
 		// Deferred expand: collections loaded before articles — trigger now.
 		if slug := m.pendingExpandSlug; slug != "" && m.collectionsLoaded {
@@ -681,6 +682,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.ingestLabel = msg.text
+		} else if m.cardsRunning {
+			m.cardsLabel = msg.text
 		} else {
 			m.statusMsg = msg.text
 		}
@@ -695,6 +698,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cmdDoneMsg:
 		m.populateRunning = false
 		m.populateLabel = ""
+		m.cardsRunning = false
+		m.cardsLabel = ""
 		m.ingestRunning = false
 		if m.ingestCancelFn != nil {
 			m.ingestCancelFn()
@@ -725,6 +730,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.reloadNav && m.svc != nil {
 			cmds = append(cmds, loadNav(m.svc))
+		}
+		if msg.reloadCards {
+			// A new flashcards file landed on disk; rebuild the document so the
+			// Cards tab appears, and land the reader on it.
+			m.jumpToCards = true
+			cmds = append(cmds, m.triggerContentLoad())
 		}
 		if msg.reloadCollections && m.svc != nil {
 			m.collectionsLoaded = false
@@ -923,11 +934,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case contentLoadedMsg:
 		m.contentFiles = msg.files
 		m.contentLines = msg.lines
+		m.contentCardIDs = msg.cardIDs
 		m.contentOffsets = msg.offsets
 		m.contentHas = msg.has
 		m.contentScroll = 0
 		m.contentLineCursor = 0
 		m.contentLoading = false
+		m.restoreContentPosition(msg)
 
 	case chatHistoryLoadedMsg:
 		if msg.err != "" {
@@ -2718,13 +2731,13 @@ func (m *Model) triggerCollectionContentLoad() tea.Cmd {
 		m.contentLoading = true
 		m.contentLines = nil
 		return tea.Batch(
-			loadContent(row.item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels),
+			m.loadContentFor(row.item.root),
 			m.loadArticleChatHistoryCmd(row.item.id),
 		)
 	}
 	m.contentLoading = true
 	m.contentLines = nil
-	return loadContent(row.item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	return m.loadContentFor(row.item.root)
 }
 
 // clampNavRowScroll keeps navRowCursor visible within the scroll window.
@@ -3325,10 +3338,25 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		return m.openCurrentURL()
 	case key.Matches(msg, keys.ToggleFav):
 		return m.cmdToggleFavorite()
+	case key.Matches(msg, keys.Expand):
+		// Reveal or hide the answer for the card under the cursor. Does nothing
+		// anywhere else in the document — a silent page jump mid-study would be
+		// disorienting.
+		return m.toggleCardAtCursor()
 	case msg.Type == tea.KeyRunes:
 		switch msg.String() {
 		case "s":
 			return m.cmdContentTTS()
+		case "A":
+			return m.toggleAllCards()
+		case "D":
+			// Scoped to cards, like space: D means "delete article" in the nav
+			// pane, and one key meaning two things depending on focus is the
+			// collision to avoid. Standing on a card makes the target explicit.
+			if m.cardIDAtCursor() == "" {
+				return nil
+			}
+			return m.cmdFlashcardsDelete("")
 		case "[":
 			return m.cmdContentTTSAdjustRate(-20)
 		case "]":
@@ -3336,6 +3364,72 @@ func (m *Model) handleContentKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// toggleCardAtCursor flips the reveal state of the flashcard under the content
+// cursor. Returns nil when the cursor is not on a card.
+func (m *Model) toggleCardAtCursor() tea.Cmd {
+	id := m.cardIDAtCursor()
+	if id == "" {
+		return nil
+	}
+	if m.revealedCards[id] {
+		delete(m.revealedCards, id)
+	} else {
+		if m.revealedCards == nil {
+			m.revealedCards = make(map[string]bool)
+		}
+		m.revealedCards[id] = true
+	}
+	// The reload resets scroll and cursor to the top of the document. Toggling a
+	// card only inserts or removes lines below it, so every line at or above
+	// keeps its index — restoring the old offset leaves the view stationary and
+	// the answer opens in place, section header and all.
+	m.pendingCardFocus = id
+	m.pendingScroll = m.contentScroll
+	return m.triggerContentLoad()
+}
+
+// toggleAllCards reveals every card, or hides them all if any are open.
+func (m *Model) toggleAllCards() tea.Cmd {
+	if !m.contentHas[ctCards] {
+		return nil
+	}
+
+	// Hiding needs no file access — only revealing has to enumerate the deck.
+	if len(m.revealedCards) > 0 {
+		m.revealedCards = nil
+		m.jumpToCards = true
+		return m.triggerContentLoad()
+	}
+
+	if m.contentFiles.Flashcards == "" {
+		return nil
+	}
+	data, err := os.ReadFile(m.contentFiles.Flashcards)
+	if err != nil {
+		m.setStatusError("read flashcards: " + err.Error())
+		return nil
+	}
+	ids := cardIDsIn(data, filepath.Base(m.contentFiles.Root))
+	if len(ids) == 0 {
+		return nil
+	}
+	m.revealedCards = make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m.revealedCards[id] = true
+	}
+	m.jumpToCards = true
+	return m.triggerContentLoad()
+}
+
+// cardIDAtCursor returns the card owning the line under the content cursor,
+// or "" when that line belongs to no card.
+func (m *Model) cardIDAtCursor() string {
+	if m.contentLineCursor < 0 || m.contentLineCursor >= len(m.contentCardIDs) {
+		return ""
+	}
+	return m.contentCardIDs[m.contentLineCursor]
 }
 
 // handleChatContentKey handles keys in the content pane during chat mode.
@@ -4044,6 +4138,13 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 	if item == nil || item.root == "" {
 		return nil
 	}
+	// Revealed cards belong to the article they were opened on. Card IDs are
+	// slug-scoped so stale entries could never match, but the set would grow
+	// unbounded across a browsing session.
+	if item.id != m.cardsSlug {
+		m.cardsSlug = item.id
+		m.revealedCards = nil
+	}
 	// Close article chat if we've navigated to a different article.
 	if m.achatMode && item.id != m.achatSlug {
 		slog.Debug("triggerContentLoad: closing achat — slug mismatch",
@@ -4066,14 +4167,14 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 		m.contentLines = nil
 		m.contentLineCursor = 0
 		return tea.Batch(
-			loadContent(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels),
+			m.loadContentFor(item.root),
 			m.loadArticleChatHistoryCmd(item.id),
 		)
 	}
 	m.contentLoading = true
 	m.contentLines = nil
 	m.contentLineCursor = 0
-	return loadContent(item.root, m.cfg.PreferredStyles, m.cfg.PreferredModels)
+	return m.loadContentFor(item.root)
 }
 
 // navigateToArticleByURL switches to the Library/Articles view and selects the article
@@ -4773,6 +4874,20 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		return m.cmdReprocess()
+
+	case "/flashcards", "/cards":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /flashcards is only available in Articles context"
+			return nil
+		}
+		return m.cmdFlashcards(arg)
+
+	case "/flashcards-delete", "/cards-delete":
+		if sub != navSubTabArticles {
+			m.statusMsg = "✗ /flashcards-delete is only available in Articles context"
+			return nil
+		}
+		return m.cmdFlashcardsDelete(arg)
 
 	case "/collection-add":
 		if sub != navSubTabArticles {
@@ -6331,6 +6446,158 @@ func (m *Model) cmdReprocess() tea.Cmd {
 	}
 }
 
+// cmdFlashcards generates flashcards for the selected article.
+//
+// Unlike cmdReprocess this reports progress: the call takes 10-30 seconds and a
+// silent status bar reads as a hang. On success the content document is
+// reloaded so the Cards tab appears without navigating away and back.
+func (m *Model) cmdFlashcards(arg string) tea.Cmd {
+	sel := m.selectedNavItem()
+	if sel == nil {
+		m.setStatusError("no article selected")
+		return nil
+	}
+	if m.svc == nil {
+		m.setStatusError("service unavailable")
+		return nil
+	}
+
+	style, profile, count := parseFlashcardFlags(arg)
+	item := *sel
+	svc := m.svc
+	send := *m.programSend
+
+	m.cardsRunning = true
+	// Matches the "<what> streaming · <profile>" convention of the other LLM
+	// status lines; pipeline progress replaces it once the call starts.
+	m.cardsLabel = "flashcards · " + item.id
+	m.statusMsg = ""
+	m.statusErr = false
+
+	return func() tea.Msg {
+		res, err := svc.Flashcards(context.Background(), service.FlashcardsRequest{
+			Slug:    item.id,
+			Style:   style,
+			Profile: profile,
+			Count:   count,
+			Write:   true,
+			Progress: func(step string) {
+				send(statusUpdateMsg{text: step})
+			},
+		})
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{
+			statusMsg:   fmt.Sprintf("✓ %d flashcards · %s · %s · $%.4f", res.Count, res.Style, res.Model, res.CostUSD),
+			reloadCards: true,
+		}
+	}
+}
+
+// cmdFlashcardsDelete deletes flashcards for the selected article, after
+// confirmation. Also reached by pressing D on a card in the content pane.
+//
+// The confirmation names the target — deck size and slug — because D means
+// "delete article" in the nav pane, and the prompt is what tells the two apart.
+func (m *Model) cmdFlashcardsDelete(arg string) tea.Cmd {
+	sel := m.selectedNavItem()
+	if sel == nil {
+		m.setStatusError("no article selected")
+		return nil
+	}
+	if m.svc == nil {
+		m.setStatusError("service unavailable")
+		return nil
+	}
+	if !m.contentHas[ctCards] {
+		m.setStatusError("article has no flashcards")
+		return nil
+	}
+
+	style, _, _ := parseFlashcardFlags(arg)
+	model := parseFlagValue(arg, "--model")
+
+	item := *sel
+	svc := m.svc
+
+	prompt := fmt.Sprintf("delete flashcards for %s? yes/no", item.id)
+	if n := m.loadedCardCount(); n > 0 && style == "" && model == "" {
+		prompt = fmt.Sprintf("delete %d flashcards for %s? yes/no", n, item.id)
+	}
+
+	m.askConfirm(prompt, func() tea.Cmd {
+		return func() tea.Msg {
+			res, err := svc.DeleteFlashcards(context.Background(), service.DeleteFlashcardsRequest{
+				Slug:  item.id,
+				Style: style,
+				Model: model,
+			})
+			if err != nil {
+				return cmdDoneMsg{err: err.Error()}
+			}
+			msg := fmt.Sprintf("✓ deleted %d flashcard file(s), %d card(s)", len(res.Deleted), res.Cards)
+			if res.Remaining > 0 {
+				msg += fmt.Sprintf(" · %d variant(s) left", res.Remaining)
+			}
+			return cmdDoneMsg{statusMsg: msg, reloadCards: true}
+		}
+	})
+	return nil
+}
+
+// loadedCardCount reports how many cards the currently displayed deck holds.
+func (m *Model) loadedCardCount() int {
+	if m.contentFiles.Flashcards == "" {
+		return 0
+	}
+	data, err := os.ReadFile(m.contentFiles.Flashcards)
+	if err != nil {
+		return 0
+	}
+	return len(cardIDsIn(data, filepath.Base(m.contentFiles.Root)))
+}
+
+// parseFlagValue pulls "--name value" out of a command arg string.
+func parseFlagValue(arg, name string) string {
+	parts := strings.Fields(arg)
+	for i := 0; i < len(parts)-1; i++ {
+		if parts[i] == name {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// parseFlashcardFlags parses "--style X --profile Y --count N" from a command
+// arg string. Unknown tokens are ignored: the command takes no positional
+// argument, it always acts on the selected article.
+func parseFlashcardFlags(arg string) (style, profile string, count int) {
+	parts := strings.Fields(arg)
+	for i := 0; i < len(parts); i++ {
+		switch parts[i] {
+		case "--style":
+			if i+1 < len(parts) {
+				i++
+				style = parts[i]
+			}
+		case "--profile":
+			if i+1 < len(parts) {
+				i++
+				profile = parts[i]
+			}
+		case "--count":
+			if i+1 < len(parts) {
+				i++
+				if n, err := strconv.Atoi(parts[i]); err == nil {
+					count = n
+				}
+			}
+		}
+	}
+	return
+}
+
 // cmdIngest ingests a new article from a URL.
 // arg is "<url> [--profile <name>] [--style <name>]".
 func (m *Model) cmdIngest(arg string) tea.Cmd {
@@ -7539,6 +7806,8 @@ var helpGroups = []struct {
 		{"/chat", "", "open article chat pane (or press c in nav)"},
 		{"/delete", "", "delete current article"},
 		{"/reprocess", "", "regenerate summary/flash"},
+		{"/flashcards", "[--style X] [--profile Y] [--count N]", "generate flashcards for the selected article"},
+		{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards (confirms first)"},
 		{"/ingest", "<url> [--profile <name>] [--style <name>]", "add a new article — use /article ingest from any tab"},
 	}},
 	{"collection", []cmdCompletion{
@@ -7630,6 +7899,9 @@ func (m *Model) contextKeys(all bool) []string {
 		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
 		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
 		{"h / ←", "", "previous content tab"},
+		{"space", "", "reveal/hide the flashcard answer under the cursor"},
+		{"A", "", "reveal/hide all flashcard answers"},
+		{"D", "", "delete flashcards (on a card, confirms first)"},
 		{"ctrl+l", "", "toggle scratch pane"},
 		{"ctrl+x", "", "toggle global askX pane"},
 		{"ctrl+r", "", "refresh current view"},
@@ -9651,6 +9923,63 @@ func (m *Model) cmdContentTTS() tea.Cmd {
 }
 
 // scrollContentToCursor adjusts m.contentScroll so that m.contentLineCursor is visible.
+// restoreContentPosition places the cursor and scroll after a content reload.
+//
+// A reload otherwise lands at the top of the document, which is wrong for the
+// two cases that reload deliberately:
+//
+//   - a card was toggled: keep the view exactly where it was. Toggling only
+//     inserts or removes lines below that card, so every line at or above keeps
+//     its index and the answer opens in place, section header still on screen.
+//   - the whole deck was toggled, or a new one generated: the layout changed
+//     wholesale, so go to the Cards header.
+func (m *Model) restoreContentPosition(msg contentLoadedMsg) {
+	switch {
+	case m.pendingCardFocus != "":
+		id := m.pendingCardFocus
+		m.pendingCardFocus = ""
+		m.contentScroll = m.pendingScroll
+		for i, cid := range msg.cardIDs {
+			if cid == id {
+				m.contentLineCursor = i
+				break
+			}
+		}
+		// Only moves the view if the card fell outside it — hiding a card can
+		// leave the document shorter than the old offset.
+		m.clampContentScroll()
+		m.scrollContentToCursor(m.contentViewHeight())
+
+	case m.jumpToCards:
+		m.jumpToCards = false
+		if msg.has[ctCards] && msg.offsets[ctCards] >= 0 {
+			m.contentScroll = msg.offsets[ctCards]
+			m.contentLineCursor = msg.offsets[ctCards]
+		}
+	}
+}
+
+// clampContentScroll keeps contentScroll pointing at a real line. Needed after
+// a re-render shrinks the document — hiding a card removes lines that may sit
+// below the current offset.
+//
+// It deliberately does NOT enforce scroll <= len-viewportHeight. Sections are
+// scrolled to by offset (see jumpToCards), and the last section is routinely
+// shorter than the pane; requiring a full pane would drag the view backwards
+// and show the tail of the previous section above it.
+func (m *Model) clampContentScroll() {
+	max := len(m.contentLines) - 1
+	if max < 0 {
+		max = 0
+	}
+	if m.contentScroll > max {
+		m.contentScroll = max
+	}
+	if m.contentScroll < 0 {
+		m.contentScroll = 0
+	}
+}
+
 func (m *Model) scrollContentToCursor(viewH int) {
 	if m.contentLineCursor < m.contentScroll {
 		m.contentScroll = m.contentLineCursor

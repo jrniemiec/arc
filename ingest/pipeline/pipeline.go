@@ -18,6 +18,7 @@ import (
 	"log/slog"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/flashcards"
 	"github.com/jrniemiec/arc/ingest/embed"
 	"github.com/jrniemiec/arc/ingest/extractor"
 	"github.com/jrniemiec/arc/store"
@@ -141,6 +142,7 @@ type FlashcardsRequest struct {
 	Text     string // text to generate flashcards from
 	Style    string // "socratic" | "cloze"
 	Profile  string // profile name override
+	Count    int    // target number of cards; 0 leaves the count to the model
 	Progress func(string)
 }
 
@@ -149,6 +151,7 @@ type FlashcardsResult struct {
 	JSON  []byte
 	Model string
 	Style string
+	Count int // cards actually produced
 	Usage llm.Usage
 }
 
@@ -168,6 +171,13 @@ func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (
 		return FlashcardsResult{}, fmt.Errorf("profile: %w", err)
 	}
 
+	// flashcard_max_tokens caps this call. Without this it was read only by the
+	// cost estimator and capped nothing.
+	maxOut := prof.MaxOutputTokens
+	if cfg.Ingest.FlashcardMaxTokens > 0 {
+		maxOut = cfg.Ingest.FlashcardMaxTokens
+	}
+
 	p, err := llm.New(llm.ProviderConfig{
 		Provider:        prof.Provider,
 		Model:           prof.Model,
@@ -175,19 +185,23 @@ func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (
 		APIKey:          resolveAPIKey(prof.Provider),
 		Think:           prof.Think,
 		Thinking:        prof.Thinking,
-		MaxOutputTokens: prof.MaxOutputTokens,
+		MaxOutputTokens: maxOut,
 	})
 	if err != nil {
 		return FlashcardsResult{}, fmt.Errorf("llm provider: %w", err)
 	}
 
-	progress(fmt.Sprintf("generating flashcards (style: %s, model: %s)...", style, prof.Model))
-	data, usage, err := generateFlashcards(ctx, p, req.Text, style, cfg.FlashcardStylePrompt(style))
+	if req.Count > 0 {
+		progress(fmt.Sprintf("generating ~%d flashcards (style: %s, model: %s)...", req.Count, style, prof.Model))
+	} else {
+		progress(fmt.Sprintf("generating flashcards (style: %s, model: %s)...", style, prof.Model))
+	}
+	data, n, usage, err := generateFlashcards(ctx, p, req.Text, req.Count, cfg.FlashcardStylePrompt(style))
 	if err != nil {
 		return FlashcardsResult{}, err
 	}
 
-	return FlashcardsResult{JSON: data, Model: prof.Model, Style: style, Usage: usage}, nil
+	return FlashcardsResult{JSON: data, Model: prof.Model, Style: style, Count: n, Usage: usage}, nil
 }
 
 // Request describes one ingest operation.
@@ -621,7 +635,9 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 		if err != nil {
 			return Result{}, fmt.Errorf("llm provider: %w", err)
 		}
-		fj, cu, err := generateFlashcards(ctx, fcProvider, summaryText, flashcardStyle, cfg.FlashcardStylePrompt(flashcardStyle))
+		// Count scales with the article, not the summary: summaries are
+		// compressed and flatten length differences.
+		fj, _, cu, err := generateFlashcards(ctx, fcProvider, summaryText, cfg.CardCountForWords(wordCount), cfg.FlashcardStylePrompt(flashcardStyle))
 		if err != nil {
 			// Flashcard failure is non-fatal — log and continue without them.
 			slog.Warn("flashcards failed, continuing without them", "slug", slug, "err", err)
@@ -900,12 +916,21 @@ func generateFlash(ctx context.Context, p llm.Provider, text, systemPrompt strin
 	return out, u, err
 }
 
-func generateFlashcards(ctx context.Context, p llm.Provider, text, style, systemPrompt string) ([]byte, llm.Usage, error) {
+// generateFlashcards calls the model and returns the card JSON plus the number
+// of cards it contains. count > 0 asks for approximately that many; an exact
+// number makes the model pad thin articles and truncate dense ones, so the
+// prompt says "about".
+func generateFlashcards(ctx context.Context, p llm.Provider, text string, count int, systemPrompt string) ([]byte, int, llm.Usage, error) {
+	instruction := "Generate flashcards from this text."
+	if count > 0 {
+		instruction = fmt.Sprintf("Generate about %d flashcards from this text, covering the most important ideas.", count)
+	}
+
 	raw, u, err := chat(ctx, p,
 		systemPrompt,
-		"Generate flashcards from this text. Return valid JSON only, no markdown fences:\n\n"+text)
+		instruction+" Return valid JSON only, no markdown fences:\n\n"+text)
 	if err != nil {
-		return nil, u, err
+		return nil, 0, u, err
 	}
 
 	raw = strings.TrimSpace(raw)
@@ -914,10 +939,13 @@ func generateFlashcards(ctx context.Context, p llm.Provider, text, style, system
 	raw = strings.TrimSuffix(raw, "```")
 	raw = strings.TrimSpace(raw)
 
-	if !json.Valid([]byte(raw)) {
-		return nil, u, fmt.Errorf("flashcards LLM returned invalid JSON")
+	// Parse rather than merely validate: json.Valid accepted "hello" and {} and
+	// wrote them to disk.
+	cards, err := flashcards.Parse("", []byte(raw))
+	if err != nil {
+		return nil, 0, u, fmt.Errorf("flashcards LLM output: %w", err)
 	}
-	return []byte(raw), u, nil
+	return []byte(raw), len(cards), u, nil
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
