@@ -20,22 +20,37 @@ const (
 	anthropicAPIBase = "https://api.anthropic.com/v1/messages"
 	anthropicVersion = "2023-06-01"
 	defaultMaxOutput = 4096
+
+	// Anthropic thinking modes. The zero value "" omits the `thinking`
+	// request parameter entirely, preserving the pre-adaptive wire format.
+	thinkingDisabled = "disabled"
+	thinkingAdaptive = "adaptive"
 )
 
 type AnthropicProvider struct {
 	apiKey          string
 	model           string
 	maxOutputTokens int
+	thinking        string
 	http            *http.Client
 }
 
-func NewAnthropicProvider(model string, maxOutputTokens int) (*AnthropicProvider, error) {
+// NewAnthropicProvider builds a provider for model. thinking is "" (omit the
+// parameter), "disabled", or "adaptive".
+func NewAnthropicProvider(model string, maxOutputTokens int, thinking string) (*AnthropicProvider, error) {
 	key := strings.TrimSpace(os.Getenv("ARC_ANTHROPIC_API_KEY"))
 	if key == "" {
 		key = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
 	}
 	if key == "" {
 		return nil, errors.New("ANTHROPIC_API_KEY not set")
+	}
+	thinking = strings.ToLower(strings.TrimSpace(thinking))
+	switch thinking {
+	case "", thinkingDisabled, thinkingAdaptive:
+	default:
+		return nil, fmt.Errorf("anthropic: invalid thinking mode %q (want %q, %q, or empty)",
+			thinking, thinkingDisabled, thinkingAdaptive)
 	}
 	if maxOutputTokens <= 0 {
 		maxOutputTokens = defaultMaxOutput
@@ -44,6 +59,7 @@ func NewAnthropicProvider(model string, maxOutputTokens int) (*AnthropicProvider
 		apiKey:          key,
 		model:           model,
 		maxOutputTokens: maxOutputTokens,
+		thinking:        thinking,
 		http: &http.Client{
 			Timeout: 0,
 			Transport: &http.Transport{
@@ -67,7 +83,14 @@ type anthropicReq struct {
 	MaxTokens int            `json:"max_tokens"`
 	System    string         `json:"system,omitempty"`
 	Messages  []anthropicMsg `json:"messages"`
+	Thinking  *thinkingCfg   `json:"thinking,omitempty"`
 	Stream    bool           `json:"stream,omitempty"`
+}
+
+// thinkingCfg is the Anthropic `thinking` request parameter, omitted entirely
+// when the provider's thinking mode is "".
+type thinkingCfg struct {
+	Type string `json:"type"`
 }
 
 // --- Tool-aware request types (Anthropic wire format) ---
@@ -85,6 +108,7 @@ type anthropicToolReq struct {
 	System    json.RawMessage    `json:"system,omitempty"`
 	Messages  []anthropicRichMsg `json:"messages"`
 	Tools     []anthropicToolDef `json:"tools,omitempty"`
+	Thinking  *thinkingCfg       `json:"thinking,omitempty"`
 	Stream    bool               `json:"stream,omitempty"`
 }
 
@@ -113,17 +137,18 @@ type anthropicContent struct {
 }
 
 type anthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens   int `json:"input_tokens"`
+	OutputTokens  int `json:"output_tokens"`
 	ServerToolUse *struct {
 		WebSearchRequests int `json:"web_search_requests"`
 	} `json:"server_tool_use,omitempty"`
 }
 
 type anthropicResp struct {
-	Content []anthropicContent `json:"content"`
-	Usage   anthropicUsage     `json:"usage"`
-	Error   *anthropicError    `json:"error,omitempty"`
+	Content    []anthropicContent `json:"content"`
+	StopReason string             `json:"stop_reason,omitempty"`
+	Usage      anthropicUsage     `json:"usage"`
+	Error      *anthropicError    `json:"error,omitempty"`
 }
 
 type anthropicError struct {
@@ -134,9 +159,9 @@ type anthropicError struct {
 type anthropicStreamEvent struct {
 	Type         string `json:"type"`
 	ContentBlock *struct {
-		Type  string `json:"type"`
-		ID    string `json:"id,omitempty"`
-		Name  string `json:"name,omitempty"`
+		Type  string          `json:"type"`
+		ID    string          `json:"id,omitempty"`
+		Name  string          `json:"name,omitempty"`
 		Input json.RawMessage `json:"input,omitempty"`
 	} `json:"content_block,omitempty"`
 	Delta *struct {
@@ -169,6 +194,9 @@ func (p *AnthropicProvider) buildReq(systemPrompt string, messages []chat.Messag
 		MaxTokens: p.maxOutputTokens,
 		Messages:  msgs,
 		Stream:    stream,
+	}
+	if p.thinking != "" {
+		r.Thinking = &thinkingCfg{Type: p.thinking}
 	}
 	if sp := strings.TrimSpace(systemPrompt); sp != "" {
 		r.System = sp
@@ -225,9 +253,6 @@ func (p *AnthropicProvider) Chat(ctx context.Context, systemPrompt string, messa
 	if out.Error != nil {
 		return "", chat.Usage{}, errors.New(out.Error.Message)
 	}
-	if len(out.Content) == 0 {
-		return "", chat.Usage{}, errors.New("anthropic: empty response content")
-	}
 	u := chat.Usage{
 		InputTokens:  out.Usage.InputTokens,
 		OutputTokens: out.Usage.OutputTokens,
@@ -235,7 +260,25 @@ func (p *AnthropicProvider) Chat(ctx context.Context, systemPrompt string, messa
 	if out.Usage.ServerToolUse != nil {
 		u.WebSearchRequests = out.Usage.ServerToolUse.WebSearchRequests
 	}
-	return out.Content[0].Text, u, nil
+	if len(out.Content) == 0 {
+		return "", u, errors.New("anthropic: empty response content")
+	}
+	// The answer is not necessarily the first block — models with thinking
+	// enabled lead with a thinking block. Concatenate every text block, which
+	// reconstructs the same string ChatStream accumulates from text deltas.
+	var sb strings.Builder
+	for _, c := range out.Content {
+		if c.Type == "text" {
+			sb.WriteString(c.Text)
+		}
+	}
+	if sb.Len() == 0 {
+		if out.StopReason != "" {
+			return "", u, fmt.Errorf("anthropic: response contained no text content (stop_reason: %s)", out.StopReason)
+		}
+		return "", u, errors.New("anthropic: response contained no text content")
+	}
+	return sb.String(), u, nil
 }
 
 func (p *AnthropicProvider) ChatStream(
@@ -389,9 +432,9 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 	var systemBlock json.RawMessage
 	if sp := strings.TrimSpace(systemPrompt); sp != "" {
 		type sysBlock struct {
-			Type         string      `json:"type"`
-			Text         string      `json:"text"`
-			CacheControl *cacheCtrl  `json:"cache_control,omitempty"`
+			Type         string     `json:"type"`
+			Text         string     `json:"text"`
+			CacheControl *cacheCtrl `json:"cache_control,omitempty"`
 		}
 		sb := []sysBlock{{Type: "text", Text: sp, CacheControl: &cacheCtrl{Type: "ephemeral"}}}
 		systemBlock, _ = json.Marshal(sb)
@@ -423,6 +466,9 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 		Tools:     apiTools,
 		Stream:    true,
 	}
+	if p.thinking != "" {
+		r.Thinking = &thinkingCfg{Type: p.thinking}
+	}
 	body, err := json.Marshal(r)
 	if err != nil {
 		return chat.StreamResponse{}, err
@@ -447,8 +493,8 @@ func (p *AnthropicProvider) ChatStreamWithTools(
 	var (
 		contentBlocks []chat.ContentBlock
 		currentBlock  chat.ContentBlock
-		inputBuf      strings.Builder    // accumulates partial JSON for tool_use/server_tool_use input
-		rawCB         json.RawMessage    // raw content_block JSON for server tool blocks
+		inputBuf      strings.Builder // accumulates partial JSON for tool_use/server_tool_use input
+		rawCB         json.RawMessage // raw content_block JSON for server tool blocks
 		u             chat.Usage
 		stopReason    string
 	)

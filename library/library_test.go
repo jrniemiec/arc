@@ -231,14 +231,19 @@ func TestCostCalc(t *testing.T) {
 	cfg := config.Default()
 
 	cases := []struct {
-		model    string
-		in       int
-		out      int
-		wantUSD  float64
+		model   string
+		in      int
+		out     int
+		wantUSD float64
 	}{
-		{"claude-opus-4-6", 1_000_000, 0, 15.00},
-		{"claude-haiku-4-5", 1_000_000, 1_000_000, 4.80},
+		{"claude-opus-5", 1_000_000, 0, 5.00},
+		{"claude-opus-4-6", 1_000_000, 0, 5.00},
+		// Dated ID: the profile pins the snapshot, and CalcCost matches the
+		// model string exactly. The undated alias has no profile and costs 0.
+		{"claude-haiku-4-5-20251001", 1_000_000, 1_000_000, 6.00},
+		{"claude-haiku-4-5", 1_000_000, 1_000_000, 0.00},
 		{"nomic-embed-text", 1_000_000, 0, 0.00},
+		{"claude-sonnet-5", 10_000, 1_000, 0.045},
 		{"claude-sonnet-4-6", 10_000, 1_000, 0.045},
 	}
 

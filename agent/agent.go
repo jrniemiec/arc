@@ -305,8 +305,8 @@ func runFeed(
 	}
 
 	decisions := make([]ItemDecision, total)
-	costs := make([]float64, total)  // per-item cost, written by each goroutine at its own index
-	slugs := make([]string, total)   // per-item slug, written by each goroutine at its own index
+	costs := make([]float64, total) // per-item cost, written by each goroutine at its own index
+	slugs := make([]string, total)  // per-item slug, written by each goroutine at its own index
 	var (
 		ingestSem = make(chan struct{}, IngestConcurrency)
 		ingestWg  sync.WaitGroup
@@ -555,6 +555,7 @@ func resolveFilterChat(opts RunOptions) (feed.ChatFunc, error) {
 		Model:    p.Model,
 		Host:     p.Host,
 		APIKey:   apiKey,
+		Thinking: p.Thinking,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("init filter LLM provider: %w", err)

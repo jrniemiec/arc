@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -20,8 +19,9 @@ var profilesCmd = &cobra.Command{
 	Short: "List available LLM profiles with pricing and tradeoff notes",
 	Long: `List all available LLM profiles defined in config.
 
-Profiles are sorted by cost tier. Active profiles for each ingest step
-are marked with an arrow.
+Profiles are grouped by provider, most capable first, with superseded
+(legacy) models listed last. Active profiles for each ingest step are
+marked with an arrow.
 
 Examples:
   arc profiles
@@ -30,35 +30,24 @@ Examples:
 		cfg := cmd.Context().Value(keyConfig).(config.Config)
 
 		type profileEntry struct {
-			Name     string `json:"name"`
-			Provider string `json:"provider"`
-			Model    string `json:"model"`
-			CostTier string `json:"cost_tier"`
+			Name     string   `json:"name"`
+			Provider string   `json:"provider"`
+			Model    string   `json:"model"`
+			CostTier string   `json:"cost_tier"`
 			Active   []string `json:"active,omitempty"`
 			config.ProfileInfo
-		}
-
-		tierOrder := map[string]int{
-			"local": 0, "very_low": 1, "low": 2,
-			"medium": 3, "high": 4, "premium": 5,
 		}
 
 		type namedProfile struct {
 			name string
 			p    config.Profile
 		}
-		sorted := make([]namedProfile, 0, len(cfg.Profiles))
-		for name, p := range cfg.Profiles {
-			sorted = append(sorted, namedProfile{name, p})
+		// Same order as the TUI /model picker.
+		names := cfg.ProfileNamesOrdered()
+		sorted := make([]namedProfile, 0, len(names))
+		for _, name := range names {
+			sorted = append(sorted, namedProfile{name, cfg.Profiles[name]})
 		}
-		sort.Slice(sorted, func(i, j int) bool {
-			ti := tierOrder[sorted[i].p.Info.CostTier]
-			tj := tierOrder[sorted[j].p.Info.CostTier]
-			if ti != tj {
-				return ti < tj
-			}
-			return sorted[i].name < sorted[j].name
-		})
 
 		if isJSON(cmd) {
 			entries := make([]profileEntry, 0, len(sorted))

@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"sort"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -939,9 +939,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatCancelStream = nil
 			}
 			m.chatMode = true
-			m.chatEngine = nil        // lazy — engine init deferred to first message
-			m.chatPendingPrompt = ""  // clear any pending prompt from previous workspace
-			m.chatProfileOverride = "" // reset session-only override on workspace change
+			m.chatEngine = nil                // lazy — engine init deferred to first message
+			m.chatPendingPrompt = ""          // clear any pending prompt from previous workspace
+			m.chatProfileOverride = ""        // reset session-only override on workspace change
 			m.chatLoadedProfile = msg.profile // profile from workspace chat/chat.json
 			m.chatWorkspace = msg.workspace
 			m.chatRawMsgs = msg.msgs
@@ -2637,7 +2637,6 @@ func (m *Model) collapseCollection(rowIdx int) tea.Cmd {
 	m.clampNavRowScroll()
 	return nil
 }
-
 
 // triggerCollectionContentLoad loads content for the article under navRowCursor.
 // triggerWorkspaceChatLoad loads chat history if cursor is on a workspace row.
@@ -4354,9 +4353,11 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		}
 
 	case "/profile", "/model", "/chat-profile", "/chat-model", "/correction-profile", "/correction-model", "/workspace-profile", "/workspace-model":
-		var items []cmdCompletion
-		for name, p := range m.cfg.Profiles {
-			items = append(items, cmdCompletion{cmd: name, desc: p.Model})
+		// Ordered, not map iteration: current models first, legacy at the bottom.
+		names := m.cfg.ProfileNamesOrdered()
+		items := make([]cmdCompletion, 0, len(names))
+		for _, name := range names {
+			items = append(items, cmdCompletion{cmd: name, desc: m.cfg.Profiles[name].Model})
 		}
 		return items
 
@@ -6352,11 +6353,11 @@ func (m *Model) cmdIngest(arg string) tea.Cmd {
 	return func() tea.Msg {
 		start := time.Now()
 		req := service.IngestRequest{
-			URL:             url,
-			SummaryProfile:  profile,
-			FlashProfile:    profile,
+			URL:              url,
+			SummaryProfile:   profile,
+			FlashProfile:     profile,
 			FlashcardProfile: profile,
-			SummaryStyle:    style,
+			SummaryStyle:     style,
 			Progress: func(step string) {
 				send(statusUpdateMsg{text: step})
 			},
@@ -8493,25 +8494,25 @@ func (m *Model) triggerWorkspaceReload() {
 	items := make([]workspaceItem, len(infos))
 	for i, w := range infos {
 		items[i] = workspaceItem{
-			name:            w.Name,
-			description:     w.Description,
-			status:          w.Status,
-			createdAt:       w.CreatedAt,
-			articleCount:    w.ArticleCount,
-			collectionCount: w.CollectionCount,
-			resourceCount:   w.ResourceCount,
-			outcomeCount:    w.OutcomeCount,
-			hasSystem:       w.HasSystem,
-			hasHistory:      w.HasHistory,
-			chatProfile:     w.ChatConfig.Profile,
-			chatStrategy:    w.ChatConfig.Strategy,
-			articles:        w.Articles,
-			collectionSlugs: w.CollectionSlugs,
-			resources:       w.ResourceNames,
-			resourceDirs:    w.ResourceDirs,
-			outcomes:        w.OutcomeNames,
-			atticArticles:   w.AtticArticles,
-			atticCollections: w.AtticCollectionSlugs,
+			name:                 w.Name,
+			description:          w.Description,
+			status:               w.Status,
+			createdAt:            w.CreatedAt,
+			articleCount:         w.ArticleCount,
+			collectionCount:      w.CollectionCount,
+			resourceCount:        w.ResourceCount,
+			outcomeCount:         w.OutcomeCount,
+			hasSystem:            w.HasSystem,
+			hasHistory:           w.HasHistory,
+			chatProfile:          w.ChatConfig.Profile,
+			chatStrategy:         w.ChatConfig.Strategy,
+			articles:             w.Articles,
+			collectionSlugs:      w.CollectionSlugs,
+			resources:            w.ResourceNames,
+			resourceDirs:         w.ResourceDirs,
+			outcomes:             w.OutcomeNames,
+			atticArticles:        w.AtticArticles,
+			atticCollections:     w.AtticCollectionSlugs,
 			expandedCols:         make(map[string]bool),
 			expandedResourceDirs: make(map[string]bool),
 		}
@@ -8914,7 +8915,6 @@ func (m *Model) scratchBlockNext() {
 	}
 }
 
-
 // cmdScratchCollapseBlock toggles the collapsed state of block at blockIdx.
 func (m *Model) cmdScratchCollapseBlock(blockIdx int) {
 	if m.scratchCollapsed == nil {
@@ -9226,6 +9226,7 @@ func doCorrection(text string, cfg config.Config) tea.Cmd {
 			Host:     prof.Host,
 			APIKey:   apiKey,
 			Think:    prof.Think,
+			Thinking: prof.Thinking,
 		})
 		if err != nil {
 			return correctionDoneMsg{err: fmt.Errorf("correction: %w", err)}

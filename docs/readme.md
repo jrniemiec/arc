@@ -61,7 +61,7 @@ By default arc stores everything under ~/.arc. Override with:
 Three provider backends, assignable per operation via profiles:
 
   OpenAI       gpt-4o-mini, gpt-4.1, gpt-5-mini
-  Anthropic    claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5
+  Anthropic    claude-opus-5, claude-sonnet-5, claude-haiku-4-5
   Ollama       llama3.1:8b, qwen2.5-coder:7b (local, offline)
 
 Embedding: OpenAI text-embedding-3-small.

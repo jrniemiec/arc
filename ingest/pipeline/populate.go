@@ -82,6 +82,7 @@ func WorkspacePopulate(
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
 		Think:    prof.Think,
+		Thinking: prof.Thinking,
 	})
 	if err != nil {
 		return PopulateResult{}, fmt.Errorf("llm provider: %w", err)
@@ -203,7 +204,6 @@ func WorkspacePopulate(
 		OutputTokens: totalOut,
 	}, nil
 }
-
 
 func buildPass1Prompt(name, description, hint string, includeCollections bool, collections []PopulateCollection, articles []PopulateArticle) string {
 	var sb strings.Builder

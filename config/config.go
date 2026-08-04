@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/jrniemiec/arc/internal/jsonc"
 )
@@ -55,7 +57,7 @@ type Config struct {
 
 	// TTS (macOS say(1))
 	TTSVoice string `json:"tts_voice,omitempty"` // say(1) voice name; empty = system default
-	TTSRate  int    `json:"tts_rate,omitempty"`   // words per minute; 0 = 200
+	TTSRate  int    `json:"tts_rate,omitempty"`  // words per minute; 0 = 200
 
 	// AskX (single-shot LLM query pane in TUI)
 	AskX AskXConfig `json:"askx"`
@@ -134,15 +136,84 @@ type Profile struct {
 	Host     string `json:"host,omitempty"`  // Ollama only, default http://localhost:11434
 	Think    bool   `json:"think,omitempty"` // Ollama only: enable thinking/reasoning mode
 
+	// Thinking is the Anthropic thinking mode: "" (omit the parameter),
+	// ThinkingDisabled, or ThinkingAdaptive. Empty preserves the wire format
+	// used before adaptive thinking existed. Distinct from Think, which is
+	// Ollama-only.
+	Thinking string `json:"thinking,omitempty"`
+
+	// Legacy marks a superseded model kept only for reproducing or comparing
+	// against artifacts already generated with it. Legacy profiles sort to the
+	// bottom of pickers; they remain fully usable.
+	Legacy bool `json:"legacy,omitempty"`
+
 	Info ProfileInfo `json:"info"`
+}
+
+// Anthropic thinking modes for Profile.Thinking. The zero value "" omits the
+// `thinking` request parameter entirely.
+const (
+	ThinkingDisabled = "disabled"
+	ThinkingAdaptive = "adaptive"
+)
+
+// providerRank orders providers in profile pickers. Lower sorts first.
+var providerRank = map[string]int{"anthropic": 0, "openai": 1, "ollama": 2}
+
+// costTierRank orders profiles within a provider group, most capable first.
+var costTierRank = map[string]int{
+	"premium": 0, "high": 1, "medium": 2, "low": 3, "very_low": 4, "local": 5,
+}
+
+// ProfileNamesOrdered returns profile names in display order: current models
+// grouped by provider (Anthropic, OpenAI, Ollama), most capable first within
+// each group, with every Legacy profile pushed to the bottom. Map iteration is
+// random, so callers listing profiles must use this rather than ranging over
+// Profiles directly.
+func (c *Config) ProfileNamesOrdered() []string {
+	names := make([]string, 0, len(c.Profiles))
+	for name := range c.Profiles {
+		names = append(names, name)
+	}
+	rank := func(name string) (int, int, int) {
+		p := c.Profiles[name]
+		legacy := 0
+		if p.Legacy {
+			legacy = 1
+		}
+		prov, ok := providerRank[strings.ToLower(strings.TrimSpace(p.Provider))]
+		if !ok {
+			prov = len(providerRank)
+		}
+		tier, ok := costTierRank[strings.ToLower(strings.TrimSpace(p.Info.CostTier))]
+		if !ok {
+			tier = len(costTierRank)
+		}
+		return legacy, prov, tier
+	}
+	sort.Slice(names, func(i, j int) bool {
+		li, pi, ti := rank(names[i])
+		lj, pj, tj := rank(names[j])
+		switch {
+		case li != lj:
+			return li < lj
+		case pi != pj:
+			return pi < pj
+		case ti != tj:
+			return ti < tj
+		default:
+			return names[i] < names[j] // stable tiebreak
+		}
+	})
+	return names
 }
 
 // ProfileInfo holds human-readable metadata about a profile.
 // Displayed by `arc profiles` and useful for new users choosing a model.
 type ProfileInfo struct {
-	CostTier      string          `json:"cost_tier"`                         // "local" | "very_low" | "low" | "medium" | "high" | "premium"
-	CostVsValue   string          `json:"cost_vs_value"`                     // one-line tradeoff summary
-	ContextWindow int             `json:"context_window,omitempty"`          // model context window in tokens (0 = unknown)
+	CostTier      string          `json:"cost_tier"`                // "local" | "very_low" | "low" | "medium" | "high" | "premium"
+	CostVsValue   string          `json:"cost_vs_value"`            // one-line tradeoff summary
+	ContextWindow int             `json:"context_window,omitempty"` // model context window in tokens (0 = unknown)
 	Pricing       *ProfilePricing `json:"pricing_usd_per_1m_tokens,omitempty"`
 }
 
@@ -178,8 +249,8 @@ type IngestConfig struct {
 	FlashMaxTokens    int    `json:"flash_max_tokens"`    // max output tokens; default 256
 
 	// Flashcard tuning
-	FlashcardMaxTokens int                              `json:"flashcard_max_tokens"` // max output tokens; default 2048
-	FlashcardStyles    map[string]FlashcardStyleConfig  `json:"flashcard_styles"`     // per-style system prompts
+	FlashcardMaxTokens int                             `json:"flashcard_max_tokens"` // max output tokens; default 2048
+	FlashcardStyles    map[string]FlashcardStyleConfig `json:"flashcard_styles"`     // per-style system prompts
 
 	// Flashcard generation.
 	// When false (the default), flashcards are skipped unless --flashcards is passed explicitly.
@@ -190,12 +261,12 @@ type IngestConfig struct {
 	MinWords int `json:"min_words"` // articles below this word count are tagged "teaser" and skip LLM steps; default 300
 
 	// Collection suggestion
-	CollectionSuggestProfile  string `json:"collection_suggest_profile"`  // profile for arc collections suggest; default: flash_profile
-	CollectionSuggestPrompt   string `json:"collection_suggest_prompt"`   // system prompt override for collection suggestion
-	CollectionAssignProfile   string `json:"collection_assign_profile"`   // profile for arc collections assign; default: collection_suggest_profile
-	CollectionAssignPrompt    string `json:"collection_assign_prompt"`    // system prompt override for collection assignment
-	CollectionAssignBatch     int    `json:"collection_assign_batch"`     // articles per LLM call (default 50)
-	CollectionDescribePrompt  string `json:"collection_describe_prompt"`  // system prompt override for collection description generation
+	CollectionSuggestProfile string `json:"collection_suggest_profile"` // profile for arc collections suggest; default: flash_profile
+	CollectionSuggestPrompt  string `json:"collection_suggest_prompt"`  // system prompt override for collection suggestion
+	CollectionAssignProfile  string `json:"collection_assign_profile"`  // profile for arc collections assign; default: collection_suggest_profile
+	CollectionAssignPrompt   string `json:"collection_assign_prompt"`   // system prompt override for collection assignment
+	CollectionAssignBatch    int    `json:"collection_assign_batch"`    // articles per LLM call (default 50)
+	CollectionDescribePrompt string `json:"collection_describe_prompt"` // system prompt override for collection description generation
 }
 
 // FlashcardStyleConfig holds the system prompt for one flashcard style.
@@ -647,22 +718,48 @@ var builtinProfiles = map[string]Profile{
 	},
 	"opus": {
 		Provider: "anthropic",
-		Model:    "claude-opus-4-6",
+		Model:    "claude-opus-5",
+		Thinking: ThinkingDisabled,
 		Info: ProfileInfo{
 			CostTier:      "premium",
 			CostVsValue:   "Recommended for production summarization. Best coherence and reduction quality on long articles. Quality compounds in map-reduce — worth the cost.",
-			ContextWindow: 200_000,
-			Pricing:       &ProfilePricing{Input: 15.00, Output: 75.00},
+			ContextWindow: 1_000_000,
+			Pricing:       &ProfilePricing{Input: 5.00, Output: 25.00, CachedInput: 0.50},
+		},
+	},
+	"opus-4-6": {
+		Provider: "anthropic",
+		Model:    "claude-opus-4-6",
+		Thinking: ThinkingDisabled,
+		Legacy:   true,
+		Info: ProfileInfo{
+			CostTier:      "premium",
+			CostVsValue:   "Previous-generation Opus, pinned. Kept for reproducing and comparing against existing summary variants generated with it. Same price as Opus 5.",
+			ContextWindow: 1_000_000,
+			Pricing:       &ProfilePricing{Input: 5.00, Output: 25.00, CachedInput: 0.50},
 		},
 	},
 	"sonnet": {
 		Provider: "anthropic",
-		Model:    "claude-sonnet-4-6",
+		Model:    "claude-sonnet-5",
+		Thinking: ThinkingDisabled,
 		Info: ProfileInfo{
 			CostTier:      "medium",
 			CostVsValue:   "Recommended for production flashcard generation. Strong structured JSON output, good instruction following. Right balance for single-call tasks.",
-			ContextWindow: 200_000,
-			Pricing:       &ProfilePricing{Input: 3.00, Output: 15.00},
+			ContextWindow: 1_000_000,
+			Pricing:       &ProfilePricing{Input: 3.00, Output: 15.00, CachedInput: 0.30},
+		},
+	},
+	"sonnet-4-6": {
+		Provider: "anthropic",
+		Model:    "claude-sonnet-4-6",
+		Thinking: ThinkingDisabled,
+		Legacy:   true,
+		Info: ProfileInfo{
+			CostTier:      "medium",
+			CostVsValue:   "Previous-generation Sonnet, pinned. Kept for reproducing and comparing against existing summary and flashcard variants generated with it. Same price as Sonnet 5.",
+			ContextWindow: 1_000_000,
+			Pricing:       &ProfilePricing{Input: 3.00, Output: 15.00, CachedInput: 0.30},
 		},
 	},
 	"haiku": {
@@ -672,7 +769,7 @@ var builtinProfiles = map[string]Profile{
 			CostTier:      "very_low",
 			CostVsValue:   "Recommended for production flash generation. Trivial single-call task — Haiku is fast, cheap, and more than capable for 3-5 sentence audio summaries.",
 			ContextWindow: 200_000,
-			Pricing:       &ProfilePricing{Input: 0.80, Output: 4.00},
+			Pricing:       &ProfilePricing{Input: 1.00, Output: 5.00, CachedInput: 0.10},
 		},
 	},
 	"oai-embed": {
@@ -733,15 +830,15 @@ func Default() Config {
 		EventsPath:   filepath.Join(dataRoot, "events.jsonl"),
 		Profiles:     builtinProfiles,
 		Ingest: IngestConfig{
-			SummaryProfile:    "oai-mini",
-			FlashProfile:      "oai-mini",
-			FlashcardProfile:  "oai-mini",
-			SummaryStyle:      "study-notes",
-			FlashcardStyle:    "socratic",
-			EmbedProfile:      "oai-embed",
-			ChunkTokens:       900,
-			SummaryMaxTokens:  2048,
-			SummaryStyles:     builtinSummaryStyles,
+			SummaryProfile:     "oai-mini",
+			FlashProfile:       "oai-mini",
+			FlashcardProfile:   "oai-mini",
+			SummaryStyle:       "study-notes",
+			FlashcardStyle:     "socratic",
+			EmbedProfile:       "oai-embed",
+			ChunkTokens:        900,
+			SummaryMaxTokens:   2048,
+			SummaryStyles:      builtinSummaryStyles,
 			FlashSystemPrompt:  DefaultFlashSystemPrompt,
 			FlashMaxTokens:     256,
 			FlashcardMaxTokens: 2048,
@@ -749,7 +846,8 @@ func Default() Config {
 			MinWords:           300,
 		},
 		PreferredModels: []string{
-			"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
+			"claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001",
+			"claude-opus-4-6", "claude-sonnet-4-6",
 			"gpt-4.1", "gpt-4o-mini",
 		},
 		PreferredStyles: []string{"study-notes", "bullets", "technical"},
@@ -814,25 +912,25 @@ func Load(path string) (Config, error) {
 
 	// Decode into a temporary struct so we can merge profiles rather than replace.
 	var overlay struct {
-		DataRoot        string             `json:"data_root"`
-		ArticlesRoot    string             `json:"articles_root"`
-		DBPath          string             `json:"db_path"`
-		VectorPath      string             `json:"vector_path"`
-		EventsPath      string             `json:"events_path"`
-		AgentPath       string             `json:"agent_path"`
-		Profiles        map[string]Profile `json:"profiles"`
-		Ingest          IngestConfig       `json:"ingest"`
-		PreferredModels []string           `json:"preferred_models"`
-		PreferredStyles []string           `json:"preferred_styles"`
-		CookieJars      map[string]string  `json:"cookie_jars"`
-		Chat               ChatConfig               `json:"chat"`
-		AskX               AskXConfig               `json:"askx"`
-		ArticleChat        ArticleChatConfig         `json:"article_chat"`
-		WorkspacePopulate  WorkspacePopulateConfig   `json:"workspace_populate"`
-		LogPath            string                    `json:"log_path"`
-		LogLevel           string                    `json:"log_level"`
-		CorrectionProfile  string                    `json:"correction_profile"`
-		CorrectionPrompt   string                    `json:"correction_prompt"`
+		DataRoot          string                  `json:"data_root"`
+		ArticlesRoot      string                  `json:"articles_root"`
+		DBPath            string                  `json:"db_path"`
+		VectorPath        string                  `json:"vector_path"`
+		EventsPath        string                  `json:"events_path"`
+		AgentPath         string                  `json:"agent_path"`
+		Profiles          map[string]Profile      `json:"profiles"`
+		Ingest            IngestConfig            `json:"ingest"`
+		PreferredModels   []string                `json:"preferred_models"`
+		PreferredStyles   []string                `json:"preferred_styles"`
+		CookieJars        map[string]string       `json:"cookie_jars"`
+		Chat              ChatConfig              `json:"chat"`
+		AskX              AskXConfig              `json:"askx"`
+		ArticleChat       ArticleChatConfig       `json:"article_chat"`
+		WorkspacePopulate WorkspacePopulateConfig `json:"workspace_populate"`
+		LogPath           string                  `json:"log_path"`
+		LogLevel          string                  `json:"log_level"`
+		CorrectionProfile string                  `json:"correction_profile"`
+		CorrectionPrompt  string                  `json:"correction_prompt"`
 	}
 	if err := jsonc.Unmarshal(data, &overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)

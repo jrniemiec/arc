@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/imroc/req/v3 v3.57.0
 	github.com/jrniemiec/brief v0.8.0
-	github.com/jrniemiec/llm v0.1.2
+	github.com/jrniemiec/llm v0.2.0
 	github.com/mark3labs/mcp-go v0.54.1
 	github.com/mattn/go-isatty v0.0.20
 	github.com/mmcdole/gofeed v1.3.0

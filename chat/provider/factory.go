@@ -13,7 +13,7 @@ import (
 func New(p config.Profile, maxOutputTokens int) (chat.Provider, error) {
 	switch strings.ToLower(strings.TrimSpace(p.Provider)) {
 	case "anthropic":
-		return NewAnthropicProvider(p.Model, maxOutputTokens)
+		return NewAnthropicProvider(p.Model, maxOutputTokens, p.Thinking)
 	case "openai":
 		return NewOpenAIProvider(p.Model)
 	case "ollama":

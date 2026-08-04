@@ -204,10 +204,11 @@ Config lives at `~/.arc/config.jsonc` (JSONC — comments allowed). Override pat
   "data_root": "~/.arc",
 
   "profiles": {
-    "oai-mini": { "provider": "openai", "model": "gpt-4o-mini" },
-    "opus":     { "provider": "anthropic", "model": "claude-opus-4-6" },
-    "haiku":    { "provider": "anthropic", "model": "claude-haiku-4-5" },
-    "llama":    { "provider": "ollama", "model": "llama3.1:8b" }
+    "oai-mini":   { "provider": "openai", "model": "gpt-4o-mini" },
+    "opus":       { "provider": "anthropic", "model": "claude-opus-5", "thinking": "disabled" },
+    "haiku":      { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" },
+    "opus-4-6":   { "provider": "anthropic", "model": "claude-opus-4-6", "legacy": true },
+    "llama":      { "provider": "ollama", "model": "llama3.1:8b" }
   },
 
   "ingest": {
@@ -221,7 +222,7 @@ Config lives at `~/.arc/config.jsonc` (JSONC — comments allowed). Override pat
   },
 
   // Variant preference — global, no per-article state
-  "preferred_models": ["claude-opus-4-6", "claude-sonnet-4-6", "gpt-4.1"],
+  "preferred_models": ["claude-opus-5", "claude-sonnet-5", "claude-opus-4-6", "gpt-4.1"],
   "preferred_styles": ["study-notes", "bullets", "technical"],
 
   "chat": {
@@ -268,14 +269,26 @@ Profiles map a short name to a provider, model, and parameters. Assign profiles 
 | `askx.profile` | Single-shot queries | `haiku` |
 | `correction_profile` | Input correction (Ctrl+G) | `oai-mini` |
 
-Run `arc profiles` to list all configured profiles with pricing info.
+Per-profile fields:
+
+| Field | Applies to | Values | Meaning |
+|---|---|---|---|
+| `provider` | all | `openai` \| `anthropic` \| `ollama` | Which client to use |
+| `model` | all | model ID | Exact model string sent to the provider |
+| `host` | Ollama | URL | Defaults to `http://localhost:11434` |
+| `think` | Ollama | bool | Enable reasoning mode (Qwen3, DeepSeek-R1) |
+| `thinking` | Anthropic | `""` \| `disabled` \| `adaptive` | `""` omits the parameter; `disabled` is the default for the built-in profiles |
+| `legacy` | all | bool | Superseded model, kept for reproducing older artifacts. Sorts to the bottom of pickers; still fully usable |
+
+Run `arc profiles` to list all configured profiles with pricing info. Profiles are grouped by
+provider, most capable first, with legacy models last — the same order as the TUI `/model` picker.
 
 ### Providers
 
 | Provider | Config value | Models | Notes |
 |---|---|---|---|
 | OpenAI | `openai` | gpt-4o-mini, gpt-4.1, gpt-5-mini | Default for bulk operations |
-| Anthropic | `anthropic` | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 | Direct HTTP API |
+| Anthropic | `anthropic` | claude-opus-5, claude-sonnet-5, claude-haiku-4-5 | Direct HTTP API |
 | Ollama | `ollama` | llama3.1:8b, qwen2.5-coder:7b | Local, no API key, no tool calling |
 
 Embedding: OpenAI `text-embedding-3-small` (required for semantic search).
@@ -372,8 +385,8 @@ Articles can have multiple summary and flashcard variants, differing by style an
 
 ```
 summary.study-notes.gpt-4o-mini.txt
-summary.technical.claude-opus-4-6.txt
-flashcards.socratic.claude-sonnet-4-6.json
+summary.technical.claude-opus-5.txt
+flashcards.socratic.claude-sonnet-5.json
 ```
 
 The preferred variant is resolved at read time from `preferred_models` and `preferred_styles` in config. Change the config and the change applies to every article instantly — no per-article state.

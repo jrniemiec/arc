@@ -17,16 +17,16 @@ import (
 
 	"log/slog"
 
-	briefchunk "github.com/jrniemiec/brief/chunk"
-	briefllm "github.com/jrniemiec/brief/llm"
-	briefsummarize "github.com/jrniemiec/brief/summarize"
-	brieftypes "github.com/jrniemiec/brief/types"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/ingest/embed"
 	"github.com/jrniemiec/arc/ingest/extractor"
 	"github.com/jrniemiec/arc/store"
 	"github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/store/vector"
+	briefchunk "github.com/jrniemiec/brief/chunk"
+	briefllm "github.com/jrniemiec/brief/llm"
+	briefsummarize "github.com/jrniemiec/brief/summarize"
+	brieftypes "github.com/jrniemiec/brief/types"
 	"github.com/jrniemiec/llm"
 )
 
@@ -70,6 +70,7 @@ func Summarize(ctx context.Context, cfg config.Config, req SummarizeRequest) (Su
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
 		Think:    prof.Think,
+		Thinking: prof.Thinking,
 	})
 	if err != nil {
 		return SummarizeResult{}, fmt.Errorf("llm provider: %w", err)
@@ -118,6 +119,7 @@ func Flash(ctx context.Context, cfg config.Config, req FlashRequest) (FlashResul
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
 		Think:    prof.Think,
+		Thinking: prof.Thinking,
 	})
 	if err != nil {
 		return FlashResult{}, fmt.Errorf("llm provider: %w", err)
@@ -170,6 +172,7 @@ func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
 		Think:    prof.Think,
+		Thinking: prof.Thinking,
 	})
 	if err != nil {
 		return FlashcardsResult{}, fmt.Errorf("llm provider: %w", err)
@@ -434,6 +437,7 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 			Model:    prof.Model,
 			Host:     prof.Host,
 			APIKey:   resolveAPIKey(prof.Provider),
+			Thinking: prof.Thinking,
 		})
 	}
 
@@ -713,17 +717,17 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	meta := fs.Meta{
-		ID:             slug,
-		NumID:          numID,
-		Title:          title,
-		URL:            req.URL,
-		SourceType:     sourceType,
-		Author:         extracted.Author,
-		Language:       extracted.Language,
-		IngestedAt:     now,
-		SummaryModel:   summaryProf.Model,
-		SummaryStyle:   summaryStyle,
-		FlashModel:     flashProf.Model,
+		ID:           slug,
+		NumID:        numID,
+		Title:        title,
+		URL:          req.URL,
+		SourceType:   sourceType,
+		Author:       extracted.Author,
+		Language:     extracted.Language,
+		IngestedAt:   now,
+		SummaryModel: summaryProf.Model,
+		SummaryStyle: summaryStyle,
+		FlashModel:   flashProf.Model,
 		FlashcardModel: func() string {
 			if len(flashcardsJSON) > 0 {
 				return flashcardProf.Model
@@ -736,11 +740,11 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 			}
 			return ""
 		}(),
-		EmbedModel:     embedModel,
-		Feed:           req.AgentFeed,
-		AgentRunID:     req.AgentRunID,
-		AgentVerdict:   req.AgentVerdict,
-		AgentReason:    req.AgentReason,
+		EmbedModel:   embedModel,
+		Feed:         req.AgentFeed,
+		AgentRunID:   req.AgentRunID,
+		AgentVerdict: req.AgentVerdict,
+		AgentReason:  req.AgentReason,
 	}
 	if err := fs.WriteMeta(dir, meta); err != nil {
 		return Result{}, fmt.Errorf("write meta: %w", err)
@@ -875,7 +879,6 @@ func summarizeText(ctx context.Context, p llm.Provider, text, title, source, sty
 
 	return summary.Markdown, llm.Usage{InputTokens: bu.InputTokens, OutputTokens: bu.OutputTokens}, nil
 }
-
 
 func generateFlash(ctx context.Context, p llm.Provider, text, systemPrompt string, maxTokens int) (string, llm.Usage, error) {
 	out, u, err := p.Chat(ctx, systemPrompt, []llm.Message{
@@ -1046,11 +1049,11 @@ func resolveAPIKey(provider string) string {
 
 // CollectionSuggestRequest describes a library-wide collection suggestion call.
 type CollectionSuggestRequest struct {
-	Titles      []string                     // article titles
+	Titles      []string                      // article titles
 	Existing    []CollectionSuggestCollection // already-created collections to avoid duplicating
-	Profile     string                       // profile name override; falls back to CollectionSuggestProfileName
-	Count       int                          // optional: target number of collections (0 = let the model decide)
-	MinArticles int                          // optional: minimum articles per collection (0 = no constraint)
+	Profile     string                        // profile name override; falls back to CollectionSuggestProfileName
+	Count       int                           // optional: target number of collections (0 = let the model decide)
+	MinArticles int                           // optional: minimum articles per collection (0 = no constraint)
 	Progress    func(string)
 }
 
@@ -1077,6 +1080,7 @@ func CollectionSuggest(ctx context.Context, cfg config.Config, req CollectionSug
 		Host:            prof.Host,
 		APIKey:          resolveAPIKey(prof.Provider),
 		Think:           false,
+		Thinking:        prof.Thinking,
 		MaxOutputTokens: 16384,
 		Timeout:         5 * time.Minute,
 	})
@@ -1187,6 +1191,7 @@ func CollectionArticleSuggest(ctx context.Context, cfg config.Config, req Collec
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
 		Think:    prof.Think,
+		Thinking: prof.Thinking,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("llm provider: %w", err)
@@ -1259,6 +1264,7 @@ func CollectionDescribe(ctx context.Context, cfg config.Config, req CollectionDe
 		Host:     prof.Host,
 		APIKey:   resolveAPIKey(prof.Provider),
 		Think:    prof.Think,
+		Thinking: prof.Thinking,
 	})
 	if err != nil {
 		return "", fmt.Errorf("llm provider: %w", err)
@@ -1370,9 +1376,9 @@ type CollectionAssignArticle struct {
 
 // CollectionAssignRequest describes a batch collection assignment call.
 type CollectionAssignRequest struct {
-	Articles    []CollectionAssignArticle    // articles to assign (slug + title)
+	Articles    []CollectionAssignArticle     // articles to assign (slug + title)
 	Collections []CollectionSuggestCollection // existing collections (slug + description)
-	Profile     string                       // profile name override
+	Profile     string                        // profile name override
 	Progress    func(string)
 }
 
@@ -1399,6 +1405,7 @@ func CollectionAssign(ctx context.Context, cfg config.Config, req CollectionAssi
 		Host:            prof.Host,
 		APIKey:          resolveAPIKey(prof.Provider),
 		Think:           false,
+		Thinking:        prof.Thinking,
 		MaxOutputTokens: 16384,
 		Timeout:         5 * time.Minute,
 	})
