@@ -1134,6 +1134,17 @@ type ttsDoneMsg struct {
 // statusUpdateMsg carries a live progress string from an async operation.
 type statusUpdateMsg struct{ text string }
 
+// collectionMembershipMsg reports the result of an async collection add or
+// remove. The nav item's membership list is only updated once the write has
+// actually succeeded, so a failure never leaves the pane claiming otherwise.
+type collectionMembershipMsg struct {
+	articleSlug string
+	collSlug    string
+	added       bool // true = added to collection, false = removed
+	count       int  // articles in the collection after the write; -1 if unknown
+	err         error
+}
+
 // ingestCostEstimateMsg is sent once after article extraction, before any LLM calls.
 type ingestCostEstimateMsg struct {
 	nChunks int
@@ -2158,10 +2169,11 @@ func (m Model) Init() tea.Cmd {
 		})
 	}
 	if m.svc != nil {
-		cmds = append(cmds, loadNav(m.svc), loadStats(m.svc), loadWorkspaces(m.svc))
-		if m.navSubTab == navSubTabCollections {
-			cmds = append(cmds, loadCollectionsTree(m.svc))
-		}
+		// Collections load regardless of the starting sub-tab: /collection-add
+		// completes against them from the Articles sub-tab, where they would
+		// otherwise never have been loaded.
+		cmds = append(cmds, loadNav(m.svc), loadStats(m.svc), loadWorkspaces(m.svc),
+			loadCollectionsTree(m.svc))
 	}
 	cmds = append(cmds, loadAgentRuns(m.cfg.AgentPath))
 	cmds = append(cmds, loadAgentFeeds(m.cfg.AgentPath))

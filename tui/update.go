@@ -688,6 +688,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = msg.text
 		}
 
+	case collectionMembershipMsg:
+		verb, preposition := "add", "to"
+		if !msg.added {
+			verb, preposition = "remove", "from"
+		}
+		if msg.err != nil {
+			m.setStatusError(fmt.Sprintf("✗ could not %s %s %s collection %q: %v",
+				verb, msg.articleSlug, preposition, msg.collSlug, msg.err))
+			break
+		}
+		// The write landed; now reflect it in the nav item.
+		for i, ni := range m.navItemsAll {
+			if ni.id != msg.articleSlug {
+				continue
+			}
+			if msg.added {
+				m.navItemsAll[i].collections = append(m.navItemsAll[i].collections, msg.collSlug)
+			} else {
+				cols := m.navItemsAll[i].collections
+				out := cols[:0]
+				for _, c := range cols {
+					if c != msg.collSlug {
+						out = append(out, c)
+					}
+				}
+				m.navItemsAll[i].collections = out
+			}
+			break
+		}
+		m.statusErr = false
+		m.statusSuccess = true
+		past := "added"
+		if !msg.added {
+			past = "removed"
+		}
+		m.statusMsg = fmt.Sprintf("✓ %s %s → %s", past, msg.articleSlug, msg.collSlug)
+		if msg.count == 1 {
+			m.statusMsg += " (1 article)"
+		} else if msg.count >= 0 {
+			m.statusMsg += fmt.Sprintf(" (%d articles)", msg.count)
+		}
+
 	case ingestCostEstimateMsg:
 		if msg.usd > 0 {
 			m.ingestCostEstimate = fmt.Sprintf("⚡ est. ~$%.3f  ·  %d chunks", msg.usd, msg.nChunks)
@@ -3691,9 +3733,16 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case tea.KeyEnter:
 		// Param picker: Enter fills selected value into input but does not execute.
+		// Exception — if the arg is already typed out in full, filling it in is a
+		// no-op that silently eats the keypress, so execute instead. Mirrors the
+		// full-command-match case in the completion list below.
 		if len(m.paramItems) > 0 && m.paramIdx >= 0 {
-			m.acceptParam()
-			return nil
+			if !m.paramAlreadyTyped() {
+				m.acceptParam()
+				return nil
+			}
+			m.paramItems = nil
+			m.paramIdx = -1
 		}
 		// Completion list: Enter on a no-arg command executes; on commands with args, fills like Tab.
 		if len(m.cmdComplete) > 0 && m.cmdCompleteIdx >= 0 {
@@ -4346,8 +4395,14 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		return items
 
 	case "/collection-add":
+		// navRowsAll, not navRows: the latter is narrowed by any active
+		// collections filter and gains article child rows on expand.
+		rows := m.navRowsAll
+		if len(rows) == 0 {
+			rows = m.navRows
+		}
 		var items []cmdCompletion
-		for _, r := range m.navRows {
+		for _, r := range rows {
 			if r.kind == rowCollection {
 				items = append(items, cmdCompletion{cmd: r.colSlug, desc: fmt.Sprintf("%d articles", r.colCount)})
 			}
@@ -4509,6 +4564,20 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		return items
 	}
 	return nil
+}
+
+// paramAlreadyTyped reports whether the token the param picker would replace is
+// already exactly the selected suggestion, making acceptParam a no-op.
+func (m *Model) paramAlreadyTyped() bool {
+	if m.paramIdx < 0 || m.paramIdx >= len(m.paramItems) {
+		return false
+	}
+	input := m.input.Value()
+	idx := strings.LastIndex(input, " ")
+	if idx < 0 {
+		return false
+	}
+	return strings.EqualFold(input[idx+1:], m.paramItems[m.paramIdx].cmd)
 }
 
 // acceptParam fills the selected param value into the input, replacing any partial last token.
@@ -4891,22 +4960,32 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	case "/collection-add":
 		if sub != navSubTabArticles {
-			m.statusMsg = "✗ /collection-add is only available in Articles context"
+			m.setStatusError("✗ /collection-add needs the Articles sub-tab — the article to add is the selected one")
 			return nil
 		}
 		if arg == "" {
-			m.statusMsg = "usage: /collection-add <slug>"
+			m.statusMsg = "usage: /collection-add <collection-slug>"
+			return nil
+		}
+		// Collection slugs never contain spaces, so an arg with whitespace is
+		// the CLI two-argument form — the article here is the selected one.
+		if strings.ContainsAny(arg, " \t") {
+			m.statusMsg = "usage: /collection-add <collection-slug> — acts on the selected article"
 			return nil
 		}
 		return m.cmdCollectionAdd(arg)
 
 	case "/collection-remove":
 		if sub != navSubTabArticles {
-			m.statusMsg = "✗ /collection-remove is only available in Articles context"
+			m.setStatusError("✗ /collection-remove needs the Articles sub-tab — the article to remove is the selected one")
 			return nil
 		}
 		if arg == "" {
-			m.statusMsg = "usage: /collection-remove <slug>"
+			m.statusMsg = "usage: /collection-remove <collection-slug>"
+			return nil
+		}
+		if strings.ContainsAny(arg, " \t") {
+			m.statusMsg = "usage: /collection-remove <collection-slug> — acts on the selected article"
 			return nil
 		}
 		return m.cmdCollectionRemove(arg)
@@ -5402,45 +5481,62 @@ func (m *Model) cmdMarkUnread() tea.Cmd {
 func (m *Model) cmdCollectionAdd(collSlug string) tea.Cmd {
 	item := m.selectedNavItem()
 	if item == nil {
-		m.statusMsg = "✗ no article selected"
+		m.setStatusError("✗ no article selected — move the nav cursor onto an article first")
 		return nil
 	}
 	articleSlug := item.id
+	slog.Info("collection-add", "article", articleSlug, "collection", collSlug)
 	// Check not already a member.
 	for _, c := range item.collections {
 		if c == collSlug {
-			m.statusMsg = "✗ already in collection: " + collSlug
+			m.setStatusError("✗ already in collection: " + collSlug)
 			return nil
 		}
 	}
-	// Update in-memory.
-	for i, ni := range m.navItemsAll {
-		if ni.id == articleSlug {
-			m.navItemsAll[i].collections = append(m.navItemsAll[i].collections, collSlug)
-			break
-		}
-	}
-	m.statusMsg = "✓ added to collection: " + collSlug
 	if m.svc == nil {
+		m.setStatusError("✗ collection-add unavailable — no service attached")
 		return nil
 	}
 	svc := m.svc
+	// Membership is applied in-memory only once the write succeeds — see
+	// collectionMembershipMsg.
 	return func() tea.Msg {
-		if err := svc.AddToCollection(context.Background(), articleSlug, collSlug); err != nil {
-			slog.Error("AddToCollection", "err", err)
+		err := svc.AddToCollection(context.Background(), articleSlug, collSlug)
+		msg := collectionMembershipMsg{
+			articleSlug: articleSlug,
+			collSlug:    collSlug,
+			added:       true,
+			count:       -1,
+			err:         err,
 		}
-		return nil
+		if err == nil {
+			msg.count = collectionArticleCount(svc, collSlug)
+		}
+		return msg
 	}
+}
+
+// collectionArticleCount returns the article count for a collection, or -1 if it
+// cannot be read. Used only to decorate a status message after a write that has
+// already succeeded, so a failure here must never surface as a failed write.
+func collectionArticleCount(svc *service.Service, collSlug string) int {
+	info, err := svc.GetCollection(context.Background(), collSlug)
+	if err != nil {
+		slog.Warn("collection article count", "collection", collSlug, "err", err)
+		return -1
+	}
+	return info.ArticleCount
 }
 
 // cmdCollectionRemove removes the current article from the named collection.
 func (m *Model) cmdCollectionRemove(collSlug string) tea.Cmd {
 	item := m.selectedNavItem()
 	if item == nil {
-		m.statusMsg = "✗ no article selected"
+		m.setStatusError("✗ no article selected — move the nav cursor onto an article first")
 		return nil
 	}
 	articleSlug := item.id
+	slog.Info("collection-remove", "article", articleSlug, "collection", collSlug)
 	// Check is a member.
 	found := false
 	for _, c := range item.collections {
@@ -5450,33 +5546,29 @@ func (m *Model) cmdCollectionRemove(collSlug string) tea.Cmd {
 		}
 	}
 	if !found {
-		m.statusMsg = "✗ not in collection: " + collSlug
+		m.setStatusError("✗ not in collection: " + collSlug)
 		return nil
 	}
-	// Update in-memory.
-	for i, ni := range m.navItemsAll {
-		if ni.id == articleSlug {
-			cols := m.navItemsAll[i].collections
-			out := cols[:0]
-			for _, c := range cols {
-				if c != collSlug {
-					out = append(out, c)
-				}
-			}
-			m.navItemsAll[i].collections = out
-			break
-		}
-	}
-	m.statusMsg = "✓ removed from collection: " + collSlug
 	if m.svc == nil {
+		m.setStatusError("✗ collection-remove unavailable — no service attached")
 		return nil
 	}
 	svc := m.svc
+	// Membership is applied in-memory only once the write succeeds — see
+	// collectionMembershipMsg.
 	return func() tea.Msg {
-		if err := svc.RemoveFromCollection(context.Background(), articleSlug, collSlug); err != nil {
-			slog.Error("RemoveFromCollection", "err", err)
+		err := svc.RemoveFromCollection(context.Background(), articleSlug, collSlug)
+		msg := collectionMembershipMsg{
+			articleSlug: articleSlug,
+			collSlug:    collSlug,
+			added:       false,
+			count:       -1,
+			err:         err,
 		}
-		return nil
+		if err == nil {
+			msg.count = collectionArticleCount(svc, collSlug)
+		}
+		return msg
 	}
 }
 
