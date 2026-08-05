@@ -57,6 +57,7 @@ func (m *Model) toggleAskX() tea.Cmd {
 	m.cmdCompleteIdx = -1
 	m.paramItems = nil
 	m.paramIdx = -1
+	m.paramHint = ""
 	return m.loadAskXLifetimeStatsCmd()
 }
 

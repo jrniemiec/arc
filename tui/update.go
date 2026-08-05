@@ -1253,6 +1253,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.cmdCompleteIdx = -1
 		m.paramItems = nil
 		m.paramIdx = -1
+		m.paramHint = ""
 		m.statusMsg = ""
 		m.statusLines = nil
 		m.pendingConfirm = nil
@@ -3784,6 +3785,9 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 		m.inputSubmit()
 		m.cmdComplete = nil
 		m.cmdCompleteIdx = -1
+		// The hint describes a command being composed; drop it so the result
+		// message is what shows in the status area.
+		m.paramHint = ""
 		// Resolve buffered paste: use blob as the actual value.
 		if m.pastedBlob != "" {
 			val = strings.TrimSpace(m.pastedBlob)
@@ -4321,6 +4325,8 @@ func (m *Model) updateCompletions() {
 	val := m.input.Value()
 	m.statusLines = nil
 
+	m.paramHint = ""
+
 	if !strings.HasPrefix(val, "/") {
 		m.cmdComplete = nil
 		m.cmdCompleteIdx = -1
@@ -4333,6 +4339,7 @@ func (m *Model) updateCompletions() {
 		m.cmdCompleteIdx = -1
 		parts := strings.SplitN(val, " ", 2)
 		cmd := strings.ToLower(parts[0])
+		m.paramHint = m.paramHintFor(cmd)
 		arg := parts[1] // preserve case for display; lowercase when filtering
 		all := m.paramSuggestions(cmd, arg)
 		// Filter by partial last token
@@ -4373,6 +4380,26 @@ func (m *Model) updateCompletions() {
 	if len(filtered) > 0 && m.cmdCompleteIdx < 0 {
 		m.cmdCompleteIdx = 0
 	}
+}
+
+// paramHintFor names the entity a command acts on implicitly, so it is visible
+// while choosing the argument. Empty when there is nothing implicit to show.
+func (m *Model) paramHintFor(cmd string) string {
+	switch cmd {
+	case "/collection-add", "/collection-remove":
+		if sel := m.selectedNavItem(); sel != nil {
+			verb := "adding"
+			if cmd == "/collection-remove" {
+				verb = "removing"
+			}
+			return verb + ": " + sel.id
+		}
+	case "/article-remove":
+		if coll := m.collectionForRow(m.navRowCursor); coll != "" {
+			return "removing from: " + coll
+		}
+	}
+	return ""
 }
 
 // paramSuggestions returns candidate values for commands that take a known arg.

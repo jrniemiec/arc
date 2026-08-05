@@ -542,6 +542,10 @@ type Model struct {
 	// Param completions (second level: /cmd <partial arg>)
 	paramItems []cmdCompletion // candidate values (cmd=value to insert, desc=display hint)
 	paramIdx   int             // -1 = none highlighted; ≥0 = index
+	// paramHint names the entity the command will act on implicitly (the selected
+	// article, the selected collection). Display only — rendered above the picker,
+	// never filtered or selectable.
+	paramHint string
 
 	// Restored state — loaded from disk in New(), consumed once after async data loads.
 	restoredState tuiState

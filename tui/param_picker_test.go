@@ -44,3 +44,28 @@ func TestParamAlreadyTyped(t *testing.T) {
 		})
 	}
 }
+
+// The param picker shows what a command will act on implicitly, so the subject
+// is visible while the object is being chosen.
+func TestParamHintFor(t *testing.T) {
+	m := &Model{input: textarea.New()}
+	m.navRows = []navRow{
+		{kind: rowCollection, colSlug: "transformers"},
+		{kind: rowArticle, indented: true, item: &navItem{id: "20260805-attention"}},
+		{kind: rowCollection, colSlug: "systems"},
+	}
+
+	m.navRowCursor = 1 // article inside "transformers"
+	if got, want := m.paramHintFor("/article-remove"), "removing from: transformers"; got != want {
+		t.Errorf("child row: got %q, want %q", got, want)
+	}
+
+	m.navRowCursor = 2 // header of "systems"
+	if got, want := m.paramHintFor("/article-remove"), "removing from: systems"; got != want {
+		t.Errorf("header row: got %q, want %q", got, want)
+	}
+
+	if got := m.paramHintFor("/search"); got != "" {
+		t.Errorf("command with nothing implicit: got %q, want empty", got)
+	}
+}

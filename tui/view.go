@@ -3044,9 +3044,19 @@ func (m Model) renderCompletionLines() []string {
 		return lines
 	}
 
+	// Hint with nothing to pick from — still worth showing what the command
+	// would act on (e.g. a collection with no expanded members).
+	if len(m.paramItems) == 0 && m.paramHint != "" {
+		return []string{fg(t.ContentDimmed, " "+truncate(m.paramHint, m.width-2))}
+	}
+
 	// Param picker (second level: /cmd <partial arg>)
 	if len(m.paramItems) > 0 {
-		lines := make([]string, len(m.paramItems))
+		var lines []string
+		// What the command will act on implicitly, above the values to choose from.
+		if m.paramHint != "" {
+			lines = append(lines, fg(t.ContentDimmed, " "+truncate(m.paramHint, m.width-2)))
+		}
 		for i, p := range m.paramItems {
 			var display string
 			if p.desc != "" {
@@ -3056,9 +3066,9 @@ func (m Model) renderCompletionLines() []string {
 			}
 			display = truncate(display, m.width-2)
 			if i == m.paramIdx {
-				lines[i] = fgBold(t.Accent, " "+display)
+				lines = append(lines, fgBold(t.Accent, " "+display))
 			} else {
-				lines[i] = fg(t.NavText, " "+display) + fg(t.ContentDimmed, "")
+				lines = append(lines, fg(t.NavText, " "+display)+fg(t.ContentDimmed, ""))
 			}
 		}
 		return lines
