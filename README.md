@@ -40,13 +40,13 @@ reachable from both the TUI and the CLI.
 
 **The filesystem is the source of truth.** Articles are plain text and JSON
 in a flat directory tree. SQLite, the FTS5 index, and the vector store are
-derived artifacts, rebuildable at any time — `arc reindex` for the database
-and full-text index, `arc embed` for the vector index. The two are separate
-commands because their costs differ: reindexing is free and offline, while
-embedding spends API calls. A corrupted index, a failed schema change, or a
-switch of embedding provider costs nothing but the time to rebuild — and the
-library remains readable with `cat`, `grep`, and `rg` whether or not arc is
-installed.
+derived artifacts, rebuildable at any time. A corrupted index, a failed schema
+change, or a switch of embedding provider costs nothing but the time to
+rebuild — and the library remains readable with `cat`, `grep`, and `rg`
+whether or not arc is installed. Moving a library between machines is a matter
+of copying it. Beyond adjusting the paths in `config.jsonc`, the only work is
+rebuilding the derived indexes: `arc reindex` for metadata and full-text,
+`arc embed` for semantic search.
 Original source is retained alongside extracted text, so `arc open` can hand
 any article to its native viewer — browser, PDF reader, or `$EDITOR` — when
 the extraction isn't enough.
