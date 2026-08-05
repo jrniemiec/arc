@@ -103,13 +103,7 @@ func (w *wizard) run() error {
 
 	// ── Step 3: Ingest pipeline ─────────────────────────────────────
 	cfg := config.Default()
-	cfg.DataRoot = w.dataRoot
-	cfg.ArticlesRoot = filepath.Join(w.dataRoot, "articles")
-	cfg.DBPath = filepath.Join(w.dataRoot, "arc.db")
-	cfg.VectorPath = filepath.Join(w.dataRoot, "index")
-	cfg.EventsPath = filepath.Join(w.dataRoot, "events.jsonl")
-	cfg.AgentPath = filepath.Join(w.dataRoot, "agent")
-	cfg.LogPath = logPath
+	applyDataRoot(&cfg, w.dataRoot)
 
 	if err := w.stepIngest(&cfg); err != nil {
 		return err

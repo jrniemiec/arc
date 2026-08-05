@@ -40,10 +40,13 @@ reachable from both the TUI and the CLI.
 
 **The filesystem is the source of truth.** Articles are plain text and JSON
 in a flat directory tree. SQLite, the FTS5 index, and the vector store are
-derived artifacts, rebuildable at any time with `arc reindex`. A corrupted
-index, a failed schema change, or a switch of embedding provider costs
-nothing but the time to rebuild — and the library remains readable with
-`cat`, `grep`, and `rg` whether or not arc is installed.
+derived artifacts, rebuildable at any time — `arc reindex` for the database
+and full-text index, `arc embed` for the vector index. The two are separate
+commands because their costs differ: reindexing is free and offline, while
+embedding spends API calls. A corrupted index, a failed schema change, or a
+switch of embedding provider costs nothing but the time to rebuild — and the
+library remains readable with `cat`, `grep`, and `rg` whether or not arc is
+installed.
 Original source is retained alongside extracted text, so `arc open` can hand
 any article to its native viewer — browser, PDF reader, or `$EDITOR` — when
 the extraction isn't enough.
@@ -781,7 +784,7 @@ arc stats --json        # machine-readable output
 
 ## Data layout
 
-Filesystem is the source of truth. SQLite and vector indexes are derived — rebuild anytime with `arc reindex`.
+Filesystem is the source of truth. SQLite and vector indexes are derived — rebuild with `arc reindex` (database + full-text) and `arc embed` (vectors).
 
 ```
 ~/.arc/
@@ -870,8 +873,13 @@ arc reprocess [slug]          re-run pipeline on existing articles
   --no-embed                    skip vector embedding
   --json                        JSON output
 
-arc reindex                   rebuild SQLite + vector index from filesystem
-  --no-embed                    skip vector embedding
+arc reindex                   rebuild SQLite + FTS5 index from filesystem
+                                offline, no API key, no cost
+
+arc embed                     rebuild the vector index for semantic search
+  --all                         re-embed everything, ignoring existing vectors
+  --dry-run                     report what would be embedded and estimated cost
+  --json                        JSON output
 ```
 
 ### Reading and browsing

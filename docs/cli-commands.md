@@ -65,8 +65,13 @@
     --no-flashcards               skip flashcard generation (overrides config)
     --no-embed                    skip embedding
 
-  arc reindex                   rebuild SQLite + vector index from filesystem
-    --no-embed                    skip vector embedding
+  arc reindex                   rebuild SQLite + FTS5 index from filesystem
+                                  offline, no API key, no cost
+
+  arc embed                     rebuild the vector index for semantic search
+    --all                         re-embed everything, ignoring existing vectors
+    --dry-run                     report what would be embedded and estimated cost
+    --json                        JSON output
 
 ## Articles
 

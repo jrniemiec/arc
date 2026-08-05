@@ -90,7 +90,6 @@ func init() {
 	rootCmd.PersistentPostRunE = closeLibrary
 }
 
-
 func openLibrary(cmd *cobra.Command, args []string) error {
 	// Skip library init for help requests — opening the library for --help is wasteful
 	// and can cause issues if the data directory doesn't exist yet.
@@ -163,19 +162,9 @@ func loadConfig() (config.Config, error) {
 	// ARC_HOME sets both the config location and the data root.
 	// --data-root flag wins if explicitly set.
 	if dataRoot != "" {
-		cfg.DataRoot = dataRoot
-		cfg.ArticlesRoot = filepath.Join(dataRoot, "articles")
-		cfg.DBPath = filepath.Join(dataRoot, "arc.db")
-		cfg.VectorPath = filepath.Join(dataRoot, "index")
-		cfg.EventsPath = filepath.Join(dataRoot, "events.jsonl")
-		cfg.AgentPath = filepath.Join(dataRoot, "agent")
+		applyDataRoot(&cfg, dataRoot)
 	} else if h := os.Getenv("ARC_HOME"); h != "" {
-		cfg.DataRoot = h
-		cfg.ArticlesRoot = filepath.Join(h, "articles")
-		cfg.DBPath = filepath.Join(h, "arc.db")
-		cfg.VectorPath = filepath.Join(h, "index")
-		cfg.EventsPath = filepath.Join(h, "events.jsonl")
-		cfg.AgentPath = filepath.Join(h, "agent")
+		applyDataRoot(&cfg, h)
 	}
 	// --articles-root overrides articles location independently
 	if articlesRoot != "" {
@@ -183,6 +172,23 @@ func loadConfig() (config.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// applyDataRoot repoints every data-root-derived path at root.
+//
+// Every path that lives under DataRoot must be listed here. A field omitted
+// from this function silently keeps pointing at the default location under
+// ~/.arc — which is how LogPath used to escape --data-root, sending logs to
+// the real ~/.arc/arc.log while everything else honoured the override.
+// Keep in sync with the defaults in config.Default.
+func applyDataRoot(cfg *config.Config, root string) {
+	cfg.DataRoot = root
+	cfg.ArticlesRoot = filepath.Join(root, "articles")
+	cfg.DBPath = filepath.Join(root, "arc.db")
+	cfg.VectorPath = filepath.Join(root, "index")
+	cfg.EventsPath = filepath.Join(root, "events.jsonl")
+	cfg.AgentPath = filepath.Join(root, "agent")
+	cfg.LogPath = filepath.Join(root, "arc.log")
 }
 
 // arcHomeDir returns the arc data root directory.

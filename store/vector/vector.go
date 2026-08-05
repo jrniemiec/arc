@@ -64,6 +64,15 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.collection.Delete(ctx, nil, nil, id)
 }
 
+// Has reports whether the index holds a document for the given id.
+// This is the authoritative check for "is this article embedded" — meta.json
+// records the embed model but can disagree with the index (e.g. after the
+// index directory is lost or copied between machines).
+func (s *Store) Has(ctx context.Context, id string) bool {
+	_, err := s.collection.GetByID(ctx, id)
+	return err == nil
+}
+
 // Query returns the top-n most similar documents to the given embedding.
 // Results with similarity below minSimilarity are excluded; pass 0 for no filter.
 func (s *Store) Query(ctx context.Context, embedding []float32, n int, minSimilarity float32) ([]Result, error) {

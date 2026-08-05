@@ -21,7 +21,7 @@ Requires Go 1.25+. Pure Go — no CGo dependencies.
 
 ## How it works
 
-Filesystem is the source of truth. SQLite and vector indexes are derived — rebuild anytime with `arc reindex`.
+Filesystem is the source of truth. SQLite and vector indexes are derived — rebuild with `arc reindex` (database + full-text) and `arc embed` (vectors).
 
   ~/.arc/
     config.jsonc           JSONC configuration

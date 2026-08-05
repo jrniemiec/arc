@@ -9,45 +9,44 @@ import (
 var reindexNoEmbed bool
 
 func init() {
-	reindexCmd.Flags().BoolVar(&reindexNoEmbed, "no-embed", false, "skip vector embedding generation")
+	reindexCmd.Flags().BoolVar(&reindexNoEmbed, "no-embed", false, "deprecated: no-op, reindex no longer embeds")
+	_ = reindexCmd.Flags().MarkHidden("no-embed")
 	rootCmd.AddCommand(reindexCmd)
 }
 
 var reindexCmd = &cobra.Command{
 	Use:   "reindex",
-	Short: "Rebuild the search index from the filesystem",
-	Long: `Rebuild the search indexes by walking ~/.arc/articles/.
+	Short: "Rebuild the SQLite and full-text indexes from the filesystem",
+	Long: `Rebuild the SQLite metadata and FTS5 full-text indexes by walking ~/.arc/articles/.
 
-Two indexes are rebuilt in sequence:
+Reads every meta.json and preferred summary file from disk and re-populates
+the database from scratch. Records for articles that no longer exist on disk
+are removed (full rebuild, not incremental). Updates article metadata, the
+full-text search index (summary text + flashcard questions), and collection
+memberships.
 
-  SQLite / FTS5
-    Reads every meta.json and preferred summary file from disk and
-    re-populates the database from scratch. Records for articles that
-    no longer exist on disk are removed (full rebuild, not incremental).
-    Updates: article metadata, full-text search index (summary text +
-    flashcard questions), collection memberships.
+Runs entirely offline: no API key, no network, no cost.
 
-  Vector index (chromem-go)
-    Generates embeddings for articles that have a summary but no
-    embed_model recorded in meta.json (i.e. not yet embedded).
-    Does NOT remove stale vectors for articles deleted from disk —
-    orphaned vectors are harmless but waste space; a future --clean-vector
-    flag will address this.
-    Requires OPENAI_API_KEY (or ARC_OPENAI_API_KEY) to be set.
-    Skip with --no-embed.
+The vector index used for semantic search is NOT touched — rebuild it
+separately with 'arc embed'. The two are split because they have very
+different costs: reindex is free and local, embedding spends API calls.
 
 When to run arc reindex:
   - After manually editing or deleting article files
   - After changing preferred_models or preferred_styles in config
     (to re-select which variant is indexed)
   - After arc reprocess (called automatically at end of reprocess)
-  - To backfill embeddings for articles ingested before semantic search
-    was added
+  - To repair a corrupted or out-of-date database
 
 Examples:
   arc reindex
-  arc reindex --no-embed`,
+  arc reindex && arc embed      # rebuild both indexes`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if reindexNoEmbed {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"warning: --no-embed is deprecated and does nothing; reindex no longer embeds (see 'arc embed')")
+		}
+
 		svc := svcFrom(cmd)
 
 		var last int
@@ -62,27 +61,6 @@ Examples:
 			return fmt.Errorf("reindex: %w", err)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "reindexed %d articles, %d collections\n", result.Articles, result.Collections)
-
-		if reindexNoEmbed {
-			return nil
-		}
-
-		var lastEmbed int
-		embedded, err := svc.ReindexEmbed(cmd.Context(), func(done, total int) {
-			lastEmbed = done
-			fmt.Fprintf(cmd.ErrOrStderr(), "\r  embedding %d/%d", done, total)
-		})
-		if lastEmbed > 0 {
-			fmt.Fprintln(cmd.ErrOrStderr())
-		}
-		if err != nil {
-			// Non-fatal: vector store may not be configured.
-			fmt.Fprintf(cmd.ErrOrStderr(), "embed: %v\n", err)
-			return nil
-		}
-		if embedded > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "embedded %d articles\n", embedded)
-		}
 		return nil
 	},
 }

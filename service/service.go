@@ -53,66 +53,211 @@ type ReindexResult struct {
 	Collections int
 }
 
-// Reindex rebuilds the SQLite index from the filesystem.
+// Reindex rebuilds the SQLite metadata and FTS5 indexes from the filesystem.
+// The vector index is not touched — see Embed.
 // progress is called with (indexed, total) after each article; may be nil.
 func (s *Service) Reindex(ctx context.Context, progress func(indexed, total int)) (ReindexResult, error) {
+	slog.Info("reindex start", "articles_root", s.cfg.ArticlesRoot)
+
 	r, err := s.lib.Reindex(ctx, progress)
-	return ReindexResult{Articles: r.Articles, Collections: r.Collections}, err
+	if err != nil {
+		slog.Error("reindex failed", "articles", r.Articles, "collections", r.Collections, "err", err)
+		return ReindexResult{Articles: r.Articles, Collections: r.Collections}, err
+	}
+
+	slog.Info("reindex done", "articles", r.Articles, "collections", r.Collections)
+	return ReindexResult{Articles: r.Articles, Collections: r.Collections}, nil
 }
 
-// ReindexEmbed generates embeddings for articles that have a summary but no
-// embed_model recorded. progress is called with (embedded, total) after each
-// article. Returns the number of articles embedded.
-func (s *Service) ReindexEmbed(ctx context.Context, progress func(done, total int)) (int, error) {
+// EmbedOptions controls which articles Embed processes.
+type EmbedOptions struct {
+	All    bool // re-embed every eligible article, ignoring existing vectors
+	DryRun bool // select and estimate cost only; makes no API calls
+}
+
+// EmbedResult holds counts and cost from an embed run.
+type EmbedResult struct {
+	Model     string   // embedding model used
+	Eligible  int      // articles with a summary available to embed
+	Pending   int      // articles selected for embedding
+	Embedded  int      // articles successfully embedded
+	Failed    int      // articles that errored
+	Tokens    int      // input tokens consumed (estimated when DryRun)
+	USD       float64  // cost (estimated when DryRun)
+	Errors    []string // per-article failures, capped
+	DryRun    bool
+	Estimated bool // true when Tokens/USD are estimates rather than measured
+}
+
+// maxEmbedErrors caps how many per-article failures are retained for reporting.
+const maxEmbedErrors = 10
+
+// Embed rebuilds the vector index used for semantic search.
+//
+// Selection is driven by the vector store itself, not by embed_model in
+// meta.json: an article is embedded when the index has no document for it.
+// That makes a lost or partially-copied index recoverable — trusting meta.json
+// would skip every article and leave semantic search silently empty.
+//
+// With opts.All every eligible article is re-embedded regardless of what the
+// index already holds — the path to take after changing the embedding model.
+//
+// progress is called with (done, pending) after each article; may be nil.
+func (s *Service) Embed(ctx context.Context, opts EmbedOptions, progress func(done, total int)) (EmbedResult, error) {
+	res := EmbedResult{DryRun: opts.DryRun}
+
+	slog.Info("embed start", "profile", s.cfg.Ingest.EmbedProfile,
+		"all", opts.All, "dry_run", opts.DryRun)
+
 	if s.vec == nil {
-		return 0, fmt.Errorf("vector store not available")
+		slog.Error("embed failed", "err", "vector store not available")
+		return res, fmt.Errorf("vector store not available")
 	}
 	if s.cfg.Ingest.EmbedProfile == "" {
-		return 0, fmt.Errorf("embed_profile not configured")
+		slog.Error("embed failed", "err", "embed_profile not configured")
+		return res, fmt.Errorf("embed_profile not configured")
 	}
 	prof, ok := s.cfg.Profiles[s.cfg.Ingest.EmbedProfile]
 	if !ok {
-		return 0, fmt.Errorf("embed profile %q not found", s.cfg.Ingest.EmbedProfile)
+		slog.Error("embed failed", "err", "profile not found", "profile", s.cfg.Ingest.EmbedProfile)
+		return res, fmt.Errorf("embed profile %q not found", s.cfg.Ingest.EmbedProfile)
 	}
-	embedClient, err := embed.NewClient(prof.Model)
-	if err != nil {
-		return 0, fmt.Errorf("embed client: %w", err)
-	}
+	res.Model = prof.Model
 
 	articles, err := s.lib.List(ctx, store.Filter{})
 	if err != nil {
-		return 0, fmt.Errorf("list articles: %w", err)
+		slog.Error("embed failed", "err", err)
+		return res, fmt.Errorf("list articles: %w", err)
 	}
 
-	// Only articles that have a summary but no embedding yet.
+	// Eligible: has a resolvable summary. Pending: not already in the index.
 	var pending []store.Article
 	for _, a := range articles {
-		if a.EmbedModel == "" && a.SummaryModel != "" && a.Files.Summary != "" {
+		if a.SummaryModel == "" || a.Files.Summary == "" {
+			slog.Debug("embed skip: no summary", "slug", a.ID)
+			continue
+		}
+		res.Eligible++
+		if opts.All || !s.vec.Has(ctx, a.ID) {
 			pending = append(pending, a)
 		}
 	}
+	res.Pending = len(pending)
+
+	slog.Info("embed selected", "model", prof.Model,
+		"eligible", res.Eligible, "pending", res.Pending, "indexed", s.vec.Count())
 
 	if progress == nil {
 		progress = func(int, int) {}
 	}
 
-	embedded := 0
+	// Dry run: estimate from summary length on disk. Deliberately does not
+	// construct the embed client, so it works without an API key.
+	if opts.DryRun {
+		res.Estimated = true
+		for i, a := range pending {
+			text, err := s.lib.ReadSummary(a)
+			if err != nil || strings.TrimSpace(text) == "" {
+				continue
+			}
+			tokens := (len(text) + 3) / 4
+			res.Tokens += tokens
+			slog.Debug("embed would embed", "slug", a.ID, "n", i+1, "of", len(pending),
+				"est_tokens", tokens)
+		}
+		res.USD = embedCostUSD(prof, res.Tokens)
+		slog.Info("embed dry-run done", "pending", res.Pending, "tokens", res.Tokens, "usd", res.USD)
+		return res, nil
+	}
+
+	embedClient, err := embed.NewClient(prof.Model)
+	if err != nil {
+		return res, fmt.Errorf("embed client: %w", err)
+	}
+
+	done := 0
 	for _, a := range pending {
+		if err := ctx.Err(); err != nil {
+			return res, err
+		}
 		summaryText, err := s.lib.ReadSummary(a)
 		if err != nil || strings.TrimSpace(summaryText) == "" {
+			res.recordEmbedError(a.ID, "read summary", err)
 			continue
 		}
 		er, err := embedClient.Embed(ctx, summaryText)
 		if err != nil {
+			res.recordEmbedError(a.ID, "embed", err)
 			continue
 		}
 		if err := s.vec.Upsert(ctx, a.ID, er.Embedding, summaryText); err != nil {
+			res.recordEmbedError(a.ID, "vector upsert", err)
 			continue
 		}
-		embedded++
-		progress(embedded, len(pending))
+		// Record the model so meta.json agrees with the index.
+		if err := s.updateMetaModels(a.ID, metaModelUpdate{EmbedModel: prof.Model}); err != nil {
+			slog.Warn("embed: could not record embed_model", "slug", a.ID, "err", err)
+		}
+		res.Embedded++
+		res.Tokens += er.Tokens
+		done++
+		slog.Debug("embed article", "slug", a.ID, "n", done, "of", len(pending),
+			"tokens", er.Tokens, "total_tokens", res.Tokens,
+			"total_usd", embedCostUSD(prof, res.Tokens))
+		progress(done, len(pending))
 	}
-	return embedded, nil
+	res.USD = embedCostUSD(prof, res.Tokens)
+
+	if res.Embedded > 0 {
+		appendEvent(s.cfg.EventsPath, store.Event{
+			TS:   time.Now().UTC(),
+			Type: "embed",
+			Cost: &store.CostRecord{
+				Embed:    store.EmbedCostEntry{Model: prof.Model, Tokens: res.Tokens, USD: res.USD},
+				TotalUSD: res.USD,
+			},
+		})
+	}
+
+	slog.Info("embed done", "embedded", res.Embedded, "failed", res.Failed,
+		"tokens", res.Tokens, "usd", res.USD)
+	return res, nil
+}
+
+// recordEmbedError counts a per-article failure and retains the first few.
+func (r *EmbedResult) recordEmbedError(id, stage string, err error) {
+	r.Failed++
+	if len(r.Errors) < maxEmbedErrors {
+		if err == nil {
+			err = fmt.Errorf("empty summary")
+		}
+		r.Errors = append(r.Errors, fmt.Sprintf("%s: %s: %v", id, stage, err))
+	}
+	slog.Warn("embed failed", "slug", id, "stage", stage, "err", err)
+}
+
+// appendEvent appends a single event to the cost log. Best-effort: failures
+// never abort the operation being logged.
+func appendEvent(path string, ev store.Event) {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
+}
+
+// embedCostUSD prices tokens against the profile's input rate (USD per 1M).
+// Profiles without pricing metadata yield 0.
+func embedCostUSD(prof config.Profile, tokens int) float64 {
+	if prof.Info.Pricing == nil {
+		return 0
+	}
+	return float64(tokens) * prof.Info.Pricing.Input / 1_000_000
 }
 
 // Reprocess re-runs generation steps on existing articles.
