@@ -214,13 +214,15 @@ Config lives at `~/.arc/config.jsonc` (JSONC — comments allowed). Override pat
                     "max_output_tokens": 16384 },
     "haiku":      { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" },
     "opus-4-6":   { "provider": "anthropic", "model": "claude-opus-4-6", "legacy": true },
-    "llama":      { "provider": "ollama", "model": "llama3.1:8b" }
+    "llama":      { "provider": "ollama", "model": "llama3.1:8b" },
+    "oai-embed":  { "provider": "openai", "model": "text-embedding-3-small" }
   },
 
   "ingest": {
     "summary_profile": "oai-mini",
     "flash_profile": "oai-mini",
     "flashcard_profile": "oai-mini",
+    "embed_profile": "oai-embed",
     "summary_style": "study-notes",
     "flashcard_style": "socratic",
     "flashcards": false,
@@ -276,6 +278,7 @@ Profiles map a short name to a provider, model, and parameters. Assign profiles 
 | `ingest.summary_profile` | Summary generation | `oai-mini` |
 | `ingest.flash_profile` | Flash summary generation | `oai-mini` |
 | `ingest.flashcard_profile` | Flashcard generation | `oai-mini` |
+| `ingest.embed_profile` | Embeddings for semantic search (`arc embed`) | `oai-embed` |
 | `chat.profile` | Workspace chat | `oai-mini` |
 | `article_chat.profile` | Per-article chat | `haiku` |
 | `askx.profile` | Single-shot queries | `haiku` |
@@ -310,11 +313,11 @@ provider, most capable first, with legacy models last — the same order as the 
 | Anthropic | `anthropic` | claude-opus-5, claude-sonnet-5, claude-haiku-4-5 | Direct HTTP API |
 | Ollama | `ollama` | llama3.1:8b, qwen2.5-coder:7b | Local, no API key, no tool calling |
 
-Embedding: OpenAI `text-embedding-3-small` (required for semantic search).
+Embedding: OpenAI `text-embedding-3-small`, via the `oai-embed` profile set in `ingest.embed_profile` (required for semantic search). Generated during ingest, and rebuildable at any time with `arc embed`.
 
 ### Limitations
 
-- **Semantic search** requires `OPENAI_API_KEY` (for embeddings). Without it, only FTS5 keyword search is available.
+- **Semantic search** requires `OPENAI_API_KEY` (for embeddings). Without it, only FTS5 keyword search is available. Articles ingested while the key was unset — or with `--no-embed` — stay invisible to semantic search until `arc embed` is run; embedding is no longer a side effect of `arc reindex`.
 - **Web search tools** in chat are Anthropic-only.
 - **Ollama** does not support tool calling. Chat tools (`search_articles`, `read_article`, `list_articles`) and agent feed filtering are unavailable — chat works as plain conversation.
 
@@ -351,6 +354,8 @@ URL / file / stdin → extract → summarize → flash → [flashcards] → embe
 ```
 
 The flashcard stage is skipped unless you ask for it — `ingest.flashcards` is `false` by default. See [Flashcards](#flashcards).
+
+The last two stages are also the two rebuildable ones: `arc embed` regenerates the vector index, `arc reindex` the database and full-text index. Skipping embedding with `--no-embed` is therefore never permanent — a later `arc embed` picks up whatever was left out.
 
 Each stage is independent and composable via Unix pipes:
 
@@ -492,6 +497,8 @@ arc search "golang" --tag programming --limit 50       # filter by tag, custom l
 ```
 
 Results show source badges: `[fts]`, `[vector]`, `[both]`.
+
+If results are never tagged `[vector]` or `[both]`, the vector index is empty or incomplete — run `arc embed` (or `arc embed --dry-run` to see how many articles are missing first).
 
 Flashcard questions are indexed in FTS5 alongside title, body, and summary, so a deck is findable by the concepts it drills even when the wording appears nowhere else in the article. Databases created before this are migrated in place on first open — the FTS table gains a fourth column with existing rows preserved. Run `arc reindex` afterwards to populate card text for articles already on disk.
 

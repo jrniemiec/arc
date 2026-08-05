@@ -64,7 +64,8 @@ Three provider backends, assignable per operation via profiles:
   Anthropic    claude-opus-5, claude-sonnet-5, claude-haiku-4-5
   Ollama       llama3.1:8b, qwen2.5-coder:7b (local, offline)
 
-Embedding: OpenAI text-embedding-3-small.
+Embedding: OpenAI text-embedding-3-small, via the oai-embed profile set in
+ingest.embed_profile. Generated during ingest; rebuild any time with `arc embed`.
 
 Anthropic extended thinking is selected by profile rather than a flag:
 
