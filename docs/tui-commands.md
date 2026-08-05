@@ -65,6 +65,8 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
 
   /search <query>            filter collections by name/slug
   /clear                     clear active filter
+  /article-remove [slug]     remove article from this collection (selected or by
+                             name) — or press U on the article row
   /delete [slug]             delete collection
   /reload                    refresh collections list from disk
 

@@ -786,6 +786,7 @@ var articleCommands = []cmdCompletion{
 var collectionCommands = []cmdCompletion{
 	{"/search", "<query>", "filter collections by name/slug"},
 	{"/clear", "", "clear active filter"},
+	{"/article-remove", "[slug]", "remove article from this collection (selected or by name)"},
 	{"/delete", "[slug]", "delete collection (selected or by name)"},
 	{"/reload", "", "refresh collections list from disk"},
 }

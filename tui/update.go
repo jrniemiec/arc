@@ -717,6 +717,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
+		m.syncCollectionRows(msg)
 		m.statusErr = false
 		m.statusSuccess = true
 		past := "added"
@@ -1787,6 +1788,16 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 					return nil
 				}
 			}
+		}
+		if m.navSubTab == navSubTabCollections {
+			if m.navRowCursor >= 0 && m.navRowCursor < len(m.navRows) &&
+				m.navRows[m.navRowCursor].kind == rowCollection {
+				// No-op on the header — emptying a whole collection is too much
+				// for one keystroke.
+				m.statusMsg = "U removes an article from this collection — expand it and select one"
+				return nil
+			}
+			return m.cmdArticleRemove("")
 		}
 	case msg.String() == "e":
 		if m.navSubTab == navSubTabWorkspaces {
@@ -4420,6 +4431,30 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		}
 		return items
 
+	case "/article-remove":
+		// Members of the collection under the cursor, from its expanded rows.
+		collSlug := m.collectionForRow(m.navRowCursor)
+		if collSlug == "" {
+			return nil
+		}
+		var items []cmdCompletion
+		for i := range m.navRows {
+			if m.navRows[i].kind != rowCollection || m.navRows[i].colSlug != collSlug {
+				continue
+			}
+			for j := i + 1; j < len(m.navRows); j++ {
+				r := m.navRows[j]
+				if r.kind != rowArticle || !r.indented {
+					break
+				}
+				if r.item != nil {
+					items = append(items, cmdCompletion{cmd: r.item.id, desc: truncate(oneLine(r.item.title), 40)})
+				}
+			}
+			break
+		}
+		return items
+
 	case "/delete":
 		sub := m.navSubTab
 		if m.activeTab != tabLibrary {
@@ -4974,6 +5009,17 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		return m.cmdCollectionAdd(arg)
+
+	case "/article-remove":
+		if sub != navSubTabCollections {
+			m.setStatusError("✗ /article-remove needs the Collections sub-tab — use /collection-remove from Articles")
+			return nil
+		}
+		if strings.ContainsAny(arg, " \t") {
+			m.statusMsg = "usage: /article-remove [<article-slug>] — removes from the selected collection"
+			return nil
+		}
+		return m.cmdArticleRemove(arg)
 
 	case "/collection-remove":
 		if sub != navSubTabArticles {
@@ -5553,9 +5599,12 @@ func (m *Model) cmdCollectionRemove(collSlug string) tea.Cmd {
 		m.setStatusError("✗ collection-remove unavailable — no service attached")
 		return nil
 	}
-	svc := m.svc
-	// Membership is applied in-memory only once the write succeeds — see
-	// collectionMembershipMsg.
+	return removeFromCollectionCmd(m.svc, articleSlug, collSlug)
+}
+
+// removeFromCollectionCmd performs the unlink off the UI thread. Membership is
+// applied in-memory only once the write succeeds — see collectionMembershipMsg.
+func removeFromCollectionCmd(svc *service.Service, articleSlug, collSlug string) tea.Cmd {
 	return func() tea.Msg {
 		err := svc.RemoveFromCollection(context.Background(), articleSlug, collSlug)
 		msg := collectionMembershipMsg{
@@ -5570,6 +5619,100 @@ func (m *Model) cmdCollectionRemove(collSlug string) tea.Cmd {
 		}
 		return msg
 	}
+}
+
+// syncCollectionRows reflects a membership change in the Collections tree, which
+// renders from navRows rather than navItemsAll. Added articles need no row work —
+// they appear the next time the collection is expanded.
+func (m *Model) syncCollectionRows(msg collectionMembershipMsg) {
+	if msg.count >= 0 {
+		for i := range m.navRows {
+			if m.navRows[i].kind == rowCollection && m.navRows[i].colSlug == msg.collSlug {
+				m.navRows[i].colCount = msg.count
+			}
+		}
+		for i := range m.navRowsAll {
+			if m.navRowsAll[i].kind == rowCollection && m.navRowsAll[i].colSlug == msg.collSlug {
+				m.navRowsAll[i].colCount = msg.count
+			}
+		}
+	}
+	if msg.added {
+		return
+	}
+	// Drop the article's child row from under its collection header.
+	header := -1
+	for i := range m.navRows {
+		if m.navRows[i].kind == rowCollection && m.navRows[i].colSlug == msg.collSlug {
+			header = i
+			break
+		}
+	}
+	if header < 0 {
+		return
+	}
+	for i := header + 1; i < len(m.navRows); i++ {
+		r := m.navRows[i]
+		if r.kind != rowArticle || !r.indented {
+			break // end of this collection's children
+		}
+		if r.item == nil || r.item.id != msg.articleSlug {
+			continue
+		}
+		m.navRows = append(m.navRows[:i], m.navRows[i+1:]...)
+		if m.navRowCursor >= len(m.navRows) {
+			m.navRowCursor = len(m.navRows) - 1
+		}
+		if m.navRowCursor < 0 {
+			m.navRowCursor = 0
+		}
+		m.clampNavRowScroll()
+		break
+	}
+}
+
+// collectionForRow walks up from a row in the Collections tree to the header of
+// the collection that contains it. Returns "" if there is none.
+func (m *Model) collectionForRow(rowIdx int) string {
+	if rowIdx < 0 || rowIdx >= len(m.navRows) {
+		return ""
+	}
+	for i := rowIdx; i >= 0; i-- {
+		if m.navRows[i].kind == rowCollection {
+			return m.navRows[i].colSlug
+		}
+	}
+	return ""
+}
+
+// cmdArticleRemove removes an article from the collection under the cursor, in
+// the Collections sub-tab. With no argument it acts on the selected child row.
+func (m *Model) cmdArticleRemove(articleSlug string) tea.Cmd {
+	if m.navRowCursor < 0 || m.navRowCursor >= len(m.navRows) {
+		m.setStatusError("✗ no collection selected")
+		return nil
+	}
+	row := m.navRows[m.navRowCursor]
+	collSlug := m.collectionForRow(m.navRowCursor)
+	if collSlug == "" {
+		m.setStatusError("✗ no collection selected")
+		return nil
+	}
+
+	if articleSlug == "" {
+		if row.kind != rowArticle || row.item == nil {
+			m.setStatusError("✗ select an article inside the collection, or pass one: /article-remove <article-slug>")
+			return nil
+		}
+		articleSlug = row.item.id
+	}
+	slog.Info("article-remove", "article", articleSlug, "collection", collSlug)
+
+	if m.svc == nil {
+		m.setStatusError("✗ article-remove unavailable — no service attached")
+		return nil
+	}
+	return removeFromCollectionCmd(m.svc, articleSlug, collSlug)
 }
 
 // cmdToggleFavorite toggles the favorite flag on the current article.
@@ -7915,6 +8058,7 @@ var helpGroups = []struct {
 		{"/clear", "", "clear active filter"},
 		{"/reload", "", "refresh collections list from disk"},
 		{"/chat", "", "open article chat pane (or press c in nav)"},
+		{"/article-remove", "[slug]", "remove article from this collection (or press U on it)"},
 		{"/delete", "", "delete current collection"},
 		{"arc collections create", "<slug>", "create a new collection  (CLI only)"},
 		{"arc collections rename", "<old> <new>", "rename  (CLI only)"},
@@ -8031,6 +8175,7 @@ func (m *Model) contextKeys(all bool) []string {
 
 	collectionKeys := []cmdCompletion{
 		{"c", "", "toggle/focus collection chat"},
+		{"U", "", "remove selected article from this collection"},
 		{"D", "", "delete collection"},
 	}
 
