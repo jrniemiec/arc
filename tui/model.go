@@ -798,7 +798,7 @@ var workspaceCommands = []cmdCompletion{
 	{"/delete", "[name]", "delete workspace (selected or by name)"},
 	{"/rename", "<new-name>", "rename current workspace"},
 	{"/describe", "<text>", "set workspace description"},
-	{"/reload", "", "reset chat engine to pick up corpus changes"},
+	{"/reload", "", "reload workspace from disk and reset chat engine"},
 	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--edit] [--include-collections]", "LLM-assisted article selection"},
 	{"/remove", "[--article slug] [--collection slug] [--all-articles] [--all-collections] [--dry-run]", "remove articles/collections from workspace"},
 }

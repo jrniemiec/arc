@@ -7174,16 +7174,23 @@ func (m *Model) cmdWorkspaceMembership(verb, arg string) tea.Cmd {
 	}
 }
 
-// cmdWorkspaceReload drops the chat engine for the selected workspace so the
-// next message triggers a fresh engine init (rebuilding the RAG context).
+// cmdWorkspaceReload re-reads workspaces from disk so changes made outside the
+// TUI (a resource dropped into resources/, an edited outcome) become visible,
+// and drops the chat engine so the next message triggers a fresh engine init
+// (rebuilding the RAG context).
 func (m *Model) cmdWorkspaceReload() tea.Cmd {
+	if m.svc == nil {
+		m.statusMsg = "✗ service unavailable"
+		return nil
+	}
 	ws := m.selectedWorkspace()
 	if ws == nil {
 		// In chat mode, fall back to the active chat workspace.
 		if m.chatMode && m.chatWorkspace != "" {
 			m.chatEngine = nil
-			m.statusMsg = "✓ engine reset — will reinitialise on next message"
-			return nil
+			m.workspacesLoaded = false
+			m.statusMsg = "✓ reloaded from disk — engine will reinitialise on next message"
+			return loadWorkspaces(m.svc)
 		}
 		m.statusMsg = "✗ no workspace selected"
 		return nil
@@ -7193,8 +7200,9 @@ func (m *Model) cmdWorkspaceReload() tea.Cmd {
 	if m.chatMode && m.chatWorkspace == wsName {
 		m.chatEngine = nil
 	}
-	m.statusMsg = "✓ engine reset for " + wsName + " — will reinitialise on next message"
-	return nil
+	m.workspacesLoaded = false
+	m.statusMsg = "✓ reloaded " + wsName + " from disk — engine will reinitialise on next message"
+	return loadWorkspaces(m.svc)
 }
 
 // cmdPopulateWorkspace runs LLM-assisted workspace population.

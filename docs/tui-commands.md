@@ -76,7 +76,7 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /delete [name]             delete workspace
   /rename <new-name>         rename current workspace
   /describe <text>           set workspace description
-  /reload                    reset chat engine to pick up corpus changes
+  /reload                    reload workspace from disk and reset chat engine
   /populate [flags]          LLM-assisted article selection
                                --hint "..." --profile name --dry-run --edit --include-collections
   /remove [flags]            remove articles/collections from workspace
