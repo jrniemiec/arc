@@ -4408,6 +4408,26 @@ func (m *Model) paramHintFor(cmd string) string {
 	return ""
 }
 
+// collectionParamDesc returns what to show beside a collection slug in a param
+// picker: its description, or the article count when it has none. The count
+// says how big a collection is; the description says what belongs in it, which
+// is the question the picker is actually asking.
+func (m *Model) collectionParamDesc(slug string) string {
+	rows := m.navRowsAll
+	if len(rows) == 0 {
+		rows = m.navRows
+	}
+	for _, r := range rows {
+		if r.kind == rowCollection && r.colSlug == slug {
+			if d := strings.TrimSpace(oneLine(r.colDesc)); d != "" {
+				return truncate(d, 80)
+			}
+			return fmt.Sprintf("%d articles", r.colCount)
+		}
+	}
+	return ""
+}
+
 // paramSuggestions returns candidate values for commands that take a known arg.
 // arg is the partial text already typed after the command (may include spaces for /help).
 func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
@@ -4448,7 +4468,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		var items []cmdCompletion
 		for _, r := range rows {
 			if r.kind == rowCollection {
-				items = append(items, cmdCompletion{cmd: r.colSlug, desc: fmt.Sprintf("%d articles", r.colCount)})
+				items = append(items, cmdCompletion{cmd: r.colSlug, desc: m.collectionParamDesc(r.colSlug)})
 			}
 		}
 		return items
@@ -4460,7 +4480,7 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		}
 		var items []cmdCompletion
 		for _, slug := range sel.collections {
-			items = append(items, cmdCompletion{cmd: slug})
+			items = append(items, cmdCompletion{cmd: slug, desc: m.collectionParamDesc(slug)})
 		}
 		return items
 

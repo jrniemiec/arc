@@ -69,3 +69,24 @@ func TestParamHintFor(t *testing.T) {
 		t.Errorf("command with nothing implicit: got %q, want empty", got)
 	}
 }
+
+// Picking a collection is a "does this article belong here?" question, so the
+// picker shows the description, falling back to the count when there is none.
+func TestCollectionParamDesc(t *testing.T) {
+	m := &Model{input: textarea.New()}
+	m.navRowsAll = []navRow{
+		{kind: rowCollection, colSlug: "transformers", colDesc: "Attention mechanics\nand interpretability", colCount: 4},
+		{kind: rowCollection, colSlug: "systems", colCount: 7},
+		{kind: rowArticle, indented: true, item: &navItem{id: "20260805-attention"}},
+	}
+
+	if got, want := m.collectionParamDesc("transformers"), "Attention mechanics and interpretability"; got != want {
+		t.Errorf("described collection: got %q, want %q", got, want)
+	}
+	if got, want := m.collectionParamDesc("systems"), "7 articles"; got != want {
+		t.Errorf("undescribed collection: got %q, want %q", got, want)
+	}
+	if got := m.collectionParamDesc("nonexistent"); got != "" {
+		t.Errorf("unknown slug: got %q, want empty", got)
+	}
+}
