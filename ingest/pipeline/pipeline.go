@@ -173,10 +173,7 @@ func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (
 
 	// flashcard_max_tokens caps this call. Without this it was read only by the
 	// cost estimator and capped nothing.
-	maxOut := prof.MaxOutputTokens
-	if cfg.Ingest.FlashcardMaxTokens > 0 {
-		maxOut = cfg.Ingest.FlashcardMaxTokens
-	}
+	maxOut := flashcardMaxTokens(cfg, prof)
 
 	p, err := llm.New(llm.ProviderConfig{
 		Provider:        prof.Provider,
@@ -196,7 +193,7 @@ func Flashcards(ctx context.Context, cfg config.Config, req FlashcardsRequest) (
 	} else {
 		progress(fmt.Sprintf("generating flashcards (style: %s, model: %s)...", style, prof.Model))
 	}
-	data, n, usage, err := generateFlashcards(ctx, p, req.Text, req.Count, cfg.FlashcardStylePrompt(style))
+	data, n, usage, err := generateFlashcards(ctx, p, req.Text, req.Count, cfg.FlashcardStylePrompt(style), maxOut)
 	if err != nil {
 		return FlashcardsResult{}, err
 	}
@@ -631,13 +628,24 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 	var flashcardsJSON []byte
 	if (cfg.Ingest.Flashcards || req.Flashcards) && !req.NoFlashcards {
 		progress(fmt.Sprintf("generating flashcards (model: %s)...", flashcardProf.Model))
-		fcProvider, err := newProvider(flashcardProf)
+		// Not newProvider: that passes only the profile's own limit, which left
+		// this path running at the llm default while the standalone command
+		// honoured flashcard_max_tokens. Same key, one ceiling.
+		fcMaxOut := flashcardMaxTokens(cfg, flashcardProf)
+		fcProvider, err := llm.New(llm.ProviderConfig{
+			Provider:        flashcardProf.Provider,
+			Model:           flashcardProf.Model,
+			Host:            flashcardProf.Host,
+			APIKey:          resolveAPIKey(flashcardProf.Provider),
+			Thinking:        flashcardProf.Thinking,
+			MaxOutputTokens: fcMaxOut,
+		})
 		if err != nil {
 			return Result{}, fmt.Errorf("llm provider: %w", err)
 		}
 		// Count scales with the article, not the summary: summaries are
 		// compressed and flatten length differences.
-		fj, _, cu, err := generateFlashcards(ctx, fcProvider, summaryText, cfg.CardCountForWords(wordCount), cfg.FlashcardStylePrompt(flashcardStyle))
+		fj, _, cu, err := generateFlashcards(ctx, fcProvider, summaryText, cfg.CardCountForWords(wordCount), cfg.FlashcardStylePrompt(flashcardStyle), fcMaxOut)
 		if err != nil {
 			// Flashcard failure is non-fatal — log and continue without them.
 			slog.Warn("flashcards failed, continuing without them", "slug", slug, "err", err)
@@ -920,16 +928,24 @@ func generateFlash(ctx context.Context, p llm.Provider, text, systemPrompt strin
 // of cards it contains. count > 0 asks for approximately that many; an exact
 // number makes the model pad thin articles and truncate dense ones, so the
 // prompt says "about".
-func generateFlashcards(ctx context.Context, p llm.Provider, text string, count int, systemPrompt string) ([]byte, int, llm.Usage, error) {
+//
+// maxTokens is the output cap the provider was built with. It is passed in
+// only to explain failures: a deck cut off mid-object is invalid JSON, and
+// without the cap the error is indistinguishable from the model returning
+// prose.
+func generateFlashcards(ctx context.Context, p llm.Provider, text string, count int, systemPrompt string, maxTokens int) ([]byte, int, llm.Usage, error) {
 	instruction := "Generate flashcards from this text."
 	if count > 0 {
 		instruction = fmt.Sprintf("Generate about %d flashcards from this text, covering the most important ideas.", count)
 	}
 
+	slog.Info("flashcards generation", "model", p.Name(), "count", count, "max_tokens", maxTokens, "input_words", len(strings.Fields(text)))
+
 	raw, u, err := chat(ctx, p,
 		systemPrompt,
 		instruction+" Return valid JSON only, no markdown fences:\n\n"+text)
 	if err != nil {
+		slog.Error("flashcards generation failed", "model", p.Name(), "err", err)
 		return nil, 0, u, err
 	}
 
@@ -939,13 +955,38 @@ func generateFlashcards(ctx context.Context, p llm.Provider, text string, count 
 	raw = strings.TrimSuffix(raw, "```")
 	raw = strings.TrimSpace(raw)
 
+	slog.Debug("flashcards raw output", "model", p.Name(), "output_tokens", u.OutputTokens, "raw", raw)
+
 	// Parse rather than merely validate: json.Valid accepted "hello" and {} and
 	// wrote them to disk.
 	cards, err := flashcards.Parse("", []byte(raw))
 	if err != nil {
+		// A response that used its whole budget was almost certainly cut short.
+		// llm only reports stop_reason when a response has no text at all, so
+		// the token count is the signal available here.
+		if maxTokens > 0 && u.OutputTokens >= maxTokens {
+			slog.Error("flashcards response truncated", "model", p.Name(), "count", count, "output_tokens", u.OutputTokens, "max_tokens", maxTokens)
+			return nil, 0, u, fmt.Errorf("flashcards LLM output: response hit the %d-token output cap and was cut off mid-deck; raise ingest.flashcard_max_tokens or ask for fewer cards with --count (asked for %d)", maxTokens, count)
+		}
+		slog.Error("flashcards output unparseable", "model", p.Name(), "output_tokens", u.OutputTokens, "err", err)
 		return nil, 0, u, fmt.Errorf("flashcards LLM output: %w", err)
 	}
+
+	slog.Info("flashcards generation done", "model", p.Name(), "cards", len(cards), "input_tokens", u.InputTokens, "output_tokens", u.OutputTokens)
 	return []byte(raw), len(cards), u, nil
+}
+
+// flashcardMaxTokens resolves the output cap for a flashcard call.
+//
+// ingest.flashcard_max_tokens wins over the profile's own limit so that one key
+// controls the deck size ceiling everywhere. Both the standalone command and
+// the ingest pipeline go through here — they used to disagree, and the
+// standalone path was the stricter of the two.
+func flashcardMaxTokens(cfg config.Config, prof config.Profile) int {
+	if cfg.Ingest.FlashcardMaxTokens > 0 {
+		return cfg.Ingest.FlashcardMaxTokens
+	}
+	return prof.MaxOutputTokens
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────

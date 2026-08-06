@@ -57,6 +57,7 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /reprocess                    regenerate summary/flash
   /flashcards [--style X] [--profile Y] [--count N]
                                 generate flashcards for the selected article
+                                (--count is approximate, not a hard limit)
   /flashcards-delete [--style X] [--model Y]
                                 delete flashcards (confirms first)
   /ingest <url>                 add a new article
@@ -73,6 +74,11 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /describe-generate         generate the description from member articles (LLM)
   /delete [slug]             delete collection
   /reload                    refresh collections list from disk
+  /flashcards [--style X] [--profile Y] [--count N]
+                             generate flashcards for the article row under the
+                             cursor (one article, not the whole collection)
+  /flashcards-delete [--style X] [--model Y]
+                             delete that article's flashcards (confirms first)
 
 ## Workspace commands (Workspaces sub-tab)
 
@@ -87,6 +93,11 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
                                --hint "..." --profile name --dry-run --edit --include-collections
   /remove [flags]            remove articles/collections from workspace
                                --article slug --collection slug --all-articles --all-collections --dry-run
+  /flashcards [--style X] [--profile Y] [--count N]
+                             generate flashcards for the article row under the
+                             cursor (one article, not the whole workspace)
+  /flashcards-delete [--style X] [--model Y]
+                             delete that article's flashcards (confirms first)
 
 ## Feed commands (Agent Feeds sub-tab)
 

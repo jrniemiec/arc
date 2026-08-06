@@ -191,3 +191,64 @@ func TestWrapIndentHangingIndent(t *testing.T) {
 		}
 	}
 }
+
+// /flashcards and /flashcards-delete used to be refused outside the Articles
+// sub-tab. selectedNavItem resolves an article row inside a collection and
+// inside a workspace too, so the gate only forced a trip back to the Articles
+// tab to act on the article already under the cursor. Both commands still act
+// on exactly one article — no batch cost is implied by this.
+func TestFlashcardsNotGatedOnSubTab(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sub  navSubTab
+	}{
+		{"articles", navSubTabArticles},
+		{"collections", navSubTabCollections},
+		{"workspaces", navSubTabWorkspaces},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, cmd := range []string{"/flashcards", "/cards", "/flashcards-delete", "/cards-delete"} {
+				m := &Model{activeTab: tabLibrary, navSubTab: tc.sub}
+				m.dispatchCommand(cmd)
+				if strings.Contains(m.statusMsg, "only available in Articles context") {
+					t.Errorf("%s refused on the %s sub-tab: %q", cmd, tc.name, m.statusMsg)
+				}
+			}
+		})
+	}
+}
+
+// The completion and /help lists have to agree with dispatch, or the command
+// works but nothing advertises it.
+func TestFlashcardsRegisteredInCollectionAndWorkspaceLists(t *testing.T) {
+	has := func(cmds []cmdCompletion, name string) bool {
+		for _, c := range cmds {
+			if c.cmd == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, tc := range []struct {
+		name string
+		cmds []cmdCompletion
+	}{
+		{"collectionCommands", collectionCommands},
+		{"workspaceCommands", workspaceCommands},
+	} {
+		for _, want := range []string{"/flashcards", "/flashcards-delete"} {
+			if !has(tc.cmds, want) {
+				t.Errorf("%s missing %s", tc.name, want)
+			}
+		}
+	}
+
+	m := &Model{activeTab: tabLibrary}
+	for _, group := range []string{"collection", "workspace"} {
+		out := strings.Join(m.helpLines(group), "\n")
+		if !strings.Contains(out, "/flashcards") {
+			t.Errorf("/help %s missing /flashcards: %q", group, out)
+		}
+	}
+}

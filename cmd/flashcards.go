@@ -27,7 +27,7 @@ var (
 func init() {
 	flashcardsCmd.Flags().StringVar(&flashcardsStyle, "style", "", "flashcard style: socratic|cloze (default: config)")
 	flashcardsCmd.Flags().StringVar(&flashcardsProfile, "profile", "", "LLM profile to use (default: config)")
-	flashcardsCmd.Flags().IntVar(&flashcardsCount, "count", 0, "target number of cards (default: scaled to article length)")
+	flashcardsCmd.Flags().IntVar(&flashcardsCount, "count", 0, "approximate number of cards, not a hard limit (default: scaled to article length)")
 	flashcardsCmd.Flags().BoolVar(&flashcardsDelete, "delete", false, "delete flashcards instead of generating them")
 	flashcardsCmd.Flags().StringVar(&flashcardsModel, "model", "", "with --delete: only remove this model's variant")
 	flashcardsCmd.Flags().BoolVar(&flashcardsDryRun, "dry-run", false, "with --delete: show what would be removed")
@@ -54,6 +54,10 @@ Styles:
 Card count:
   By default the number of cards scales with the article's body length, using
   the ingest.flashcard_counts buckets in config. --count overrides it.
+
+  Either way the number is a target, not a limit: the prompt asks for "about"
+  that many, so expect to land within a card or two either side. Asking for an
+  exact count makes the model pad thin articles to reach it.
 
 Each card: {"type":"concept|fact|insight","front":"...","back":"...","tags":["..."]}
 

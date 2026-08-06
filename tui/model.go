@@ -781,7 +781,7 @@ var articleCommands = []cmdCompletion{
 	{"/collection-remove", "<slug>", "remove article from a collection"},
 	{"/delete", "[slug]", "delete article (selected or by name)"},
 	{"/reprocess", "", "regenerate summary/flash"},
-	{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article"},
+	{"/flashcards", "[--style X] [--count N]", "generate flashcards (--count is approximate)"},
 	{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards for the selected article"},
 	{"/ingest", "<url>", "add a new article"},
 }
@@ -797,6 +797,8 @@ var collectionCommands = []cmdCompletion{
 	{"/describe-generate", "", "generate the description from member articles (LLM)"},
 	{"/delete", "[slug]", "delete collection (selected or by name)"},
 	{"/reload", "", "refresh collections list from disk"},
+	{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article (--count is approximate)"},
+	{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards for the selected article"},
 }
 
 // workspaceCommands are available when the Workspaces sub-tab is active.
@@ -810,6 +812,8 @@ var workspaceCommands = []cmdCompletion{
 	{"/reload", "", "reload workspace from disk and reset chat engine"},
 	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--edit] [--include-collections]", "LLM-assisted article selection"},
 	{"/remove", "[--article slug] [--collection slug] [--all-articles] [--all-collections] [--dry-run]", "remove articles/collections from workspace"},
+	{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article (--count is approximate)"},
+	{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards for the selected article"},
 }
 
 // feedCommands are available when the Agent Feeds sub-tab is active.

@@ -259,7 +259,7 @@ type IngestConfig struct {
 	FlashMaxTokens    int    `json:"flash_max_tokens"`    // max output tokens; default 256
 
 	// Flashcard tuning
-	FlashcardMaxTokens int                             `json:"flashcard_max_tokens"` // max output tokens; default 2048
+	FlashcardMaxTokens int                             `json:"flashcard_max_tokens"` // max output tokens; default 4096
 	FlashcardStyles    map[string]FlashcardStyleConfig `json:"flashcard_styles"`     // per-style system prompts
 	FlashcardCounts    []FlashcardCountRule            `json:"flashcard_counts"`     // target card count by article length
 
@@ -916,7 +916,9 @@ func Default() Config {
 			SummaryStyles:      builtinSummaryStyles,
 			FlashSystemPrompt:  DefaultFlashSystemPrompt,
 			FlashMaxTokens:     256,
-			FlashcardMaxTokens: 2048,
+			// 2048 truncated the 15-card bucket mid-deck, which surfaced as an
+			// unparseable-JSON error rather than a size problem.
+			FlashcardMaxTokens: 4096,
 			FlashcardStyles:    builtinFlashcardStyles,
 			FlashcardCounts:    builtinFlashcardCounts,
 			MinWords:           300,

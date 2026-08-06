@@ -45,7 +45,8 @@
   arc flashcards [slug]         generate or regenerate flashcards
     --style <style>               flashcard style (socratic, cloze)
     --profile <name>              LLM profile
-    --count <n>                   target number of cards (default: scaled to length)
+    --count <n>                   approximate number of cards, not a hard limit
+                                  (default: scaled to length)
     --write                       write to article directory
     --from-body                   generate from body instead of summary
     --delete                      delete flashcards instead of generating them

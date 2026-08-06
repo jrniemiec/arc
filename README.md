@@ -461,6 +461,8 @@ Left unspecified, models produce anywhere from 6 to 28 cards for the same articl
 
 `--count` overrides for a single run. Rules are matched in order; `max_words: 0` is the catch-all. Drop the catch-all and longer articles fall back to letting the model decide.
 
+The number is a target, not a ceiling — the prompt asks the model for "about" that many, so a deck can land a card or two either side of it. Asking for an exact count makes the model pad thin articles to reach the number.
+
 ### Browsing
 
 Cards render in the content pane, collapsed — the question is visible, the answer hidden until you ask for it.
@@ -859,7 +861,8 @@ arc flash [slug]              generate flash summary
 arc flashcards [slug]         generate flashcards
   --style <style>               flashcard style (socratic, cloze)
   --profile <name>              LLM profile
-  --count <n>                   target number of cards (default: scaled to length)
+  --count <n>                   approximate number of cards, not a hard limit
+                                (default: scaled to length)
   --write                       write to article directory
   --from-body                   generate from body instead of summary
   --delete                      delete flashcards instead of generating them

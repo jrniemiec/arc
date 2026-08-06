@@ -5032,18 +5032,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 		return m.cmdReprocess()
 
+	// Not gated on the Articles sub-tab: selectedNavItem resolves an article
+	// row inside a collection or a workspace too, and cards are wanted where
+	// the article is read. Both commands act on one article, so this adds no
+	// batch cost. A non-article row leaves selectedNavItem nil and the command
+	// reports "no article selected".
 	case "/flashcards", "/cards":
-		if sub != navSubTabArticles {
-			m.statusMsg = "✗ /flashcards is only available in Articles context"
-			return nil
-		}
 		return m.cmdFlashcards(arg)
 
 	case "/flashcards-delete", "/cards-delete":
-		if sub != navSubTabArticles {
-			m.statusMsg = "✗ /flashcards-delete is only available in Articles context"
-			return nil
-		}
 		return m.cmdFlashcardsDelete(arg)
 
 	case "/collection-add":
@@ -8262,7 +8259,7 @@ var helpGroups = []struct {
 		{"/chat", "", "open article chat pane (or press c in nav)"},
 		{"/delete", "", "delete current article"},
 		{"/reprocess", "", "regenerate summary/flash"},
-		{"/flashcards", "[--style X] [--profile Y] [--count N]", "generate flashcards for the selected article"},
+		{"/flashcards", "[--style X] [--profile Y] [--count N]", "generate flashcards for the selected article (--count is approximate)"},
 		{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards (confirms first)"},
 		{"/ingest", "<url> [--profile <name>] [--style <name>]", "add a new article — use /article ingest from any tab"},
 	}},
@@ -8277,6 +8274,8 @@ var helpGroups = []struct {
 		{"/describe", "[text]", "show the description, or set it"},
 		{"/describe-generate", "", "generate the description from member articles (LLM)"},
 		{"/delete", "", "delete current collection"},
+		{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article (--count is approximate)"},
+		{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards for the selected article"},
 		{"arc collections assign", "<slug> [--apply]", "AI-fill one collection  (CLI only)"},
 		{"arc collections suggest", "[--apply]", "AI-suggest collections  (CLI only)"},
 		{"arc collections read", "<slug>", "read flash/summary across collection  (CLI only)"},
@@ -8290,6 +8289,8 @@ var helpGroups = []struct {
 		{"/describe", "<text>", "set workspace description"},
 		{"/populate", "[--hint --edit --dry-run --profile --include-collections]", "LLM-assisted article selection from library"},
 		{"/remove", "[--article --collection --all-articles --all-collections --dry-run]", "remove articles/collections from workspace"},
+		{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article (--count is approximate)"},
+		{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards for the selected article"},
 		{"arc workspace add", "<slug>", "add articles/collections/resources  (CLI only)"},
 		{"arc workspace chat", "<slug>", "start interactive chat session  (CLI only)"},
 		{"arc workspace archive", "<slug>", "archive a workspace  (CLI only)"},
