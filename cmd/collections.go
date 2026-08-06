@@ -63,6 +63,7 @@ func init() {
 	collectionsAssignCmd.Flags().Bool("all", false, "with --apply: skip confirmation")
 	collectionsAssignCmd.Flags().Int("limit", 0, "process at most N articles (0 = no limit)")
 	collectionsAssignCmd.Flags().Bool("uncollected-fresh", false, "only assign articles not in any collection at all")
+	collectionsAssignCmd.Flags().String("collection", "", "fill only this collection, considering every article not already in it")
 
 	collectionsReadCmd.Flags().Bool("flash", false, "read flash summaries (default)")
 	collectionsReadCmd.Flags().Bool("summary", false, "read full summaries")
@@ -193,8 +194,12 @@ var collectionsShowCmd = &cobra.Command{
 		}
 
 		tty := isTTY(os.Stdout)
-		fmt.Fprintf(cmd.OutOrStdout(), "collection: %s  (%d articles)\n\n",
+		fmt.Fprintf(cmd.OutOrStdout(), "collection: %s  (%d articles)\n",
 			bold(info.Slug, tty), info.ArticleCount)
+		if info.Description != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", dim(info.Description, tty))
+		}
+		fmt.Fprintln(cmd.OutOrStdout())
 
 		articles, err := svc.List(cmd.Context(), store.Filter{Collection: slug})
 		if err != nil {
@@ -746,20 +751,28 @@ func suggestForArticle(cmd *cobra.Command, svc *service.Service, articleSlug, pr
 }
 
 var collectionsAssignCmd = &cobra.Command{
-	Use:   "assign",
+	Use:   "assign [<collection-slug>]",
 	Short: "Assign uncollected articles to existing collections using AI",
+	Args:  cobra.MaximumNArgs(1),
 	Long: `Assigns uncollected articles to existing collections in batches of 50.
 Each batch is one LLM call. Articles that don't fit any collection go to "uncollected".
+
+Naming a collection targets it instead: every article not already a member is
+considered, and the model decides only whether it belongs. What the collection
+already holds is printed first. Combine with --uncollected-fresh to consider
+just the articles in no collection.
 
 By default only prints assignments — nothing is linked.
 Use --apply to create symlinks.
 
 Examples:
-  arc collections assign                     # dry-run, print assignments
-  arc collections assign --apply             # interactive: confirm per batch
-  arc collections assign --apply --all       # apply all without prompting
-  arc collections assign --limit 50          # process at most 50 articles
-  arc collections assign --profile haiku     # use a specific model`,
+  arc collections assign                             # dry-run, print assignments
+  arc collections assign --apply                     # interactive: confirm per batch
+  arc collections assign --apply --all               # apply all without prompting
+  arc collections assign --limit 50                  # process at most 50 articles
+  arc collections assign --profile haiku             # use a specific model
+  arc collections assign transformers                # fill one collection (dry-run)
+  arc collections assign transformers --apply        # ... and link them`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		svc := svcFrom(cmd)
 		profile, _ := cmd.Flags().GetString("profile")
@@ -768,16 +781,40 @@ Examples:
 		limit, _ := cmd.Flags().GetInt("limit")
 		tty := isTTY(os.Stdout)
 
+		// The collection may be named positionally or with --collection; the
+		// positional form is what people reach for first.
+		target, _ := cmd.Flags().GetString("collection")
+		if len(args) > 0 {
+			if target != "" {
+				return fmt.Errorf("collection given twice: %q and --collection %q", args[0], target)
+			}
+			target = args[0]
+		}
+		if target != "" {
+			var err error
+			target, err = resolveCollectionSlug(cmd, target)
+			if err != nil {
+				return err
+			}
+			if err := printCollectionMembers(cmd, target, tty); err != nil {
+				return err
+			}
+		}
+
 		progress := func(msg string) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", msg)
 		}
 
 		fresh, _ := cmd.Flags().GetBool("uncollected-fresh")
-		assignments, err := svc.AssignCollections(cmd.Context(), profile, limit, fresh, progress)
+		assignments, err := svc.AssignCollections(cmd.Context(), profile, limit, fresh, target, progress)
 		if err != nil {
 			return fmt.Errorf("assign collections: %w", err)
 		}
 		if len(assignments) == 0 {
+			if target != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "no articles matched %s\n", target)
+				return nil
+			}
 			fmt.Fprintln(cmd.OutOrStdout(), "no assignments")
 			return nil
 		}
@@ -822,6 +859,44 @@ Examples:
 		fmt.Fprintf(cmd.OutOrStdout(), "linked %d articles, skipped %d\n", linked, skipped)
 		return nil
 	},
+}
+
+// assignMemberPreview caps how many current members a targeted assign lists
+// before the proposals. Enough to judge what the collection is about without
+// pushing the proposals off screen.
+const assignMemberPreview = 10
+
+// printCollectionMembers lists what a collection already holds, so a targeted
+// assign can be judged against its existing contents. Members are excluded from
+// the candidate pool, so nothing here reappears among the proposals.
+func printCollectionMembers(cmd *cobra.Command, slug string, tty bool) error {
+	articles, err := svcFrom(cmd).List(cmd.Context(), store.Filter{Collection: slug})
+	if err != nil {
+		return fmt.Errorf("list articles in %s: %w", slug, err)
+	}
+	out := cmd.OutOrStdout()
+	if len(articles) == 0 {
+		fmt.Fprintf(out, "%s — empty\n\n", bold(slug, tty))
+		return nil
+	}
+
+	noun := "articles"
+	if len(articles) == 1 {
+		noun = "article"
+	}
+	fmt.Fprintf(out, "%s — %d %s already:\n", bold(slug, tty), len(articles), noun)
+	shown := articles
+	if len(shown) > assignMemberPreview {
+		shown = shown[:assignMemberPreview]
+	}
+	for _, a := range shown {
+		fmt.Fprintf(out, "  %s\n", a.ID)
+	}
+	if rest := len(articles) - len(shown); rest > 0 {
+		fmt.Fprintln(out, dim(fmt.Sprintf("  … and %d more", rest), tty))
+	}
+	fmt.Fprintln(out)
+	return nil
 }
 
 var collectionsDeleteCmd = &cobra.Command{

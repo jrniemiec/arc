@@ -155,7 +155,7 @@ func runAgentRun(cmd *cobra.Command, _ []string) error {
 		if isTTY {
 			fmt.Print("assigning collections...")
 		}
-		if _, err := svc.AssignCollections(ctx, "", 0, true, nil); err != nil {
+		if _, err := svc.AssignCollections(ctx, "", 0, true, "", nil); err != nil {
 			slog.Warn("assign collections after agent run failed", "err", err)
 		}
 		if isTTY {

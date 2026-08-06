@@ -522,7 +522,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err := svc.Library().IndexSlugs(context.Background(), slugs); err != nil {
 						slog.Warn("index after decisions rerun failed", "err", err)
 					}
-					if _, err := svc.AssignCollections(context.Background(), "", 0, true, nil); err != nil {
+					if _, err := svc.AssignCollections(context.Background(), "", 0, true, "", nil); err != nil {
 						slog.Warn("assign collections after decisions rerun failed", "err", err)
 					}
 					return nil
@@ -542,7 +542,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err := svc.Library().IndexSlugs(context.Background(), slugs); err != nil {
 						slog.Warn("index after agent run failed", "err", err)
 					}
-					if _, err := svc.AssignCollections(context.Background(), "", 0, true, nil); err != nil {
+					if _, err := svc.AssignCollections(context.Background(), "", 0, true, "", nil); err != nil {
 						slog.Warn("assign collections after agent run failed", "err", err)
 					}
 					return nil

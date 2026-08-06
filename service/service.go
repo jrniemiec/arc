@@ -1173,15 +1173,43 @@ func (s *Service) SuggestCollections(ctx context.Context, profile string, count,
 
 // AssignCollections assigns uncollected articles to existing collections using
 // the LLM in batches of 50. Returns a list of {slug, collection} assignments.
-func (s *Service) AssignCollections(ctx context.Context, profile string, limit int, fresh bool, progress func(string)) ([]CollectionAssignment, error) {
+//
+// A non-empty target restricts the run to that one collection: the LLM sees only
+// it, and the candidate pool becomes every article not already a member — not
+// just the uncollected ones, since an article can belong to several collections
+// and a fresh collection usually draws from ones that already exist. Pass fresh
+// alongside target to narrow the pool back to articles in no collection at all.
+func (s *Service) AssignCollections(ctx context.Context, profile string, limit int, fresh bool, target string, progress func(string)) ([]CollectionAssignment, error) {
 	f := store.Filter{Uncollected: true}
-	if fresh {
+	switch {
+	case fresh:
 		f = store.Filter{UncollectedFresh: true}
+	case target != "":
+		f = store.Filter{}
 	}
 	articles, err := s.lib.List(ctx, f)
 	if err != nil {
-		return nil, fmt.Errorf("list uncollected articles: %w", err)
+		return nil, fmt.Errorf("list candidate articles: %w", err)
 	}
+
+	if target != "" {
+		members, _, err := fs.ListCollectionArticles(s.cfg.DataRoot, target)
+		if err != nil {
+			return nil, fmt.Errorf("list articles in %s: %w", target, err)
+		}
+		inTarget := make(map[string]bool, len(members))
+		for _, m := range members {
+			inTarget[m] = true
+		}
+		kept := articles[:0]
+		for _, a := range articles {
+			if !inTarget[a.ID] {
+				kept = append(kept, a)
+			}
+		}
+		articles = kept
+	}
+
 	if limit > 0 && len(articles) > limit {
 		articles = articles[:limit]
 	}
@@ -1200,10 +1228,16 @@ func (s *Service) AssignCollections(ctx context.Context, profile string, limit i
 	}
 	pipeCols := make([]pipeline.CollectionSuggestCollection, 0, len(cols))
 	for _, c := range cols {
+		if target != "" && c.Slug != target {
+			continue
+		}
 		pipeCols = append(pipeCols, pipeline.CollectionSuggestCollection{
 			Slug:        c.Slug,
 			Description: c.Description,
 		})
+	}
+	if target != "" && len(pipeCols) == 0 {
+		return nil, fmt.Errorf("collection %q not found", target)
 	}
 
 	results, err := pipeline.CollectionAssign(ctx, s.cfg, pipeline.CollectionAssignRequest{
@@ -1218,6 +1252,11 @@ func (s *Service) AssignCollections(ctx context.Context, profile string, limit i
 
 	out := make([]CollectionAssignment, 0, len(results))
 	for _, r := range results {
+		// In targeted mode the prompt's "uncollected" fallback is the reject
+		// path: anything not placed in the target simply doesn't belong.
+		if target != "" && r.Collection != target {
+			continue
+		}
 		out = append(out, CollectionAssignment{
 			ArticleSlug:    r.Slug,
 			CollectionSlug: r.Collection,
