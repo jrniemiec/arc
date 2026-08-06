@@ -19,6 +19,7 @@ import (
 
 // CreateWorkspace creates a new workspace, writing chat/chat.json from the global template.
 func (s *Service) CreateWorkspace(ctx context.Context, name, description string) error {
+	description = TrimWrappingQuotes(description)
 	if err := fs.CreateWorkspace(s.cfg.DataRoot, name, description, s.cfg.Chat); err != nil {
 		return fmt.Errorf("create workspace: %w", err)
 	}
@@ -198,7 +199,7 @@ func (s *Service) SetWorkspaceDescription(ctx context.Context, name, text string
 	if err != nil {
 		return err
 	}
-	m.Description = text
+	m.Description = TrimWrappingQuotes(text)
 	return fs.WriteWorkspaceMeta(s.cfg.DataRoot, m)
 }
 
@@ -208,7 +209,7 @@ func (s *Service) SetWorkspaceSystemPrompt(ctx context.Context, name, text strin
 		return err
 	}
 	wsDir := fs.WorkspaceDir(s.cfg.DataRoot, name)
-	return os.WriteFile(filepath.Join(wsDir, "system.txt"), []byte(text+"\n"), 0644)
+	return os.WriteFile(filepath.Join(wsDir, "system.txt"), []byte(TrimWrappingQuotes(text)+"\n"), 0644)
 }
 
 // GetWorkspaceSystemPrompt reads system.txt for a workspace.
@@ -346,6 +347,7 @@ func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName str
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
+	comment = TrimWrappingQuotes(comment)
 	var errs []string
 	for _, p := range paths {
 		var err error
@@ -428,6 +430,8 @@ func (s *Service) SaveWorkspaceOutcome(ctx context.Context, workspaceName, filen
 // PopulateWorkspace uses a two-pass LLM flow to suggest collections and articles
 // for a workspace based on its name and description.
 func (s *Service) PopulateWorkspace(ctx context.Context, req PopulateRequest) (PopulateResult, error) {
+	req.Hint = TrimWrappingQuotes(req.Hint)
+
 	// Read workspace metadata.
 	ws, err := s.GetWorkspace(ctx, req.Workspace)
 	if err != nil {

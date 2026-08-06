@@ -74,9 +74,23 @@ func (s *ChatStore) LoadSystem() (string, error) {
 	return string(b), nil
 }
 
+// ensureChatDir creates the chat directory, refusing to resurrect a workspace
+// that no longer exists. Without this guard, reading chat state for a deleted
+// workspace recreates its directory, leaving a ghost that ListWorkspaces hides
+// but CreateWorkspace trips over. Article chat stores set chatDirOverride and
+// are not subject to the check.
+func (s *ChatStore) ensureChatDir() error {
+	if s.chatDirOverride == "" {
+		if _, err := os.Stat(filepath.Join(s.workspaceDir(), "meta.json")); err != nil {
+			return fmt.Errorf("workspace %q not found", s.workspaceName)
+		}
+	}
+	return os.MkdirAll(s.chatDir(), 0755)
+}
+
 // LoadHistory loads chat/history.json (returns empty history if missing).
 func (s *ChatStore) LoadHistory() (*History, error) {
-	if err := os.MkdirAll(s.chatDir(), 0755); err != nil {
+	if err := s.ensureChatDir(); err != nil {
 		return nil, err
 	}
 	return loadHistoryFile(s.historyPath())
@@ -84,7 +98,7 @@ func (s *ChatStore) LoadHistory() (*History, error) {
 
 // SaveHistory writes chat/history.json atomically.
 func (s *ChatStore) SaveHistory(h *History) error {
-	if err := os.MkdirAll(s.chatDir(), 0755); err != nil {
+	if err := s.ensureChatDir(); err != nil {
 		return err
 	}
 	return saveHistoryFile(s.historyPath(), h)
@@ -111,7 +125,7 @@ func (s *ChatStore) LoadSummary() (text string, coversThrough time.Time, err err
 
 // SaveSummary persists the summary atomically to chat/summary.txt.
 func (s *ChatStore) SaveSummary(text string, coversThrough time.Time) error {
-	if err := os.MkdirAll(s.chatDir(), 0755); err != nil {
+	if err := s.ensureChatDir(); err != nil {
 		return err
 	}
 	content := fmt.Sprintf("covers_through_ts: %s\n---\n%s", coversThrough.UTC().Format(time.RFC3339Nano), text)

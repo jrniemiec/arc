@@ -44,12 +44,22 @@ func WorkspaceDir(dataRoot, name string) string {
 	return filepath.Join(dataRoot, "workspaces", name)
 }
 
+// WorkspaceExists reports whether a workspace exists. A directory alone is not
+// enough: meta.json is what makes a workspace real to ListWorkspaces, so a
+// directory left behind by a stray write is treated as absent.
+func WorkspaceExists(dataRoot, name string) bool {
+	_, err := os.Stat(filepath.Join(WorkspaceDir(dataRoot, name), "meta.json"))
+	return err == nil
+}
+
 // CreateWorkspace creates a new workspace directory with all subdirectories,
 // writes meta.json, and writes chat/config.json from chatCfg.
-// Returns an error if the workspace already exists.
+// Returns an error if the workspace already exists. An orphan directory with no
+// meta.json is adopted rather than rejected — it is invisible to ListWorkspaces,
+// so refusing to create over it would leave the name permanently unusable.
 func CreateWorkspace(dataRoot, name, description string, chatCfg config.ChatConfig) error {
 	dir := WorkspaceDir(dataRoot, name)
-	if _, err := os.Stat(dir); err == nil {
+	if WorkspaceExists(dataRoot, name) {
 		return fmt.Errorf("workspace %q already exists", name)
 	}
 
@@ -1064,6 +1074,13 @@ func ReadChatConfig(dataRoot, name string) (config.ChatConfig, error) {
 // machine-managed. User edits survive only until arc rewrites the file (e.g.
 // via /mode or /profile), so the disclaimer at the top warns accordingly.
 func WriteChatConfig(dataRoot, name string, cfg config.ChatConfig) error {
+	// Never recreate the directory of a workspace that no longer exists: this is
+	// called from read paths (loading chat history back-fills grounding_mode) and
+	// would otherwise resurrect a deleted workspace as a ghost directory.
+	// CreateWorkspace writes meta.json before calling this, so creation is safe.
+	if !WorkspaceExists(dataRoot, name) {
+		return fmt.Errorf("workspace %q not found", name)
+	}
 	dir := filepath.Join(WorkspaceDir(dataRoot, name), "chat")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create chat dir: %w", err)

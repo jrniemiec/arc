@@ -1184,6 +1184,7 @@ type cmdDoneMsg struct {
 	navFilter          string    // non-empty = set navFilter
 	resetChatEngine    bool      // true = drop chatEngine for resetChatWorkspace (force re-init on next message)
 	resetChatWorkspace string    // workspace name whose engine should be reset
+	deletedWorkspace   string    // workspace that was just deleted; chat state pointing at it must be dropped
 }
 
 // streamBuf is a goroutine-safe string buffer for streaming LLM responses.

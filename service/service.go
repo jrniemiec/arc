@@ -965,7 +965,7 @@ func (s *Service) CreateCollection(ctx context.Context, slug, description string
 	if err := ValidateCollectionSlug(slug); err != nil {
 		return err
 	}
-	if err := fs.CreateCollection(s.cfg.DataRoot, slug, description); err != nil {
+	if err := fs.CreateCollection(s.cfg.DataRoot, slug, TrimWrappingQuotes(description)); err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
 	// Read back meta to get the allocated NumID
@@ -1078,7 +1078,7 @@ func (s *Service) SetCollectionDescription(ctx context.Context, slug, text strin
 	if err != nil {
 		return fmt.Errorf("collection %q not found", slug)
 	}
-	m.Description = text
+	m.Description = TrimWrappingQuotes(text)
 	return fs.WriteCollectionMeta(s.cfg.DataRoot, m)
 }
 

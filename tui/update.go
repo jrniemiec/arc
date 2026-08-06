@@ -799,6 +799,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = paneNav
 			cmds = append(cmds, loadCollectionsTree(m.svc))
 		}
+		// Drop chat state pointing at a deleted workspace before the reload runs:
+		// the reload re-loads chat history for m.chatWorkspace, which would write
+		// the workspace's chat dir back to disk and resurrect it.
+		if msg.deletedWorkspace != "" && m.chatWorkspace == msg.deletedWorkspace {
+			savedMsg, savedLines := m.statusMsg, m.statusLines
+			m.exitChatMode()
+			m.statusMsg, m.statusLines = savedMsg, savedLines
+		}
 		if msg.reloadWorkspaces && m.svc != nil {
 			m.workspacesLoaded = false
 			m.focus = paneNav
@@ -7563,7 +7571,7 @@ func (m *Model) cmdDeleteWorkspaceByName(name string) tea.Cmd {
 			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
 				return cmdDoneMsg{err: err.Error()}
 			}
-			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true}
+			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true, deletedWorkspace: name}
 		}
 	})
 	return nil
@@ -7628,7 +7636,7 @@ func (m *Model) cmdDeleteWorkspace() tea.Cmd {
 			if err := svc.DeleteWorkspace(context.Background(), name); err != nil {
 				return cmdDoneMsg{err: err.Error()}
 			}
-			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true}
+			return cmdDoneMsg{statusMsg: "✓ deleted workspace " + name, reloadWorkspaces: true, deletedWorkspace: name}
 		}
 	})
 	return nil

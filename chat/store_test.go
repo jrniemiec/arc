@@ -76,6 +76,15 @@ func TestSaveSummary_LoadSummary_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	st := &ChatStore{dataRoot: dir, workspaceName: "test-ws"}
 
+	// The workspace must exist on disk — writes never create one.
+	wsDir := filepath.Join(dir, "workspaces", "test-ws")
+	if err := os.MkdirAll(wsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "meta.json"), []byte(`{"name":"test-ws"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	// File does not exist: LoadSummary returns zero values.
 	text, ts, err := st.LoadSummary()
 	if err != nil {
