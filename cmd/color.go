@@ -109,6 +109,14 @@ func dim(s string, tty bool) string {
 	return ansiCode("dim") + s + ansiReset
 }
 
+// yellow wraps s in yellow ANSI, if tty is true.
+func yellow(s string, tty bool) string {
+	if !tty {
+		return s
+	}
+	return ansiCode("yellow") + s + ansiReset
+}
+
 // bold wraps s in bold ANSI, if tty is true.
 func bold(s string, tty bool) string {
 	if !tty {

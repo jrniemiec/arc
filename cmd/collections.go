@@ -869,22 +869,36 @@ const assignMemberPreview = 10
 // printCollectionMembers lists what a collection already holds, so a targeted
 // assign can be judged against its existing contents. Members are excluded from
 // the candidate pool, so nothing here reappears among the proposals.
+//
+// The description is shown alongside, since it is what the model matches article
+// titles against — approving assignments driven by a description you cannot see
+// is guesswork. Its absence is called out for the same reason: with no
+// description the model has only the slug to go on, and nothing else says so.
 func printCollectionMembers(cmd *cobra.Command, slug string, tty bool) error {
-	articles, err := svcFrom(cmd).List(cmd.Context(), store.Filter{Collection: slug})
+	svc := svcFrom(cmd)
+	articles, err := svc.List(cmd.Context(), store.Filter{Collection: slug})
 	if err != nil {
 		return fmt.Errorf("list articles in %s: %w", slug, err)
 	}
-	out := cmd.OutOrStdout()
-	if len(articles) == 0 {
-		fmt.Fprintf(out, "%s — empty\n\n", bold(slug, tty))
-		return nil
+	info, err := svc.GetCollection(cmd.Context(), slug)
+	if err != nil {
+		return fmt.Errorf("get collection %s: %w", slug, err)
 	}
 
-	noun := "articles"
-	if len(articles) == 1 {
-		noun = "article"
+	out := cmd.OutOrStdout()
+	if len(articles) == 0 {
+		fmt.Fprintf(out, "%s — empty\n", bold(slug, tty))
+	} else {
+		noun := "articles"
+		if len(articles) == 1 {
+			noun = "article"
+		}
+		fmt.Fprintf(out, "%s — %d %s already\n", bold(slug, tty), len(articles), noun)
 	}
-	fmt.Fprintf(out, "%s — %d %s already:\n", bold(slug, tty), len(articles), noun)
+	if info.Description != "" {
+		fmt.Fprintf(out, "%s\n", dim(info.Description, tty))
+	}
+
 	shown := articles
 	if len(shown) > assignMemberPreview {
 		shown = shown[:assignMemberPreview]
@@ -895,6 +909,15 @@ func printCollectionMembers(cmd *cobra.Command, slug string, tty bool) error {
 	if rest := len(articles) - len(shown); rest > 0 {
 		fmt.Fprintln(out, dim(fmt.Sprintf("  … and %d more", rest), tty))
 	}
+
+	// Last, so it sits next to the LLM call it is warning about — and clear of
+	// the indented member list it would otherwise be mistaken for.
+	if info.Description == "" {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, yellow("no description — the model has only the slug to match titles against", tty))
+		fmt.Fprintf(out, "%s\n", dim(fmt.Sprintf("set one with: arc collections describe %s \"...\"", slug), tty))
+	}
+
 	fmt.Fprintln(out)
 	return nil
 }
