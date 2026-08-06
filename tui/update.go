@@ -301,7 +301,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = fmt.Sprintf("no results for %q", msg.query)
 				m.navFilter = ""
 			} else {
-				m.navFilter = fmt.Sprintf("search: %q · %d collections · %d articles%s  ·  /clear to reset", msg.query, nCol, nArt, badge)
+				m.navFilter = fmt.Sprintf("search: %q · %d collections · %d articles%s  ·  esc or /clear to reset", msg.query, nCol, nArt, badge)
 				m.statusMsg = ""
 			}
 			if msg.warning != "" {
@@ -372,7 +372,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = fmt.Sprintf("no results for %q", msg.query)
 				m.navFilter = ""
 			} else {
-				m.navFilter = fmt.Sprintf("search: %q · %d workspaces · %d articles%s  ·  /clear to reset", msg.query, nWs, nArt, badge)
+				m.navFilter = fmt.Sprintf("search: %q · %d workspaces · %d articles%s  ·  esc or /clear to reset", msg.query, nWs, nArt, badge)
 				m.statusMsg = ""
 			}
 			if msg.warning != "" {
@@ -1270,6 +1270,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.paramHint = ""
 		m.statusMsg = ""
 		m.statusLines = nil
+		// Esc clears an active nav search — same reset /clear performs, but
+		// reachable without the command pane. Set before the cancel blocks
+		// below so their more specific messages win.
+		if m.clearNavSearch() {
+			m.statusMsg = "✓ search cleared"
+		}
 		m.pendingConfirm = nil
 		m.pendingConfirmMsg = ""
 		m.agentConfirmAction = nil
@@ -1584,6 +1590,7 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 		if m.chatMode {
 			m.exitChatMode()
 		}
+		m.clearNavSearch()
 		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
 	case key.Matches(msg, keys.ContentTabNext):
 		if m.achatMode {
@@ -1592,6 +1599,7 @@ func (m *Model) handleTabBarKey(msg tea.KeyMsg) tea.Cmd {
 		if m.chatMode {
 			m.exitChatMode()
 		}
+		m.clearNavSearch()
 		m.activeTab = (m.activeTab + 1) % tabCount
 	case key.Matches(msg, keys.NavDown), key.Matches(msg, keys.Select):
 		if m.activeTab == tabHelp {
@@ -1917,6 +1925,7 @@ func (m *Model) navLeft() tea.Cmd {
 		if m.chatMode {
 			m.exitChatMode()
 		}
+		m.clearNavSearch()
 		m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
 		return nil
 	}
@@ -1937,6 +1946,7 @@ func (m *Model) navRight() tea.Cmd {
 		if m.chatMode {
 			m.exitChatMode()
 		}
+		m.clearNavSearch()
 		m.activeTab = (m.activeTab + 1) % tabCount
 		return nil
 	}
@@ -2666,6 +2676,37 @@ func (m *Model) navSelect() tea.Cmd {
 	return nil
 }
 
+// clearNavSearch drops any active nav search/filter, restoring the unfiltered
+// lists for every Library sub-tab. It reports whether anything was cleared.
+//
+// All three sub-tabs share a single navFilter badge but keep their results in
+// separate slices, so a filter left behind on one sub-tab renders over another
+// one's rows. Clearing all three together is what keeps the badge honest.
+//
+// wsFocusName (workspace solo mode) is deliberately left alone: it is a
+// persisted view choice, not a search artifact.
+func (m *Model) clearNavSearch() bool {
+	if m.navFilter == "" && m.wsSearchName == "" {
+		return false
+	}
+	m.navFilter = ""
+	m.wsSearchName = ""
+	if m.navItemsAll != nil {
+		m.navItems = m.navItemsAll
+	}
+	if m.navRowsAll != nil {
+		m.navRows = m.navRowsAll
+	}
+	if m.workspaceItemsAll != nil {
+		m.workspaceItems = m.workspaceItemsAll
+		m.wsRows = m.buildWsRows()
+	}
+	m.navCursor, m.navScroll = 0, 0
+	m.navRowCursor, m.navRowScroll = 0, 0
+	m.wsCursor, m.wsScroll = 0, 0
+	return true
+}
+
 // switchNavSubTab switches to the given Library nav sub-tab.
 func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 	if m.achatMode {
@@ -2675,6 +2716,7 @@ func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 		m.exitChatMode()
 	}
 	m.maybeCloseAskX()
+	m.clearNavSearch()
 	m.navSubTab = sub
 	m.navRowCursor = 0
 	m.navRowScroll = 0
@@ -5484,7 +5526,7 @@ func (m *Model) filterWorkspaces(query string) {
 		m.statusMsg = fmt.Sprintf("no workspaces matching %q", query)
 		m.navFilter = ""
 	} else {
-		m.navFilter = fmt.Sprintf("workspaces: %q · %d results  ·  /clear to reset", query, n)
+		m.navFilter = fmt.Sprintf("workspaces: %q · %d results  ·  esc or /clear to reset", query, n)
 		m.statusMsg = ""
 	}
 }
@@ -5511,7 +5553,7 @@ func (m *Model) filterCollections(query string) {
 		m.statusMsg = fmt.Sprintf("no collections matching %q", query)
 		m.navFilter = ""
 	} else {
-		m.navFilter = fmt.Sprintf("collections: %q · %d results  ·  /clear to reset", query, n)
+		m.navFilter = fmt.Sprintf("collections: %q · %d results  ·  esc or /clear to reset", query, n)
 		m.statusMsg = ""
 	}
 }
@@ -5553,9 +5595,9 @@ func (m *Model) applyNavFilter(mode, query string) {
 		m.navFilter = ""
 	} else {
 		if mode == "favorite" {
-			m.navFilter = fmt.Sprintf("★ favorites · %d articles  ·  /clear to reset", n)
+			m.navFilter = fmt.Sprintf("★ favorites · %d articles  ·  esc or /clear to reset", n)
 		} else {
-			m.navFilter = mode + ": " + query + " · " + fmt.Sprintf("%d", n) + " results  ·  /clear to reset"
+			m.navFilter = mode + ": " + query + " · " + fmt.Sprintf("%d", n) + " results  ·  esc or /clear to reset"
 		}
 		m.statusMsg = ""
 	}
@@ -6130,7 +6172,7 @@ func (m *Model) filterByCollection(name string) tea.Cmd {
 		}
 		return cmdDoneMsg{
 			navItems:  filtered,
-			navFilter: fmt.Sprintf("collection: %s · %d articles  ·  /clear to reset", name, len(filtered)),
+			navFilter: fmt.Sprintf("collection: %s · %d articles  ·  esc or /clear to reset", name, len(filtered)),
 		}
 	}
 }
@@ -6261,7 +6303,7 @@ func cmdSearch(svc *service.Service, query string, limit int, slugs []string, mo
 			return cmdDoneMsg{
 				statusMsg: status,
 				navItems:  []navItem{},
-				navFilter: fmt.Sprintf("search: %q · 0 results%s  ·  /clear to reset", query, badge),
+				navFilter: fmt.Sprintf("search: %q · 0 results%s  ·  esc or /clear to reset", query, badge),
 			}
 		}
 		items := make([]navItem, len(results))
@@ -6272,7 +6314,7 @@ func cmdSearch(svc *service.Service, query string, limit int, slugs []string, mo
 		return cmdDoneMsg{
 			statusMsg: status,
 			navItems:  items,
-			navFilter: fmt.Sprintf("search: %q · %d results%s%s  ·  /clear to reset",
+			navFilter: fmt.Sprintf("search: %q · %d results%s%s  ·  esc or /clear to reset",
 				query, len(items), sourceCounts(results), badge),
 		}
 	}
@@ -8956,6 +8998,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if t := tabBarHitTest(msg.X); t >= 0 {
 					if m.chatMode && t != tabLibrary {
 						m.exitChatMode()
+					}
+					if t != m.activeTab {
+						m.clearNavSearch()
 					}
 					m.activeTab = t
 					m.focus = paneTabBar
