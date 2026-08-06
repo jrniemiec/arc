@@ -886,6 +886,9 @@ func (s *Service) MarkPlayed(ctx context.Context, id string) error {
 
 // CreateCollection creates a new collection directory and registers it in SQLite.
 func (s *Service) CreateCollection(ctx context.Context, slug, description string) error {
+	if err := ValidateCollectionSlug(slug); err != nil {
+		return err
+	}
 	if err := fs.CreateCollection(s.cfg.DataRoot, slug, description); err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
@@ -1018,8 +1021,28 @@ func (s *Service) ListCollectionArticles(ctx context.Context, slug string) ([]st
 	return articles, nil
 }
 
+// ValidateCollectionSlug ensures a collection slug is filesystem-safe. It lives
+// here rather than in the CLI because every surface that can name a collection
+// needs it — the TUI, and the LLM-suggested slugs that reach CreateCollection
+// straight from a model response.
+func ValidateCollectionSlug(slug string) error {
+	if slug == "" {
+		return fmt.Errorf("slug cannot be empty")
+	}
+	if strings.ContainsAny(slug, "/ \\:*?\"<>|") {
+		return fmt.Errorf("slug %q contains invalid characters — use letters, numbers, and hyphens only", slug)
+	}
+	if strings.HasPrefix(slug, ".") {
+		return fmt.Errorf("slug cannot start with a dot")
+	}
+	return nil
+}
+
 // RenameCollection renames a collection slug on disk and in SQLite.
 func (s *Service) RenameCollection(ctx context.Context, oldSlug, newSlug string) error {
+	if err := ValidateCollectionSlug(newSlug); err != nil {
+		return err
+	}
 	if err := fs.RenameCollection(s.cfg.DataRoot, oldSlug, newSlug); err != nil {
 		return err
 	}

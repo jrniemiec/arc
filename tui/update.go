@@ -1862,10 +1862,16 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		if m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections ||
 			(m.navSubTab == navSubTabWorkspaces && m.selectedNavItem() != nil) {
 			if m.achatMode {
-				// Chat already open for this article — focus the input pane.
-				m.focus = paneCommand
-				m.cursorVisible = true
-				m.syncInputPrompt()
+				// Open for a different article — switch rather than close, so c
+				// stays "chat about the row I'm on". Moving the nav cursor
+				// already re-targets the pane, so this is a fallback.
+				if sel := m.selectedNavItem(); sel != nil && sel.id != m.achatSlug {
+					m.exitArticleChat()
+					return m.cmdArticleChat()
+				}
+				// Same article — close. Tab reaches the pane when the intent was
+				// to focus it instead.
+				m.exitArticleChat()
 				return nil
 			}
 			return m.cmdArticleChat()
@@ -5072,8 +5078,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 
 	// ── Workspace-only ──────────────────────────────────────────────────
 	case "/new":
+		if sub == navSubTabCollections {
+			if arg == "" {
+				m.statusMsg = "usage: /new <slug> [description]"
+				return nil
+			}
+			return m.cmdNewCollection(arg)
+		}
 		if sub != navSubTabWorkspaces {
-			m.statusMsg = "✗ /new is only available in Workspaces context"
+			m.statusMsg = "✗ /new is only available in Collections and Workspaces context"
 			return nil
 		}
 		if arg == "" {
@@ -5083,8 +5096,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdNewWorkspace(arg)
 
 	case "/rename":
+		if sub == navSubTabCollections {
+			if arg == "" {
+				m.statusMsg = "usage: /rename <new-slug>"
+				return nil
+			}
+			return m.cmdRenameCollection(arg)
+		}
 		if sub != navSubTabWorkspaces {
-			m.statusMsg = "✗ /rename is only available in Workspaces context"
+			m.statusMsg = "✗ /rename is only available in Collections and Workspaces context"
 			return nil
 		}
 		if arg == "" {
@@ -5094,8 +5114,13 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdRenameWorkspace(arg)
 
 	case "/describe":
+		// Collections: a bare /describe reads the description back, the way a
+		// bare /mode reads the grounding mode. Workspaces keep printing usage.
+		if sub == navSubTabCollections {
+			return m.cmdDescribeCollection(arg)
+		}
 		if sub != navSubTabWorkspaces {
-			m.statusMsg = "✗ /describe is only available in Workspaces context"
+			m.statusMsg = "✗ /describe is only available in Collections and Workspaces context"
 			return nil
 		}
 		if arg == "" {
@@ -5103,6 +5128,13 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		return m.cmdDescribeWorkspace(arg)
+
+	case "/describe-generate":
+		if sub != navSubTabCollections {
+			m.setStatusError("✗ /describe-generate needs the Collections sub-tab")
+			return nil
+		}
+		return m.cmdGenerateCollectionDescription()
 
 	case "/mode":
 		if !m.chatMode {
@@ -5740,6 +5772,140 @@ func (m *Model) cmdArticleRemove(articleSlug string) tea.Cmd {
 		return nil
 	}
 	return removeFromCollectionCmd(m.svc, articleSlug, collSlug)
+}
+
+// cmdNewCollection creates a collection from "/new <slug> [description]".
+// Nothing needs to be selected — this is the one collection command that acts
+// on no existing row.
+func (m *Model) cmdNewCollection(arg string) tea.Cmd {
+	slug, desc, _ := strings.Cut(strings.TrimSpace(arg), " ")
+	desc = strings.TrimSpace(desc)
+	if err := service.ValidateCollectionSlug(slug); err != nil {
+		m.setStatusError("✗ " + err.Error())
+		return nil
+	}
+	if m.svc == nil {
+		m.setStatusError("✗ create unavailable — no service attached")
+		return nil
+	}
+	slog.Info("collection-new", "collection", slug, "has_description", desc != "")
+
+	svc := m.svc
+	return func() tea.Msg {
+		if err := svc.CreateCollection(context.Background(), slug, desc); err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		msg := "✓ created collection " + slug
+		if desc == "" {
+			// The description is what `assign` matches article titles against,
+			// so an empty one quietly weakens every later placement.
+			msg += " — no description; add one with /describe <text>"
+		}
+		return cmdDoneMsg{statusMsg: msg, reloadCollections: true}
+	}
+}
+
+// cmdRenameCollection renames the collection under the cursor.
+func (m *Model) cmdRenameCollection(newSlug string) tea.Cmd {
+	oldSlug := m.collectionForRow(m.navRowCursor)
+	if oldSlug == "" {
+		m.setStatusError("✗ no collection selected")
+		return nil
+	}
+	if err := service.ValidateCollectionSlug(newSlug); err != nil {
+		m.setStatusError("✗ " + err.Error())
+		return nil
+	}
+	if m.svc == nil {
+		m.setStatusError("✗ rename unavailable — no service attached")
+		return nil
+	}
+	slog.Info("collection-rename", "from", oldSlug, "to", newSlug)
+
+	svc := m.svc
+	return func() tea.Msg {
+		if err := svc.RenameCollection(context.Background(), oldSlug, newSlug); err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{
+			statusMsg:         fmt.Sprintf("✓ renamed %s → %s", oldSlug, newSlug),
+			reloadCollections: true,
+		}
+	}
+}
+
+// cmdDescribeCollection shows the description of the collection under the
+// cursor, or sets it when text is given.
+func (m *Model) cmdDescribeCollection(text string) tea.Cmd {
+	slug := m.collectionForRow(m.navRowCursor)
+	if slug == "" {
+		m.setStatusError("✗ no collection selected")
+		return nil
+	}
+
+	text = strings.TrimSpace(text)
+	if text == "" {
+		desc := ""
+		for _, r := range m.navRows {
+			if r.kind == rowCollection && r.colSlug == slug {
+				desc = r.colDesc
+				break
+			}
+		}
+		if desc == "" {
+			m.statusMsg = slug + ": no description — set one with /describe <text>"
+		} else {
+			m.statusMsg = slug + ": " + desc
+		}
+		return nil
+	}
+
+	if m.svc == nil {
+		m.setStatusError("✗ describe unavailable — no service attached")
+		return nil
+	}
+	slog.Info("collection-describe", "collection", slug)
+
+	svc := m.svc
+	return func() tea.Msg {
+		if err := svc.SetCollectionDescription(context.Background(), slug, text); err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ described " + slug, reloadCollections: true}
+	}
+}
+
+// cmdGenerateCollectionDescription writes an LLM-generated description for the
+// collection under the cursor, derived from its member article titles. Errors
+// when the collection is empty — there is nothing to derive one from.
+func (m *Model) cmdGenerateCollectionDescription() tea.Cmd {
+	slug := m.collectionForRow(m.navRowCursor)
+	if slug == "" {
+		m.setStatusError("✗ no collection selected")
+		return nil
+	}
+	if m.svc == nil {
+		m.setStatusError("✗ describe-generate unavailable — no service attached")
+		return nil
+	}
+	slog.Info("collection-describe-generate", "collection", slug)
+
+	svc := m.svc
+	send := *m.programSend
+	m.statusMsg = "generating description · " + slug
+	m.statusErr = false
+
+	return func() tea.Msg {
+		desc, err := svc.GenerateCollectionDescription(context.Background(), slug, "",
+			func(step string) { send(statusUpdateMsg{text: step}) })
+		if err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		if err := svc.SetCollectionDescription(context.Background(), slug, desc); err != nil {
+			return cmdDoneMsg{err: err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: "✓ " + slug + ": " + desc, reloadCollections: true}
+	}
 }
 
 // cmdToggleFavorite toggles the favorite flag on the current article.
@@ -8086,10 +8252,12 @@ var helpGroups = []struct {
 		{"/reload", "", "refresh collections list from disk"},
 		{"/chat", "", "open article chat pane (or press c in nav)"},
 		{"/article-remove", "[slug]", "remove article from this collection (or press U on it)"},
+		{"/new", "<slug> [description]", "create a new collection"},
+		{"/rename", "<new-slug>", "rename the selected collection"},
+		{"/describe", "[text]", "show the description, or set it"},
+		{"/describe-generate", "", "generate the description from member articles (LLM)"},
 		{"/delete", "", "delete current collection"},
-		{"arc collections create", "<slug>", "create a new collection  (CLI only)"},
-		{"arc collections rename", "<old> <new>", "rename  (CLI only)"},
-		{"arc collections describe", "<slug> <desc>", "set description  (CLI only)"},
+		{"arc collections assign", "<slug> [--apply]", "AI-fill one collection  (CLI only)"},
 		{"arc collections suggest", "[--apply]", "AI-suggest collections  (CLI only)"},
 		{"arc collections read", "<slug>", "read flash/summary across collection  (CLI only)"},
 	}},
@@ -8181,7 +8349,7 @@ func (m *Model) contextKeys(all bool) []string {
 	}
 
 	articleKeys := []cmdCompletion{
-		{"c", "", "toggle/focus article chat"},
+		{"c", "", "toggle article chat"},
 		{"r", "", "mark article as read"},
 		{"u", "", "mark article as unread"},
 		{"f / *", "", "toggle favorite"},
@@ -8201,13 +8369,13 @@ func (m *Model) contextKeys(all bool) []string {
 	}
 
 	collectionKeys := []cmdCompletion{
-		{"c", "", "toggle/focus collection chat"},
+		{"c", "", "toggle collection chat"},
 		{"U", "", "remove selected article from this collection"},
 		{"D", "", "delete collection"},
 	}
 
 	workspaceKeys := []cmdCompletion{
-		{"c", "", "toggle/focus workspace chat"},
+		{"c", "", "toggle workspace chat"},
 		{"ctrl+o", "", "toggle preview pane"},
 		{"f / *", "", "toggle pin"},
 		{"!", "", "toggle workspace focus"},

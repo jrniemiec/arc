@@ -791,6 +791,10 @@ var collectionCommands = []cmdCompletion{
 	{"/search", "<query>", "filter collections by name/slug"},
 	{"/clear", "", "clear active filter"},
 	{"/article-remove", "[slug]", "remove article from this collection (selected or by name)"},
+	{"/new", "<slug> [description]", "create a new collection"},
+	{"/rename", "<new-slug>", "rename the selected collection"},
+	{"/describe", "[text]", "show or set the selected collection's description"},
+	{"/describe-generate", "", "generate the description from member articles (LLM)"},
 	{"/delete", "[slug]", "delete collection (selected or by name)"},
 	{"/reload", "", "refresh collections list from disk"},
 }

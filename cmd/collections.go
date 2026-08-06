@@ -1041,16 +1041,9 @@ func promptYN(cmd *cobra.Command, prompt string) bool {
 	return ans == "" || ans == "y" || ans == "yes"
 }
 
-// validateSlug ensures a collection slug is filesystem-safe.
+// validateSlug ensures a collection slug is filesystem-safe. The rules live in
+// the service layer so the TUI enforces the same ones; this catches the bad
+// input a step earlier, before any service call.
 func validateSlug(slug string) error {
-	if slug == "" {
-		return fmt.Errorf("slug cannot be empty")
-	}
-	if strings.ContainsAny(slug, "/ \\:*?\"<>|") {
-		return fmt.Errorf("slug %q contains invalid characters — use letters, numbers, and hyphens only", slug)
-	}
-	if strings.HasPrefix(slug, ".") {
-		return fmt.Errorf("slug cannot start with a dot")
-	}
-	return nil
+	return service.ValidateCollectionSlug(slug)
 }

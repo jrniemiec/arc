@@ -67,6 +67,10 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /clear                     clear active filter
   /article-remove [slug]     remove article from this collection (selected or by
                              name) — or press U on the article row
+  /new <slug> [description]  create a new collection
+  /rename <new-slug>         rename the selected collection
+  /describe [text]           show the description, or set it
+  /describe-generate         generate the description from member articles (LLM)
   /delete [slug]             delete collection
   /reload                    refresh collections list from disk
 
