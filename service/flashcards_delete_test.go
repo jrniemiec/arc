@@ -164,7 +164,7 @@ func TestDeleteFlashcardsRemovesCardTextFromSearch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("search: %v", err)
 		}
-		for _, r := range res {
+		for _, r := range res.Hits {
 			if r.Article.ID == fixtureSlug {
 				return true
 			}

@@ -534,9 +534,9 @@ func (s *Service) updateMetaModels(id string, u metaModelUpdate) error {
 }
 
 // Search runs a keyword (FTS5), semantic (vector), or combined search.
-func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResults, error) {
 	if strings.TrimSpace(req.Query) == "" {
-		return nil, fmt.Errorf("search query cannot be empty")
+		return SearchResults{}, fmt.Errorf("search query cannot be empty")
 	}
 
 	limit := req.Limit
@@ -546,18 +546,39 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 
 	// Determine effective mode: fall back to keyword if no vector store available.
 	mode := req.Mode
+	requested := mode
 	if mode != store.QueryKeyword && s.vec == nil {
 		mode = store.QueryKeyword
 	}
 
+	slog.Info("search start", "query", req.Query, "mode", mode, "limit", limit,
+		"collection", req.Collection, "tags", req.Tags)
+
+	var res SearchResults
+	var err error
 	switch mode {
 	case store.QuerySemantic:
-		return s.searchSemantic(ctx, req.Query, limit)
+		// No keyword half to fall back to — an embedding failure is fatal here,
+		// since returning zero hits would misreport the library as empty.
+		res.Hits, err = s.searchSemantic(ctx, req.Query, limit)
 	case store.QueryCombined:
-		return s.searchCombined(ctx, req, limit)
+		res, err = s.searchCombined(ctx, req, limit)
 	default:
-		return s.searchKeyword(ctx, req, limit)
+		res.Hits, err = s.searchKeyword(ctx, req, limit)
+		if requested != store.QueryKeyword && s.vec == nil {
+			res.Warning = "semantic search unavailable: vector index could not be opened"
+			res.Degraded = DegradedSemantic
+			slog.Warn("search degraded", "reason", "vector store not available")
+		}
 	}
+	if err != nil {
+		slog.Error("search failed", "query", req.Query, "mode", mode, "err", err)
+		return SearchResults{}, err
+	}
+
+	slog.Info("search done", "query", req.Query, "mode", mode,
+		"hits", len(res.Hits), "warning", res.Warning)
+	return res, nil
 }
 
 func (s *Service) searchKeyword(ctx context.Context, req SearchRequest, limit int) ([]SearchResult, error) {
@@ -592,10 +613,13 @@ func (s *Service) searchSemantic(ctx context.Context, query string, limit int) (
 	if err != nil {
 		return nil, err
 	}
-	hits, err := s.vec.Query(ctx, embedding, limit, 0.5)
+	min := s.minSimilarity()
+	hits, err := s.vec.Query(ctx, embedding, limit, float32(min))
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
+	slog.Debug("semantic search", "query", query, "hits", len(hits),
+		"indexed", s.vec.Count(), "min_similarity", min)
 	results := make([]SearchResult, 0, len(hits))
 	for _, h := range hits {
 		a, err := s.lib.Get(ctx, h.ID)
@@ -611,7 +635,7 @@ func (s *Service) searchSemantic(ctx context.Context, query string, limit int) (
 	return results, nil
 }
 
-func (s *Service) searchCombined(ctx context.Context, req SearchRequest, limit int) ([]SearchResult, error) {
+func (s *Service) searchCombined(ctx context.Context, req SearchRequest, limit int) (SearchResults, error) {
 	// Run FTS and vector searches concurrently.
 	type ftsOut struct {
 		results []SearchResult
@@ -638,7 +662,22 @@ func (s *Service) searchCombined(ctx context.Context, req SearchRequest, limit i
 
 	// If both fail, return the FTS error.
 	if ftsResult.err != nil && vecResult.err != nil {
-		return nil, ftsResult.err
+		return SearchResults{}, ftsResult.err
+	}
+
+	// One half failing is survivable — the other still has hits — but it must
+	// not pass unnoticed. A dead embedding key otherwise looks like a search
+	// that simply found nothing semantically.
+	var warning, degraded string
+	if vecResult.err != nil {
+		slog.Warn("search degraded: semantic half failed", "query", req.Query, "err", vecResult.err)
+		warning = "semantic search unavailable, showing keyword results only: " + degradeMsg(vecResult.err)
+		degraded = DegradedSemantic
+	}
+	if ftsResult.err != nil {
+		slog.Warn("search degraded: keyword half failed", "query", req.Query, "err", ftsResult.err)
+		warning = "keyword search unavailable, showing semantic results only: " + degradeMsg(ftsResult.err)
+		degraded = DegradedKeyword
 	}
 
 	// Merge: normalize each set to [0,1] then sum.
@@ -652,8 +691,11 @@ func (s *Service) searchCombined(ctx context.Context, req SearchRequest, limit i
 		if len(results) == 0 {
 			return
 		}
-		// BM25 scores are negative (lower = better); invert and normalize.
-		// Vector similarity is already [0,1].
+		// Scale each half to [0,1] with the best hit at 1, so the two are
+		// summable. Magnitude means "better" on both sides — BM25 is negative
+		// with more-negative being a stronger match, cosine is positive and
+		// higher is stronger — so the absolute value handles both. Subtracting
+		// from 1 here would rank every result backwards.
 		maxAbs := 0.0
 		for _, r := range results {
 			if abs := math.Abs(r.Score); abs > maxAbs {
@@ -661,10 +703,7 @@ func (s *Service) searchCombined(ctx context.Context, req SearchRequest, limit i
 			}
 		}
 		for _, r := range results {
-			norm := 0.0
-			if maxAbs > 0 {
-				norm = 1.0 - math.Abs(r.Score)/maxAbs
-			}
+			norm := rankNorm(r.Score, maxAbs)
 			if m, ok := byID[r.Article.ID]; ok {
 				m.score += norm
 				if m.r.Source != r.Source {
@@ -697,7 +736,44 @@ func (s *Service) searchCombined(ctx context.Context, req SearchRequest, limit i
 	if len(out) > limit {
 		out = out[:limit]
 	}
-	return out, nil
+	return SearchResults{Hits: out, Warning: warning, Degraded: degraded}, nil
+}
+
+// degradeMsg renders an error as a single readable line for display alongside
+// results. Provider errors arrive with embedded JSON bodies spanning many
+// lines; the full text still reaches the log via slog.
+func degradeMsg(err error) string {
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	const max = 160
+	if len(msg) > max {
+		msg = msg[:max] + "…"
+	}
+	return msg
+}
+
+// rankNorm scales one half's raw score to [0,1] with the strongest hit at 1,
+// so the keyword and vector halves become summable. Magnitude means "better"
+// on both sides — BM25 is negative with more-negative being the stronger match,
+// cosine is positive with higher being stronger — so the absolute value covers
+// both. This returned 1-|score|/maxAbs until 2026-08-05, which ranked every
+// combined search backwards.
+func rankNorm(score, maxAbs float64) float64 {
+	if maxAbs == 0 {
+		return 0
+	}
+	return math.Abs(score) / maxAbs
+}
+
+// minSimilarity is the cosine floor a vector hit must clear to count as a
+// semantic match. Raw scores are logged at debug on both sides of this line —
+// run any search with --verbose to see what a query actually scored.
+// A non-positive configured value would admit everything, so it falls back to
+// the default rather than being taken literally.
+func (s *Service) minSimilarity() float64 {
+	if s.cfg.Search.MinSimilarity > 0 {
+		return s.cfg.Search.MinSimilarity
+	}
+	return config.DefaultMinSimilarity
 }
 
 // embedQuery generates an embedding for a search query using the configured embed profile.

@@ -43,6 +43,26 @@ type SearchResult struct {
 	Source  string // "fts" | "vector" | "both"
 }
 
+// SearchResults holds the hits from a search plus any non-fatal degradation.
+//
+// Warning is non-empty when part of a combined search could not run — most
+// often the semantic half failing while keyword results still came back.
+// Callers must surface it: silently falling back to keyword-only looks exactly
+// like a working search, so a revoked embedding key goes unnoticed.
+type SearchResults struct {
+	Hits    []SearchResult
+	Warning string
+	// Degraded names which half did not run: DegradedSemantic, DegradedKeyword,
+	// or "" when the search was complete. Frontends too narrow for the full
+	// Warning (the TUI status bar) use it to render a short badge instead.
+	Degraded string
+}
+
+const (
+	DegradedSemantic = "semantic" // vector half failed; keyword hits only
+	DegradedKeyword  = "keyword"  // FTS half failed; semantic hits only
+)
+
 // BatchIngestRequest describes a batch ingest operation from a file or stdin.
 type BatchIngestRequest struct {
 	// Source — exactly one must be set

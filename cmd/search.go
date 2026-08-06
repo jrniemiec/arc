@@ -62,6 +62,11 @@ Each result shows a source badge indicating which index returned it:
   [vector]  semantic match only (similarity ≥ 0.5)
   [both]    matched in both indexes (highest combined score)
 
+If one half of a combined search cannot run — most often a missing or revoked
+OPENAI_API_KEY breaking the embedding call — results from the surviving half are
+still printed, preceded by a warning on stderr. Without it a degraded search is
+indistinguishable from a working one: every badge just reads [fts].
+
 Excerpt shows the matching context from the summary with matched terms highlighted
 (bold on terminal, *asterisks* in pipes). Vector-only hits have no excerpt.
 
@@ -95,9 +100,16 @@ Examples:
 			Limit:      searchLimit,
 		}
 
-		results, err := svc.Search(cmd.Context(), req)
+		res, err := svc.Search(cmd.Context(), req)
 		if err != nil {
 			return fmt.Errorf("search: %w", err)
+		}
+		results := res.Hits
+
+		// Degradations go to stderr in every output mode: stdout keeps its
+		// shape for scripts, and the notice is still impossible to miss.
+		if res.Warning != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n\n", res.Warning)
 		}
 
 		if isJSON(cmd) {

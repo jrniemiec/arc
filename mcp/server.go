@@ -114,7 +114,7 @@ func handleSearch(svc *service.Service) server.ToolHandlerFunc {
 
 		slog.Debug("mcp search", "query", query, "mode", modeStr, "limit", limit)
 
-		results, err := svc.Search(ctx, service.SearchRequest{
+		res, err := svc.Search(ctx, service.SearchRequest{
 			Query: query,
 			Mode:  mode,
 			Limit: limit,
@@ -123,12 +123,21 @@ func handleSearch(svc *service.Service) server.ToolHandlerFunc {
 			slog.Error("mcp search failed", "err", err)
 			return mcpgo.NewToolResultErrorFromErr("search failed", err), nil
 		}
+		results := res.Hits
+
+		// Tell the model the search ran degraded, so it does not read a thin
+		// result set as evidence that the library has nothing on the topic.
+		notice := ""
+		if res.Warning != "" {
+			notice = "Warning: " + res.Warning + "\n\n"
+		}
 
 		if len(results) == 0 {
-			return mcpgo.NewToolResultText("No results found."), nil
+			return mcpgo.NewToolResultText(notice + "No results found."), nil
 		}
 
 		var sb strings.Builder
+		sb.WriteString(notice)
 		for i, r := range results {
 			fmt.Fprintf(&sb, "%d. **%s**\n", i+1, r.Article.Title)
 			fmt.Fprintf(&sb, "   slug: %s\n", r.Article.ID)

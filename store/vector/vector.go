@@ -7,6 +7,7 @@ package vector
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	chromem "github.com/philippgille/chromem-go"
 )
@@ -86,11 +87,23 @@ func (s *Store) Query(ctx context.Context, embedding []float32, n int, minSimila
 	if err != nil {
 		return nil, fmt.Errorf("vector query: %w", err)
 	}
+	// Log every candidate with its raw score, kept or not. Without this a
+	// threshold set too high is indistinguishable from an empty index: both
+	// return zero hits and no error.
 	out := make([]Result, 0, len(results))
+	dropped := 0
 	for _, r := range results {
 		if r.Similarity >= minSimilarity {
+			slog.Debug("vector hit", "id", r.ID, "similarity", r.Similarity, "min", minSimilarity)
 			out = append(out, Result{ID: r.ID, Similarity: r.Similarity})
+			continue
 		}
+		dropped++
+		slog.Debug("vector hit below threshold", "id", r.ID, "similarity", r.Similarity, "min", minSimilarity)
+	}
+	if len(out) == 0 && dropped > 0 {
+		slog.Info("vector search: all candidates below threshold",
+			"candidates", dropped, "min", minSimilarity, "best", results[0].Similarity)
 	}
 	return out, nil
 }

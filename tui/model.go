@@ -382,6 +382,10 @@ type navItem struct {
 	qualityScore float64
 	summary      string // model/style label e.g. "bullets/sonnet"
 	flashModel   string // model label e.g. "haiku"
+	// searchSource is which index returned this row: "fts", "vector" or "both".
+	// Empty for rows that did not come from a search, which is what keeps the
+	// badge off the list during normal browsing.
+	searchSource string
 }
 
 // Model is the root bubbletea model for the arc TUI.
@@ -996,6 +1000,8 @@ type collectionSearchMsg struct {
 	articles    []service.SearchResult    // articles matched by content (only collected ones)
 	query       string
 	err         string
+	warning     string // non-fatal: part of the search could not run
+	degraded    string // which half failed, for the short nav-filter badge
 }
 
 // workspaceSearchMsg is returned by cmdWorkspaceSearch when search completes.
@@ -1003,6 +1009,8 @@ type workspaceSearchMsg struct {
 	matchingSlugs map[string]bool // article slugs that matched the content search
 	query         string
 	err           string
+	warning       string // non-fatal: part of the search could not run
+	degraded      string // which half failed, for the short nav-filter badge
 }
 
 type workspacesLoadedMsg struct {
@@ -1791,6 +1799,14 @@ func (m *Model) setStatusError(msg string) {
 	slog.Error(msg)
 	m.statusMsg = msg
 	m.statusErr = true
+}
+
+// setStatusWarning reports a non-fatal degradation. Deliberately not statusErr:
+// the operation did return results, it just ran with one half missing.
+func (m *Model) setStatusWarning(msg string) {
+	slog.Warn(msg)
+	m.statusMsg = "⚠ " + msg
+	m.statusErr = false
 }
 
 func (m *Model) clearStatusError() {

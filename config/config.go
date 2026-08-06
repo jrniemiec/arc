@@ -29,6 +29,9 @@ type Config struct {
 	// Ingest controls which profiles and styles are used during ingestion.
 	Ingest IngestConfig `json:"ingest"`
 
+	// Search tunes retrieval behaviour for arc search.
+	Search SearchConfig `json:"search"`
+
 	// PreferredModels controls variant file selection when reading articles.
 	// First match wins. Used by arc read / arc list.
 	PreferredModels []string `json:"preferred_models"`
@@ -241,6 +244,24 @@ type SummaryStyleConfig struct {
 }
 
 // IngestConfig specifies which profiles and styles to use for each ingest step.
+// DefaultMinSimilarity is the cosine floor for semantic hits when config does
+// not set one. Chosen for text-embedding-3-small, whose short-query/long-summary
+// scores cluster around 0.3 — the previous hardcoded 0.5 was unreachable and
+// discarded every match.
+const DefaultMinSimilarity = 0.25
+
+// SearchConfig tunes retrieval. Values here are model-dependent: change the
+// embedding model and MinSimilarity almost certainly needs revisiting.
+type SearchConfig struct {
+	// MinSimilarity is the cosine floor a vector hit must clear to count as a
+	// semantic match. Model-specific: text-embedding-3-small scores a short
+	// query against a long summary in roughly the 0.25–0.45 band, so a floor
+	// much above 0.4 silently discards every real hit. Run any search with
+	// --verbose to see the raw scores and tune against them.
+	// 0 or less falls back to the built-in default.
+	MinSimilarity float64 `json:"min_similarity"`
+}
+
 type IngestConfig struct {
 	SummaryProfile   string `json:"summary_profile"`   // profile name for summarization
 	FlashProfile     string `json:"flash_profile"`     // profile name for flash generation
@@ -904,6 +925,9 @@ func Default() Config {
 		VectorPath:   filepath.Join(dataRoot, "index"),
 		EventsPath:   filepath.Join(dataRoot, "events.jsonl"),
 		Profiles:     builtinProfiles,
+		Search: SearchConfig{
+			MinSimilarity: DefaultMinSimilarity,
+		},
 		Ingest: IngestConfig{
 			SummaryProfile:     "oai-mini",
 			FlashProfile:       "oai-mini",

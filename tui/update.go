@@ -293,12 +293,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					nArt++
 				}
 			}
+			badge := degradedBadge(msg.degraded)
+			if badge != "" {
+				badge = " · " + badge
+			}
 			if nCol == 0 {
 				m.statusMsg = fmt.Sprintf("no results for %q", msg.query)
 				m.navFilter = ""
 			} else {
-				m.navFilter = fmt.Sprintf("search: %q · %d collections · %d articles  ·  /clear to reset", msg.query, nCol, nArt)
+				m.navFilter = fmt.Sprintf("search: %q · %d collections · %d articles%s  ·  /clear to reset", msg.query, nCol, nArt, badge)
 				m.statusMsg = ""
+			}
+			if msg.warning != "" {
+				m.setStatusWarning(msg.warning)
 			}
 		}
 
@@ -357,12 +364,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = paneNav
 			nWs := len(filtered)
 			nArt := len(msg.matchingSlugs)
+			badge := degradedBadge(msg.degraded)
+			if badge != "" {
+				badge = " · " + badge
+			}
 			if nWs == 0 {
 				m.statusMsg = fmt.Sprintf("no results for %q", msg.query)
 				m.navFilter = ""
 			} else {
-				m.navFilter = fmt.Sprintf("search: %q · %d workspaces · %d articles  ·  /clear to reset", msg.query, nWs, nArt)
+				m.navFilter = fmt.Sprintf("search: %q · %d workspaces · %d articles%s  ·  /clear to reset", msg.query, nWs, nArt, badge)
 				m.statusMsg = ""
+			}
+			if msg.warning != "" {
+				m.setStatusWarning(msg.warning)
 			}
 		}
 
@@ -6152,6 +6166,49 @@ func navItemFromArticle(a store.Article) navItem {
 	}
 }
 
+// sourceCounts summarises which index returned the hits: " (2 both, 2 fts)"
+// when they differ, " (fts)" when they all agree. The uniform case names the
+// source without a count, which would only restate the result total — but it
+// still has to be shown, because "which search found this" is the whole point
+// and most result sets are single-source.
+func sourceCounts(hits []service.SearchResult) string {
+	if len(hits) == 0 {
+		return ""
+	}
+	n := map[string]int{}
+	for _, h := range hits {
+		n[h.Source]++
+	}
+	var parts []string
+	for _, src := range []string{"both", "vector", "fts"} {
+		switch {
+		case n[src] == 0:
+		case n[src] == len(hits):
+			parts = append(parts, src)
+		default:
+			parts = append(parts, fmt.Sprintf("%d %s", n[src], src))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
+}
+
+// degradedBadge is the short form of a search degradation, for the nav filter
+// line. The status bar gives navFilter priority over statusMsg, so a warning
+// left only in statusMsg is invisible after any search that returned results.
+// Full detail stays in the warning text and ~/.arc/arc.log.
+func degradedBadge(degraded string) string {
+	switch degraded {
+	case service.DegradedSemantic:
+		return "⚠ keyword only"
+	case service.DegradedKeyword:
+		return "⚠ semantic only"
+	}
+	return ""
+}
+
 func searchMode(noSemantic bool) store.QueryMode {
 	if noSemantic {
 		return store.QueryKeyword
@@ -6184,24 +6241,39 @@ func parseSearchArg(arg string) (query string, limit int, noSemantic bool) {
 // limit=0 uses the service default (20). slugs optionally restricts results to a set of article slugs.
 func cmdSearch(svc *service.Service, query string, limit int, slugs []string, mode store.QueryMode) tea.Cmd {
 	return func() tea.Msg {
-		results, err := svc.Search(context.Background(), service.SearchRequest{Query: query, Limit: limit, Slugs: slugs, Mode: mode})
+		res, err := svc.Search(context.Background(), service.SearchRequest{Query: query, Limit: limit, Slugs: slugs, Mode: mode})
 		if err != nil {
 			return cmdDoneMsg{err: fmt.Sprintf("search: %v", err)}
 		}
+		results := res.Hits
+		badge := degradedBadge(res.Degraded)
+		if badge != "" {
+			badge = " · " + badge
+		}
+		status := ""
+		if res.Warning != "" {
+			status = "⚠ " + res.Warning
+		}
 		if len(results) == 0 {
+			if status == "" {
+				status = fmt.Sprintf("no results for %q", query)
+			}
 			return cmdDoneMsg{
-				statusMsg: fmt.Sprintf("no results for %q", query),
+				statusMsg: status,
 				navItems:  []navItem{},
-				navFilter: fmt.Sprintf("search: %q · 0 results  ·  /clear to reset", query),
+				navFilter: fmt.Sprintf("search: %q · 0 results%s  ·  /clear to reset", query, badge),
 			}
 		}
 		items := make([]navItem, len(results))
 		for i, r := range results {
 			items[i] = navItemFromArticle(r.Article)
+			items[i].searchSource = r.Source
 		}
 		return cmdDoneMsg{
+			statusMsg: status,
 			navItems:  items,
-			navFilter: fmt.Sprintf("search: %q · %d results  ·  /clear to reset", query, len(items)),
+			navFilter: fmt.Sprintf("search: %q · %d results%s%s  ·  /clear to reset",
+				query, len(items), sourceCounts(results), badge),
 		}
 	}
 }
@@ -6217,7 +6289,7 @@ func cmdCollectionSearch(svc *service.Service, query string, limit int, mode sto
 			err     error
 		}
 		type artOut struct {
-			results []service.SearchResult
+			results service.SearchResults
 			err     error
 		}
 
@@ -6246,7 +6318,7 @@ func cmdCollectionSearch(svc *service.Service, query string, limit int, mode sto
 
 		// Filter articles to only those belonging to at least one collection.
 		var collected []service.SearchResult
-		for _, r := range ar.results {
+		for _, r := range ar.results.Hits {
 			if len(r.Article.Collections) > 0 {
 				collected = append(collected, r)
 			}
@@ -6256,6 +6328,8 @@ func cmdCollectionSearch(svc *service.Service, query string, limit int, mode sto
 			collections: cr.results,
 			articles:    collected,
 			query:       query,
+			warning:     ar.results.Warning,
+			degraded:    ar.results.Degraded,
 		}
 	}
 }
@@ -6264,7 +6338,7 @@ func cmdCollectionSearch(svc *service.Service, query string, limit int, mode sto
 // so the handler can filter workspaceItemsAll to relevant workspaces.
 func cmdWorkspaceSearch(svc *service.Service, query string, limit int, mode store.QueryMode) tea.Cmd {
 	return func() tea.Msg {
-		results, err := svc.Search(context.Background(), service.SearchRequest{
+		res, err := svc.Search(context.Background(), service.SearchRequest{
 			Query: query,
 			Mode:  mode,
 			Limit: limit,
@@ -6272,11 +6346,11 @@ func cmdWorkspaceSearch(svc *service.Service, query string, limit int, mode stor
 		if err != nil {
 			return workspaceSearchMsg{err: fmt.Sprintf("search: %v", err), query: query}
 		}
-		slugs := make(map[string]bool, len(results))
-		for _, r := range results {
+		slugs := make(map[string]bool, len(res.Hits))
+		for _, r := range res.Hits {
 			slugs[r.Article.ID] = true
 		}
-		return workspaceSearchMsg{matchingSlugs: slugs, query: query}
+		return workspaceSearchMsg{matchingSlugs: slugs, query: query, warning: res.Warning, degraded: res.Degraded}
 	}
 }
 

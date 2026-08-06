@@ -1190,23 +1190,50 @@ func (m Model) renderNavLibrary(maxLines int) []string {
 			renderPrefixW = 2 // "• " or "  "
 		}
 		chatSuffixW := lipgloss.Width(chatSuffix)
-		title := truncate(cleanTitle, m.navWidth()-renderPrefixW-idWidth-2-chatSuffixW) + chatSuffix
+		// Search rows carry a [fts]/[vector]/[both] badge at the right edge.
+		// Its width has to come off the title budget before truncating, or the
+		// row overflows the pane.
+		badge := ""
+		if item.searchSource != "" {
+			badge = "[" + item.searchSource + "]"
+		}
+		badgeW := lipgloss.Width(badge)
+		if badgeW > 0 {
+			badgeW++ // one column of gap before the badge
+		}
+		titleW := m.navWidth() - renderPrefixW - idWidth - 2 - chatSuffixW - badgeW
+		truncated := truncate(cleanTitle, titleW)
+		title := truncated + chatSuffix
+		// Right-align the badge by padding out the width the title left unused.
+		// Measured against the truncated title alone: chatSuffix and the badge
+		// gap are already accounted for in titleW and badgeW.
+		if badge != "" {
+			pad := titleW - lipgloss.Width(truncated) + 1
+			if pad < 1 {
+				pad = 1
+			}
+			badge = strings.Repeat(" ", pad) + badge
+		}
 		var line string
 		if i == m.navCursor {
 			if item.favorite {
-				line = m.navSelected(idStr + "★ " + title)
+				line = m.navSelected(idStr + "★ " + title + badge)
 			} else {
-				line = m.navSelected(idStr + prefix + title)
+				line = m.navSelected(idStr + prefix + title + badge)
 			}
 		} else {
 			idPart := fg(t.NavDimmed, idStr)
+			badgePart := ""
+			if badge != "" {
+				badgePart = fg(t.NavDimmed, badge)
+			}
 			if item.favorite {
-				line = " " + idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title)
+				line = " " + idPart + fg(t.Favorite, "★") + " " + fg(t.NavText, title) + badgePart
 			} else if numbered {
-				line = " " + idPart + fg(t.NavDimmed, prefix) + fg(t.NavText, title)
+				line = " " + idPart + fg(t.NavDimmed, prefix) + fg(t.NavText, title) + badgePart
 			} else {
 				dotChar := prefix[:len(prefix)-1] // strip trailing space for coloring
-				line = " " + idPart + fg(t.NavMark, dotChar) + " " + fg(t.NavText, title)
+				line = " " + idPart + fg(t.NavMark, dotChar) + " " + fg(t.NavText, title) + badgePart
 			}
 		}
 		lines = append(lines, line)
