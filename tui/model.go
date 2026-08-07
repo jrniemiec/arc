@@ -546,6 +546,9 @@ type Model struct {
 	// Param completions (second level: /cmd <partial arg>)
 	paramItems []cmdCompletion // candidate values (cmd=value to insert, desc=display hint)
 	paramIdx   int             // -1 = none highlighted; ≥0 = index
+	// paramOverflow counts matches dropped by the paramPickerMax cap, so the
+	// picker can say how many more there are. Display only.
+	paramOverflow int
 	// paramHint names the entity the command will act on implicitly (the selected
 	// article, the selected collection). Display only — rendered above the picker,
 	// never filtered or selectable.
@@ -794,6 +797,7 @@ var articleCommands = []cmdCompletion{
 var collectionCommands = []cmdCompletion{
 	{"/search", "<query>", "filter collections by name/slug"},
 	{"/clear", "", "clear active filter"},
+	{"/article-add", "<slug>", "add an article to this collection"},
 	{"/article-remove", "[slug]", "remove article from this collection (selected or by name)"},
 	{"/new", "<slug> [description]", "create a new collection"},
 	{"/rename", "<new-slug>", "rename the selected collection"},
@@ -809,6 +813,8 @@ var collectionCommands = []cmdCompletion{
 var workspaceCommands = []cmdCompletion{
 	{"/search", "<query>", "search workspaces (or articles within focused workspace)"},
 	{"/clear", "", "clear active filter"},
+	{"/article-add", "<slug>", "add an article to the workspace or collection under the cursor"},
+	{"/collection-add", "<slug>", "add a collection to the workspace under the cursor"},
 	{"/new", "<name> [description]", "create a new workspace"},
 	{"/delete", "[name]", "delete workspace (selected or by name)"},
 	{"/rename", "<new-name>", "rename current workspace"},
@@ -878,6 +884,8 @@ var chatCommands = []cmdCompletion{
 	{"/resource-new", "<name>", "create new resource file and open in $EDITOR"},
 	{"/resource-save", "[filename]", "save chat session as a resource file"},
 	{"/populate", "[--hint \"...\"] [--profile name] [--dry-run] [--edit] [--include-collections]", "LLM-assisted article selection"},
+	{"/article-add", "<slug>", "add an article to the workspace or collection under the cursor"},
+	{"/collection-add", "<slug>", "add a collection to the workspace under the cursor"},
 	{"/remove", "[--article slug] [--collection slug] [--all-articles] [--all-collections] [--dry-run]", "remove articles/collections from workspace"},
 	{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
 	{"/Scratch", "[msg]", "global scratch (append / toggle)"},

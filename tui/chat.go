@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1903,8 +1904,83 @@ func (m *Model) cmdResourceRemove(name string) {
 	})
 }
 
-// cmdUnlinkArticle removes an article from a workspace collection or the workspace itself.
-func (m *Model) cmdUnlinkArticle(row *wsRow) {
+// cmdWsArticleAdd adds an article to whatever the cursor sits on in the
+// Workspaces tree — the inverse of cmdUnlinkArticle, branching the same way: a
+// row inside a collection targets that collection, anything else targets the
+// workspace.
+func (m *Model) cmdWsArticleAdd(row *wsRow, articleSlug string) tea.Cmd {
+	if row == nil || row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		m.setStatusError("✗ no workspace selected")
+		return nil
+	}
+	if m.svc == nil {
+		m.setStatusError("✗ article-add unavailable — no service attached")
+		return nil
+	}
+	svc := m.svc
+	wsName := m.workspaceItems[row.wsIdx].name
+
+	if col := row.colSlug; col != "" {
+		slog.Info("article-add to workspace collection", "article", articleSlug, "collection", col, "workspace", wsName)
+		return func() tea.Msg {
+			if err := svc.AddToCollection(context.Background(), articleSlug, col); err != nil {
+				return cmdDoneMsg{err: "article-add: " + err.Error()}
+			}
+			return cmdDoneMsg{
+				statusMsg:        fmt.Sprintf("✓ added %q to collection %q", articleSlug, col),
+				reloadWorkspaces: true,
+			}
+		}
+	}
+
+	slog.Info("article-add to workspace", "article", articleSlug, "workspace", wsName)
+	return func() tea.Msg {
+		if err := svc.AddArticlesToWorkspace(context.Background(), wsName, []string{articleSlug}); err != nil {
+			return cmdDoneMsg{err: "article-add: " + err.Error()}
+		}
+		return cmdDoneMsg{
+			statusMsg:        fmt.Sprintf("✓ added %q to workspace %q", articleSlug, wsName),
+			reloadWorkspaces: true,
+		}
+	}
+}
+
+// cmdWsCollectionAdd links a collection into the workspace under the cursor —
+// the inverse of cmdUnlinkCollection, and the cursor-aware form of
+// "/workspace add collection <slug>".
+func (m *Model) cmdWsCollectionAdd(row *wsRow, collSlug string) tea.Cmd {
+	if row == nil || row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		m.setStatusError("✗ no workspace selected")
+		return nil
+	}
+	ws := m.workspaceItems[row.wsIdx]
+	if slices.Contains(ws.collectionSlugs, collSlug) {
+		m.setStatusError("✗ already in workspace: " + collSlug)
+		return nil
+	}
+	if m.svc == nil {
+		m.setStatusError("✗ collection-add unavailable — no service attached")
+		return nil
+	}
+	svc := m.svc
+	wsName := ws.name
+	slog.Info("collection-add to workspace", "collection", collSlug, "workspace", wsName)
+	return func() tea.Msg {
+		if err := svc.AddCollectionsToWorkspace(context.Background(), wsName, []string{collSlug}); err != nil {
+			return cmdDoneMsg{err: "collection-add: " + err.Error()}
+		}
+		return cmdDoneMsg{
+			statusMsg:        fmt.Sprintf("✓ added collection %q to workspace %q", collSlug, wsName),
+			reloadWorkspaces: true,
+		}
+	}
+}
+
+// cmdUnlinkArticle removes an article from a workspace collection or the
+// workspace itself. No confirmation: only the link goes, the article stays on
+// disk, and /collection-add or /workspace add puts it back. Confirmation is
+// reserved for writes that take content off the disk.
+func (m *Model) cmdUnlinkArticle(row *wsRow) tea.Cmd {
 	ws := m.workspaceItems[row.wsIdx]
 	cfg := m.cfg
 	slug := row.slug
@@ -1915,42 +1991,40 @@ func (m *Model) cmdUnlinkArticle(row *wsRow) {
 
 	if row.colSlug != "" {
 		col := row.colSlug
-		m.askConfirm(fmt.Sprintf("unlink %q from collection %q? (yes/N)", title, col), func() tea.Cmd {
-			return func() tea.Msg {
-				if err := storefs.RemoveArticleFromCollection(cfg.DataRoot, col, slug); err != nil {
-					return cmdDoneMsg{err: "unlink: " + err.Error()}
-				}
-				return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ unlinked %q from collection %q", title, col), reloadWorkspaces: true}
+		slog.Info("unlink article from collection", "article", slug, "collection", col)
+		return func() tea.Msg {
+			if err := storefs.RemoveArticleFromCollection(cfg.DataRoot, col, slug); err != nil {
+				return cmdDoneMsg{err: "remove: " + err.Error()}
 			}
-		})
-	} else {
-		wsName := ws.name
-		m.askConfirm(fmt.Sprintf("unlink %q from workspace %q? (yes/N)", title, wsName), func() tea.Cmd {
-			return func() tea.Msg {
-				if err := storefs.RemoveArticleFromWorkspace(cfg.DataRoot, wsName, slug); err != nil {
-					return cmdDoneMsg{err: "unlink: " + err.Error()}
-				}
-				return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ unlinked %q from workspace %q", title, wsName), reloadWorkspaces: true}
-			}
-		})
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ removed %q from collection %q", title, col), reloadWorkspaces: true}
+		}
+	}
+
+	wsName := ws.name
+	slog.Info("unlink article from workspace", "article", slug, "workspace", wsName)
+	return func() tea.Msg {
+		if err := storefs.RemoveArticleFromWorkspace(cfg.DataRoot, wsName, slug); err != nil {
+			return cmdDoneMsg{err: "remove: " + err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ removed %q from workspace %q", title, wsName), reloadWorkspaces: true}
 	}
 }
 
-// cmdUnlinkCollection removes a collection from a workspace.
-func (m *Model) cmdUnlinkCollection(row *wsRow) {
+// cmdUnlinkCollection removes a collection from a workspace. No confirmation —
+// see cmdUnlinkArticle.
+func (m *Model) cmdUnlinkCollection(row *wsRow) tea.Cmd {
 	ws := m.workspaceItems[row.wsIdx]
 	cfg := m.cfg
 	colSlug := row.colSlug
 	wsName := ws.name
 
-	m.askConfirm(fmt.Sprintf("unlink collection %q from workspace %q? (yes/N)", colSlug, wsName), func() tea.Cmd {
-		return func() tea.Msg {
-			if err := storefs.RemoveCollectionFromWorkspace(cfg.DataRoot, wsName, colSlug); err != nil {
-				return cmdDoneMsg{err: "unlink: " + err.Error()}
-			}
-			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ unlinked collection %q from workspace %q", colSlug, wsName), reloadWorkspaces: true}
+	slog.Info("unlink collection from workspace", "collection", colSlug, "workspace", wsName)
+	return func() tea.Msg {
+		if err := storefs.RemoveCollectionFromWorkspace(cfg.DataRoot, wsName, colSlug); err != nil {
+			return cmdDoneMsg{err: "remove: " + err.Error()}
 		}
-	})
+		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ removed collection %q from workspace %q", colSlug, wsName), reloadWorkspaces: true}
+	}
 }
 
 // ── Attic operations ─────────────────────────────────────────────────────────

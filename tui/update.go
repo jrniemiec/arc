@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -765,9 +766,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ingestLabel = ""
 		m.ingestLog = nil
 		m.ingestCostEstimate = ""
-		if msg.err == "" && strings.HasPrefix(msg.statusMsg, "✓") {
-			m.statusSuccess = true
-		}
+		m.statusSuccess = msg.err == "" && strings.HasPrefix(msg.statusMsg, "✓")
 		if msg.err != "" {
 			m.setStatusError("✗ " + msg.err)
 		} else {
@@ -1041,7 +1040,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			chatViewH := m.chatViewHeight()
 			m.chatAutoScrollToBottom(chatViewH)
 			m.chatBoxCursor = 0
-			m.statusMsg = ""
+			// Only a user-initiated workspace switch clears the status line.
+			// Writes that set reloadWorkspaces come back through here as a
+			// background refresh (focus=false), and blanking the line there
+			// would swallow the "✓ removed …" the write just produced.
+			if msg.focus {
+				m.statusMsg = ""
+			}
 		}
 
 	case chatReadyMsg:
@@ -1275,6 +1280,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.cmdCompleteIdx = -1
 		m.paramItems = nil
 		m.paramIdx = -1
+		m.paramOverflow = 0
 		m.paramHint = ""
 		m.statusMsg = ""
 		m.statusLines = nil
@@ -1812,11 +1818,9 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			if row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
 				switch row.kind {
 				case wsRowArticle:
-					m.cmdUnlinkArticle(row)
-					return nil
+					return m.cmdUnlinkArticle(row)
 				case wsRowCollection:
-					m.cmdUnlinkCollection(row)
-					return nil
+					return m.cmdUnlinkCollection(row)
 				}
 			}
 		}
@@ -2734,11 +2738,20 @@ func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 		return loadCollectionsTree(m.svc)
 	}
 	if sub == navSubTabWorkspaces && m.svc != nil {
-		if !m.workspacesLoaded {
-			return loadWorkspaces(m.svc)
+		var cmds []tea.Cmd
+		// /collection-add offers the collections not yet in the workspace, and that
+		// list is otherwise only loaded on a visit to the Collections sub-tab —
+		// without this the picker is empty until the user has been there.
+		if !m.collectionsLoaded {
+			cmds = append(cmds, loadCollectionsTree(m.svc))
 		}
-		// Already loaded — trigger history load for first workspace immediately.
-		return m.triggerWorkspaceChatLoad()
+		if !m.workspacesLoaded {
+			cmds = append(cmds, loadWorkspaces(m.svc))
+		} else {
+			// Already loaded — trigger history load for first workspace immediately.
+			cmds = append(cmds, m.triggerWorkspaceChatLoad())
+		}
+		return tea.Batch(cmds...)
 	}
 	return nil
 }
@@ -3825,6 +3838,7 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.paramItems = nil
 			m.paramIdx = -1
+			m.paramOverflow = 0
 		}
 		// Completion list: Enter on a no-arg command executes; on commands with args, fills like Tab.
 		if len(m.cmdComplete) > 0 && m.cmdCompleteIdx >= 0 {
@@ -4418,14 +4432,8 @@ func (m *Model) updateCompletions() {
 		if idx := strings.LastIndex(partial, " "); idx >= 0 {
 			partial = partial[idx+1:]
 		}
-		var filtered []cmdCompletion
-		for _, c := range all {
-			if partial == "" || strings.HasPrefix(strings.ToLower(c.cmd), partial) {
-				filtered = append(filtered, c)
-			}
-		}
-		m.paramItems = filtered
-		if len(filtered) > 0 {
+		m.paramItems, m.paramOverflow = filterParamItems(all, partial, m.paramPickerLimit())
+		if len(m.paramItems) > 0 {
 			m.paramIdx = 0
 		} else {
 			m.paramIdx = -1
@@ -4436,6 +4444,7 @@ func (m *Model) updateCompletions() {
 	// Completion mode: "/prefix" with no space — clear any stale param items.
 	m.paramItems = nil
 	m.paramIdx = -1
+	m.paramOverflow = 0
 	// Use case-sensitive matching so /S shows /Scratch but not /scratch.
 	var filtered []cmdCompletion
 	for _, c := range m.allCommands() {
@@ -4452,11 +4461,93 @@ func (m *Model) updateCompletions() {
 	}
 }
 
+// paramPickerMax bounds how many suggestions the picker renders, however tall the
+// terminal is. renderCompletionLines emits one line per item and view.go counts
+// those lines as fixed rows, so an uncapped list squeezes the nav and content
+// panes down to a single line.
+const paramPickerMax = 12
+
+// paramPickerLimit is the cap for the current terminal height: the same 30%
+// share that multi-line status content takes, floored at 3 so the picker never
+// vanishes and ceilinged at paramPickerMax so it never dominates a tall screen.
+func (m *Model) paramPickerLimit() int {
+	n := m.height * 30 / 100
+	if n < 3 {
+		n = 3
+	}
+	if n > paramPickerMax {
+		n = paramPickerMax
+	}
+	return n
+}
+
+// paramMatchRank scores a candidate against the typed text. A plain prefix test
+// is useless for article slugs: they carry a date prefix and often a leading
+// article word — "20260805-the-annotated-transformer" — so neither the title nor
+// any word in it is a prefix of the slug. Matching each delimited token instead
+// lets "transformer" find that slug, while "20260805" still matches by date and
+// "ttention" still matches nothing.
+//
+// Returns -1 for no match. Lower ranks sort first, so whole-value prefixes stay
+// ahead of token hits and the small pickers behave as they always have.
+func paramMatchRank(candidate, partial string) int {
+	if partial == "" {
+		return 0
+	}
+	c := strings.ToLower(candidate)
+	if strings.HasPrefix(c, partial) {
+		return 0
+	}
+	for _, tok := range strings.FieldsFunc(c, func(r rune) bool {
+		return r == '-' || r == '_' || r == ' ' || r == '.'
+	}) {
+		if strings.HasPrefix(tok, partial) {
+			return 1
+		}
+	}
+	return -1
+}
+
+// filterParamItems narrows candidates to those matching partial, best matches
+// first, capped at limit. The second return is how many matches the cap dropped.
+// Only the value is matched — descriptions are display-only, and matching them
+// would mean typing "12" hits a collection whose description is "12 articles".
+func filterParamItems(all []cmdCompletion, partial string, limit int) ([]cmdCompletion, int) {
+	type ranked struct {
+		item cmdCompletion
+		rank int
+	}
+	var matches []ranked
+	for _, c := range all {
+		if r := paramMatchRank(c.cmd, partial); r >= 0 {
+			matches = append(matches, ranked{c, r})
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool { return matches[i].rank < matches[j].rank })
+
+	overflow := 0
+	if limit > 0 && len(matches) > limit {
+		overflow = len(matches) - limit
+		matches = matches[:limit]
+	}
+	out := make([]cmdCompletion, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, m.item)
+	}
+	return out, overflow
+}
+
 // paramHintFor names the entity a command acts on implicitly, so it is visible
 // while choosing the argument. Empty when there is nothing implicit to show.
 func (m *Model) paramHintFor(cmd string) string {
 	switch cmd {
 	case "/collection-add", "/collection-remove":
+		if cmd == "/collection-add" && m.navSubTab == navSubTabWorkspaces {
+			if row := m.selectedWsRow(); row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
+				return "adding to: " + m.workspaceItems[row.wsIdx].name
+			}
+			return ""
+		}
 		if sel := m.selectedNavItem(); sel != nil {
 			verb := "adding"
 			if cmd == "/collection-remove" {
@@ -4464,12 +4555,35 @@ func (m *Model) paramHintFor(cmd string) string {
 			}
 			return verb + ": " + sel.id
 		}
-	case "/article-remove":
+	case "/article-add", "/article-remove":
+		if cmd == "/article-add" && m.navSubTab == navSubTabWorkspaces {
+			if target, _ := m.wsAddTarget(); target != "" {
+				return "adding to: " + target
+			}
+			return ""
+		}
 		if coll := m.collectionForRow(m.navRowCursor); coll != "" {
+			if cmd == "/article-add" {
+				return "adding to: " + coll
+			}
 			return "removing from: " + coll
 		}
 	}
 	return ""
+}
+
+// wsAddTarget names what /article-add would act on in the Workspaces tree, and
+// reports whether that target is a collection — mirroring how cmdWsArticleAdd
+// branches on the row under the cursor.
+func (m *Model) wsAddTarget() (name string, isCollection bool) {
+	row := m.selectedWsRow()
+	if row == nil || row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+		return "", false
+	}
+	if row.colSlug != "" {
+		return row.colSlug, true
+	}
+	return m.workspaceItems[row.wsIdx].name, false
 }
 
 // collectionParamDesc returns what to show beside a collection slug in a param
@@ -4529,11 +4643,22 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		if len(rows) == 0 {
 			rows = m.navRows
 		}
+		// In Workspaces the target is the workspace under the cursor, so drop the
+		// collections it already holds.
+		var inWs []string
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row == nil || row.wsIdx < 0 || row.wsIdx >= len(m.workspaceItems) {
+				return nil
+			}
+			inWs = m.workspaceItems[row.wsIdx].collectionSlugs
+		}
 		var items []cmdCompletion
 		for _, r := range rows {
-			if r.kind == rowCollection {
-				items = append(items, cmdCompletion{cmd: r.colSlug, desc: m.collectionParamDesc(r.colSlug)})
+			if r.kind != rowCollection || slices.Contains(inWs, r.colSlug) {
+				continue
 			}
+			items = append(items, cmdCompletion{cmd: r.colSlug, desc: m.collectionParamDesc(r.colSlug)})
 		}
 		return items
 
@@ -4545,6 +4670,45 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 		var items []cmdCompletion
 		for _, slug := range sel.collections {
 			items = append(items, cmdCompletion{cmd: slug, desc: m.collectionParamDesc(slug)})
+		}
+		return items
+
+	case "/article-add":
+		// Every article not already in the target. The list is capped for display by
+		// paramPickerLimit, which also reports the remainder — showing nothing until
+		// enough is typed reads as a broken command.
+		member := func(it *navItem) bool { return false }
+		if m.navSubTab == navSubTabWorkspaces {
+			target, isCollection := m.wsAddTarget()
+			if target == "" {
+				return nil
+			}
+			if isCollection {
+				member = func(it *navItem) bool { return slices.Contains(it.collections, target) }
+			} else {
+				var inWs []string
+				for i := range m.workspaceItems {
+					if m.workspaceItems[i].name == target {
+						inWs = m.workspaceItems[i].articles
+						break
+					}
+				}
+				member = func(it *navItem) bool { return slices.Contains(inWs, it.id) }
+			}
+		} else {
+			collSlug := m.collectionForRow(m.navRowCursor)
+			if collSlug == "" {
+				return nil
+			}
+			member = func(it *navItem) bool { return slices.Contains(it.collections, collSlug) }
+		}
+		var items []cmdCompletion
+		for i := range m.navItemsAll {
+			it := &m.navItemsAll[i]
+			if member(it) {
+				continue
+			}
+			items = append(items, cmdCompletion{cmd: it.id, desc: truncate(oneLine(it.title), 40)})
 		}
 		return items
 
@@ -4747,6 +4911,7 @@ func (m *Model) acceptParam() {
 	m.input.CursorEnd()
 	m.paramItems = nil
 	m.paramIdx = -1
+	m.paramOverflow = 0
 }
 
 // acceptCompletion fills the input with the selected command + space (if it takes an arg).
@@ -4764,10 +4929,11 @@ func (m *Model) acceptCompletion() {
 	m.input.CursorEnd()
 	m.cmdComplete = nil
 	m.cmdCompleteIdx = -1
-	// Immediately show param picker if this command has suggestions.
-	params := m.paramSuggestions(c.cmd, "")
-	m.paramItems = params
-	if len(params) > 0 {
+	// Immediately show param picker if this command has suggestions. Capped like
+	// the typed path — this is where a command with hundreds of candidates would
+	// otherwise dump all of them the moment it is completed.
+	m.paramItems, m.paramOverflow = filterParamItems(m.paramSuggestions(c.cmd, ""), "", m.paramPickerLimit())
+	if len(m.paramItems) > 0 {
 		m.paramIdx = 0
 	} else {
 		m.paramIdx = -1
@@ -5108,13 +5274,22 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdFlashcardsDelete(arg)
 
 	case "/collection-add":
-		if sub != navSubTabArticles {
-			m.setStatusError("✗ /collection-add needs the Articles sub-tab — the article to add is the selected one")
+		if sub != navSubTabArticles && sub != navSubTabWorkspaces {
+			m.setStatusError("✗ /collection-add needs the Articles or Workspaces sub-tab")
 			return nil
 		}
 		if arg == "" {
 			m.statusMsg = "usage: /collection-add <collection-slug>"
 			return nil
+		}
+		// In Workspaces the command links a collection into the workspace under the
+		// cursor; in Articles it adds the selected article to a collection.
+		if sub == navSubTabWorkspaces {
+			if strings.ContainsAny(arg, " \t") {
+				m.statusMsg = "usage: /collection-add <collection-slug> — adds to the workspace under the cursor"
+				return nil
+			}
+			return m.cmdWsCollectionAdd(m.selectedWsRow(), arg)
 		}
 		// Collection slugs never contain spaces, so an arg with whitespace is
 		// the CLI two-argument form — the article here is the selected one.
@@ -5123,6 +5298,24 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 			return nil
 		}
 		return m.cmdCollectionAdd(arg)
+
+	case "/article-add":
+		if sub != navSubTabCollections && sub != navSubTabWorkspaces {
+			m.setStatusError("✗ /article-add needs the Collections or Workspaces sub-tab — use /collection-add from Articles")
+			return nil
+		}
+		if arg == "" {
+			m.statusMsg = "usage: /article-add <article-slug>"
+			return nil
+		}
+		if strings.ContainsAny(arg, " \t") {
+			m.statusMsg = "usage: /article-add <article-slug> — adds to whatever the cursor is on"
+			return nil
+		}
+		if sub == navSubTabWorkspaces {
+			return m.cmdWsArticleAdd(m.selectedWsRow(), arg)
+		}
+		return m.cmdArticleAdd(arg)
 
 	case "/article-remove":
 		if sub != navSubTabCollections {
@@ -5683,9 +5876,12 @@ func (m *Model) cmdCollectionAdd(collSlug string) tea.Cmd {
 		m.setStatusError("✗ collection-add unavailable — no service attached")
 		return nil
 	}
-	svc := m.svc
-	// Membership is applied in-memory only once the write succeeds — see
-	// collectionMembershipMsg.
+	return addToCollectionCmd(m.svc, articleSlug, collSlug)
+}
+
+// addToCollectionCmd performs the link off the UI thread. Membership is applied
+// in-memory only once the write succeeds — see collectionMembershipMsg.
+func addToCollectionCmd(svc *service.Service, articleSlug, collSlug string) tea.Cmd {
 	return func() tea.Msg {
 		err := svc.AddToCollection(context.Background(), articleSlug, collSlug)
 		msg := collectionMembershipMsg{
@@ -5777,10 +5973,6 @@ func (m *Model) syncCollectionRows(msg collectionMembershipMsg) {
 			}
 		}
 	}
-	if msg.added {
-		return
-	}
-	// Drop the article's child row from under its collection header.
 	header := -1
 	for i := range m.navRows {
 		if m.navRows[i].kind == rowCollection && m.navRows[i].colSlug == msg.collSlug {
@@ -5791,6 +5983,11 @@ func (m *Model) syncCollectionRows(msg collectionMembershipMsg) {
 	if header < 0 {
 		return
 	}
+	if msg.added {
+		m.insertCollectionChild(header, msg.articleSlug)
+		return
+	}
+	// Drop the article's child row from under its collection header.
 	for i := header + 1; i < len(m.navRows); i++ {
 		r := m.navRows[i]
 		if r.kind != rowArticle || !r.indented {
@@ -5809,6 +6006,68 @@ func (m *Model) syncCollectionRows(msg collectionMembershipMsg) {
 		m.clampNavRowScroll()
 		break
 	}
+}
+
+// insertCollectionChild adds a child row for articleSlug under an expanded
+// collection header, so an article added from inside the Collections tree shows
+// up at once rather than waiting for a collapse and re-expand.
+//
+// Position matches what a re-expand would produce: loadCollectionArticlesCmd
+// filters navItemsAll, so children appear in navItemsAll order, and the new row
+// goes before the first existing child that sorts after it.
+func (m *Model) insertCollectionChild(header int, articleSlug string) {
+	if header < 0 || header >= len(m.navRows) || !m.navRows[header].expanded {
+		return
+	}
+	order := -1
+	var item *navItem
+	for i := range m.navItemsAll {
+		if m.navItemsAll[i].id == articleSlug {
+			order = i
+			item = &m.navItemsAll[i]
+			break
+		}
+	}
+	if item == nil {
+		return
+	}
+	navOrder := func(slug string) int {
+		for i := range m.navItemsAll {
+			if m.navItemsAll[i].id == slug {
+				return i
+			}
+		}
+		return -1
+	}
+
+	insertAt := len(m.navRows)
+	for i := header + 1; i <= len(m.navRows); i++ {
+		if i == len(m.navRows) {
+			insertAt = i
+			break
+		}
+		r := m.navRows[i]
+		if r.kind != rowArticle || !r.indented {
+			insertAt = i // end of this collection's children
+			break
+		}
+		if r.item != nil && r.item.id == articleSlug {
+			return // already shown — nothing to do
+		}
+		if r.item != nil && navOrder(r.item.id) > order {
+			insertAt = i
+			break
+		}
+	}
+
+	row := navRow{kind: rowArticle, item: item, indented: true}
+	m.navRows = append(m.navRows, navRow{})
+	copy(m.navRows[insertAt+1:], m.navRows[insertAt:])
+	m.navRows[insertAt] = row
+	if m.navRowCursor >= insertAt {
+		m.navRowCursor++
+	}
+	m.clampNavRowScroll()
 }
 
 // collectionForRow walks up from a row in the Collections tree to the header of
@@ -5853,6 +6112,41 @@ func (m *Model) cmdArticleRemove(articleSlug string) tea.Cmd {
 		return nil
 	}
 	return removeFromCollectionCmd(m.svc, articleSlug, collSlug)
+}
+
+// cmdArticleAdd adds an article to the collection under the cursor, in the
+// Collections sub-tab. The slug is required: unlike /article-remove there is no
+// sensible default, because the tree only ever shows articles already in a
+// collection.
+func (m *Model) cmdArticleAdd(articleSlug string) tea.Cmd {
+	collSlug := m.collectionForRow(m.navRowCursor)
+	if collSlug == "" {
+		m.setStatusError("✗ no collection selected")
+		return nil
+	}
+	var item *navItem
+	for i := range m.navItemsAll {
+		if m.navItemsAll[i].id == articleSlug {
+			item = &m.navItemsAll[i]
+			break
+		}
+	}
+	if item == nil {
+		m.setStatusError("✗ unknown article: " + articleSlug)
+		return nil
+	}
+	for _, c := range item.collections {
+		if c == collSlug {
+			m.setStatusError("✗ already in collection: " + collSlug)
+			return nil
+		}
+	}
+	if m.svc == nil {
+		m.setStatusError("✗ article-add unavailable — no service attached")
+		return nil
+	}
+	slog.Info("article-add", "article", articleSlug, "collection", collSlug)
+	return addToCollectionCmd(m.svc, articleSlug, collSlug)
 }
 
 // cmdNewCollection creates a collection from "/new <slug> [description]".
@@ -8392,6 +8686,7 @@ var helpGroups = []struct {
 		{"/clear", "", "clear active filter"},
 		{"/reload", "", "refresh collections list from disk"},
 		{"/chat", "", "open article chat pane (or press c in nav)"},
+		{"/article-add", "<slug>", "add an article to this collection"},
 		{"/article-remove", "[slug]", "remove article from this collection (or press U on it)"},
 		{"/new", "<slug> [description]", "create a new collection"},
 		{"/rename", "<new-slug>", "rename the selected collection"},
@@ -8411,6 +8706,8 @@ var helpGroups = []struct {
 		{"/delete", "", "delete current workspace"},
 		{"/rename", "<new-name>", "rename current workspace"},
 		{"/describe", "<text>", "set workspace description"},
+		{"/article-add", "<slug>", "add an article to the workspace or collection under the cursor"},
+		{"/collection-add", "<slug>", "add a collection to the workspace under the cursor"},
 		{"/populate", "[--hint --edit --dry-run --profile --include-collections]", "LLM-assisted article selection from library"},
 		{"/remove", "[--article --collection --all-articles --all-collections --dry-run]", "remove articles/collections from workspace"},
 		{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article (--count is approximate)"},
@@ -8528,7 +8825,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"v", "", "view resource/scratch/article in overlay"},
 		{"e", "", "edit resource/outcome/scratch in $EDITOR"},
 		{"D", "", "delete workspace / selected item"},
-		{"U", "", "unlink article/collection from workspace"},
+		{"U", "", "remove article/collection from workspace"},
 		{"a", "", "move article/collection to attic"},
 		{"b", "", "restore article/collection from attic"},
 	}

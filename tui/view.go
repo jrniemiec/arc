@@ -3098,6 +3098,10 @@ func (m Model) renderCompletionLines() []string {
 				lines = append(lines, fg(t.NavText, " "+display)+fg(t.ContentDimmed, ""))
 			}
 		}
+		if m.paramOverflow > 0 {
+			more := fmt.Sprintf(" +%d more — keep typing to narrow", m.paramOverflow)
+			lines = append(lines, fg(t.ContentDimmed, truncate(more, m.width-2)))
+		}
 		return lines
 	}
 
