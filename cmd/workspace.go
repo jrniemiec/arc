@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,17 +46,21 @@ func init() {
 	workspaceAddCmd.Flags().StringSlice("article", nil, "article slug(s) to add (comma-separated or repeated)")
 	workspaceAddCmd.Flags().StringSlice("collection", nil, "collection slug(s) to add")
 	workspaceAddCmd.Flags().StringSlice("resource", nil, "file path(s) or URL(s) to add as resources")
+	workspaceAddCmd.Flags().StringSlice("outcome", nil, "file path(s) to copy into outcomes/ (flat, files only)")
 	workspaceAddCmd.Flags().String("into", "", "target subdirectory within resources/ for --resource")
+	workspaceAddCmd.Flags().String("as", "", "store the added --outcome under this filename")
 	workspaceAddCmd.Flags().String("comment", "", "comment to include in .url resource file")
 
 	workspaceRemoveCmd.Flags().StringSlice("article", nil, "article slug(s) to remove")
 	workspaceRemoveCmd.Flags().StringSlice("collection", nil, "collection slug(s) to remove")
 	workspaceRemoveCmd.Flags().StringSlice("resource", nil, "resource basename(s) to remove")
+	workspaceRemoveCmd.Flags().StringSlice("outcome", nil, "outcome filename(s) to remove")
 	workspaceRemoveCmd.Flags().Bool("all-articles", false, "remove all articles from workspace")
 	workspaceRemoveCmd.Flags().Bool("all-collections", false, "remove all collections from workspace")
 	workspaceRemoveCmd.Flags().Bool("dry-run", false, "list items that would be removed without removing")
 
 	workspaceOutcomesCmd.Flags().String("read", "", "print this outcome file to stdout")
+	workspaceOutcomesCmd.Flags().String("save", "", "write stdin to outcomes/<filename>")
 
 	workspaceCmd.AddCommand(workspaceChatCmd)
 	workspaceCmd.AddCommand(workspaceChatConfigCmd)
@@ -425,19 +431,23 @@ Examples:
 // ── add ───────────────────────────────────────────────────────────────────────
 
 var workspaceAddCmd = &cobra.Command{
-	Use:   "add <name> [--article slug,...] [--collection col,...] [--resource path|url,...]",
-	Short: "Add articles, collections, or resources to a workspace",
+	Use:   "add <name> [--article slug,...] [--collection col,...] [--resource path|url,...] [--outcome path,...]",
+	Short: "Add articles, collections, resources, or outcomes to a workspace",
 	Long: `Add one or more items to a workspace. Flags can be combined in any order
 and accept comma-separated values or can be repeated.
 
 Articles and collections are linked via symlinks. Resources are hard-copied
-into the workspace (files) or stored as .url stubs (URLs).
+into the workspace (files) or stored as .url stubs (URLs). Outcomes are
+hard-copied files too, but the outcomes/ directory is flat — no --into, no
+directories, no URLs.
 
 Examples:
   arc workspace add myws --article slug1,slug2 --collection ml
   arc workspace add myws --resource ~/papers/paper.pdf
   arc workspace add myws --resource ~/papers/paper.pdf --into data/raw
-  arc workspace add myws --resource https://youtube.com/watch?v=abc`,
+  arc workspace add myws --resource https://youtube.com/watch?v=abc
+  arc workspace add myws --outcome ~/notes/review.md
+  arc workspace add myws --outcome ~/notes/draft.md --as final-report.md`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return fmt.Errorf("workspace name required")
@@ -456,9 +466,10 @@ Examples:
 		articles, _ := cmd.Flags().GetStringSlice("article")
 		cols, _ := cmd.Flags().GetStringSlice("collection")
 		resources, _ := cmd.Flags().GetStringSlice("resource")
+		outcomes, _ := cmd.Flags().GetStringSlice("outcome")
 
-		if len(articles) == 0 && len(cols) == 0 && len(resources) == 0 {
-			return fmt.Errorf("specify at least one of --article, --collection, or --resource")
+		if len(articles) == 0 && len(cols) == 0 && len(resources) == 0 && len(outcomes) == 0 {
+			return fmt.Errorf("specify at least one of --article, --collection, --resource, or --outcome")
 		}
 
 		svc := svcFrom(cmd)
@@ -500,6 +511,17 @@ Examples:
 			}
 		}
 
+		if len(outcomes) > 0 {
+			asName, _ := cmd.Flags().GetString("as")
+			if err := svc.AddOutcomesToWorkspace(cmd.Context(), name, outcomes, asName); err != nil {
+				errs = append(errs, err.Error())
+			} else {
+				for _, o := range outcomes {
+					fmt.Fprintf(cmd.OutOrStdout(), "added outcome %s → %s/outcomes\n", o, name)
+				}
+			}
+		}
+
 		if len(errs) > 0 {
 			return fmt.Errorf("%s", strings.Join(errs, "\n"))
 		}
@@ -510,10 +532,10 @@ Examples:
 // ── remove ────────────────────────────────────────────────────────────────────
 
 var workspaceRemoveCmd = &cobra.Command{
-	Use:   "remove <name> [--article slug,...] [--collection col,...] [--resource basename,...]",
-	Short: "Remove articles, collections, or resources from a workspace",
-	Long: `Remove one or more items from a workspace. For resources, provide the
-basename as shown by 'arc workspace show'.
+	Use:   "remove <name> [--article slug,...] [--collection col,...] [--resource basename,...] [--outcome file,...]",
+	Short: "Remove articles, collections, resources, or outcomes from a workspace",
+	Long: `Remove one or more items from a workspace. For resources and outcomes,
+provide the basename as shown by 'arc workspace show'.
 
 Use --all-articles or --all-collections to remove all items of that type.
 These require confirmation (or --force to skip).
@@ -521,6 +543,7 @@ These require confirmation (or --force to skip).
 Examples:
   arc workspace remove myws --article slug1
   arc workspace remove myws --collection ml --resource paper.pdf
+  arc workspace remove myws --outcome chat-2026-08-06-101500.md
   arc workspace remove myws --all-articles
   arc workspace remove myws --all-collections`,
 	Args: cobra.ExactArgs(1),
@@ -534,6 +557,7 @@ Examples:
 		articles, _ := cmd.Flags().GetStringSlice("article")
 		cols, _ := cmd.Flags().GetStringSlice("collection")
 		resources, _ := cmd.Flags().GetStringSlice("resource")
+		outcomes, _ := cmd.Flags().GetStringSlice("outcome")
 		allArticles, _ := cmd.Flags().GetBool("all-articles")
 		allCollections, _ := cmd.Flags().GetBool("all-collections")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
@@ -578,16 +602,17 @@ Examples:
 			}
 		}
 
-		if len(articles) == 0 && len(cols) == 0 && len(resources) == 0 {
-			return fmt.Errorf("specify at least one of --article, --collection, --resource, --all-articles, or --all-collections")
+		if len(articles) == 0 && len(cols) == 0 && len(resources) == 0 && len(outcomes) == 0 {
+			return fmt.Errorf("specify at least one of --article, --collection, --resource, --outcome, --all-articles, or --all-collections")
 		}
 
-		total := len(articles) + len(cols) + len(resources)
+		total := len(articles) + len(cols) + len(resources) + len(outcomes)
 		clog.Info("workspace remove",
 			"workspace", name,
 			"articles", len(articles),
 			"collections", len(cols),
 			"resources", len(resources),
+			"outcomes", len(outcomes),
 			"dry_run", dryRun,
 		)
 
@@ -628,6 +653,14 @@ Examples:
 			}
 		}
 
+		if len(outcomes) > 0 {
+			if err := svc.RemoveOutcomesFromWorkspace(cmd.Context(), name, outcomes); err != nil {
+				errs = append(errs, err.Error())
+			} else {
+				removed += len(outcomes)
+			}
+		}
+
 		if len(errs) > 0 {
 			return fmt.Errorf("%s", strings.Join(errs, "\n"))
 		}
@@ -645,15 +678,39 @@ Examples:
 
 var workspaceOutcomesCmd = &cobra.Command{
 	Use:   "outcomes <name>",
-	Short: "List or read outcomes for a workspace",
-	Args:  cobra.ExactArgs(1),
+	Short: "List, read, or write outcomes for a workspace",
+	Long: `List outcome files in a workspace, print one, or capture stdin as a new one.
+
+Outcomes are flat — no subdirectories.
+
+Examples:
+  arc workspace outcomes myws
+  arc workspace outcomes myws --read chat-2026-08-06-101500.md
+  arc read some-slug | arc workspace outcomes myws --save notes.md`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := resolveWorkspaceName(cmd, args[0])
 		if err != nil {
 			return err
 		}
 		readFile, _ := cmd.Flags().GetString("read")
+		saveFile, _ := cmd.Flags().GetString("save")
 		svc := svcFrom(cmd)
+
+		if saveFile != "" {
+			data, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("read stdin: %w", err)
+			}
+			if len(data) == 0 {
+				return fmt.Errorf("nothing on stdin — pipe content into --save")
+			}
+			if err := svc.SaveWorkspaceOutcome(cmd.Context(), name, filepath.Base(saveFile), data); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "✓ saved outcomes/%s in workspace %s\n", filepath.Base(saveFile), name)
+			return nil
+		}
 
 		if readFile != "" {
 			text, err := svc.ReadWorkspaceOutcome(cmd.Context(), name, readFile)

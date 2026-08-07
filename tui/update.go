@@ -1755,10 +1755,10 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			if row != nil {
 				switch row.kind {
 				case wsRowResource, wsRowResourceDir:
-					m.cmdResourceRemove(row.resourceName)
+					m.cmdResourceDelete(row.resourceName)
 					return nil
 				case wsRowOutcome:
-					m.cmdOutcomeRemove(row.outcomeName)
+					m.cmdOutcomeDelete(row.outcomeName)
 					return nil
 				case wsRowScratch:
 					m.cmdClearScratch(row.wsIdx)
@@ -3702,7 +3702,7 @@ func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
 	case "e":
 		return m.cmdResourceEdit(m.resourceName)
 	case "x":
-		return m.cmdResourceDeleteLine(viewH)
+		return m.cmdResourceRemoveLine(viewH)
 	case "s":
 		return m.cmdResourceTTS(viewH)
 	case "[":
@@ -3713,8 +3713,8 @@ func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// cmdResourceDeleteLine deletes the current line from a scratch file overlay.
-func (m *Model) cmdResourceDeleteLine(viewH int) tea.Cmd {
+// cmdResourceRemoveLine deletes the current line from a scratch file overlay.
+func (m *Model) cmdResourceRemoveLine(viewH int) tea.Cmd {
 	// Only allow deletion in scratch files.
 	if !strings.HasPrefix(m.resourceName, "scratch") {
 		return nil
@@ -4568,6 +4568,18 @@ func (m *Model) paramHintFor(cmd string) string {
 			}
 			return "removing from: " + coll
 		}
+	case "/outcome-new", "/outcome-save", "/save", "/resource-new", "/resource-save":
+		// These take a new filename, so there is nothing to pick — name the
+		// directory the file will land in instead.
+		ws := m.paramWorkspace()
+		if ws == nil {
+			return ""
+		}
+		subdir := "outcomes"
+		if strings.HasPrefix(cmd, "/resource-") {
+			subdir = "resources"
+		}
+		return "creating in: " + ws.name + "/" + subdir
 	}
 	return ""
 }
@@ -4604,6 +4616,44 @@ func (m *Model) collectionParamDesc(slug string) string {
 		}
 	}
 	return ""
+}
+
+// paramWorkspace resolves which workspace the /resource-* and /outcome-* param
+// pickers list files from: the chat session's workspace while chat is open,
+// otherwise whatever the Workspaces tree has under the cursor.
+func (m *Model) paramWorkspace() *workspaceItem {
+	if m.chatMode && m.chatWorkspace != "" {
+		for i := range m.workspaceItems {
+			if m.workspaceItems[i].name == m.chatWorkspace {
+				return &m.workspaceItems[i]
+			}
+		}
+		return nil
+	}
+	if ws := m.contextWorkspace(); ws != nil {
+		return ws
+	}
+	return m.selectedWorkspace()
+}
+
+// wsFileParamItems turns workspace file names into picker entries annotated
+// with size — the same annotation /resource-list and /outcome-list show.
+// Names come from the loaded workspace list, so they stay in sync with the
+// tree; only the size is read from disk.
+func (m *Model) wsFileParamItems(wsName, subdir string, names, dirs []string) []cmdCompletion {
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, wsName), subdir)
+	items := make([]cmdCompletion, 0, len(names)+len(dirs))
+	for _, d := range dirs {
+		items = append(items, cmdCompletion{cmd: d, desc: "dir"})
+	}
+	for _, n := range names {
+		desc := ""
+		if info, err := os.Stat(filepath.Join(dir, n)); err == nil {
+			desc = humanSize(info.Size())
+		}
+		items = append(items, cmdCompletion{cmd: n, desc: desc})
+	}
+	return items
 }
 
 // paramSuggestions returns candidate values for commands that take a known arg.
@@ -4763,6 +4813,20 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			}
 			return items
 		}
+
+	case "/outcome-view", "/outcome-edit", "/outcome-delete", "/outcome-remove":
+		ws := m.paramWorkspace()
+		if ws == nil {
+			return nil
+		}
+		return m.wsFileParamItems(ws.name, "outcomes", ws.outcomes, nil)
+
+	case "/resource-view", "/resource-edit", "/resource-delete", "/resource-remove":
+		ws := m.paramWorkspace()
+		if ws == nil {
+			return nil
+		}
+		return m.wsFileParamItems(ws.name, "resources", ws.resources, ws.resourceDirs)
 
 	case "/populate", "/remove":
 		// Suggest the workspace name only as the first token (before any flags).
@@ -8712,10 +8776,17 @@ var helpGroups = []struct {
 		{"/remove", "[--article --collection --all-articles --all-collections --dry-run]", "remove articles/collections from workspace"},
 		{"/flashcards", "[--style X] [--count N]", "generate flashcards for the selected article (--count is approximate)"},
 		{"/flashcards-delete", "[--style X] [--model Y]", "delete flashcards for the selected article"},
-		{"arc workspace add", "<slug>", "add articles/collections/resources  (CLI only)"},
+		{"/outcome-list", "", "list files in workspace/outcomes/"},
+		{"/outcome-add", "<path> [--as <name>]", "copy a file into workspace/outcomes/ (flat, files only)"},
+		{"/outcome-delete", "<name>", "delete an outcome file (with confirmation)"},
+		{"/outcome-view", "<name>", "open outcome file in viewer overlay"},
+		{"/outcome-edit", "<name>", "open outcome file in $EDITOR"},
+		{"/outcome-new", "<name>", "create new outcome file and open in $EDITOR"},
+		{"/outcome-save", "[filename]", "save chat session to outcomes/ (alias of /save)"},
+		{"arc workspace add", "<slug>", "add articles/collections/resources/outcomes  (CLI only)"},
 		{"arc workspace chat", "<slug>", "start interactive chat session  (CLI only)"},
 		{"arc workspace archive", "<slug>", "archive a workspace  (CLI only)"},
-		{"arc workspace outcomes", "<slug>", "list or read outcomes  (CLI only)"},
+		{"arc workspace outcomes", "<slug>", "list, read, or save (stdin) outcomes  (CLI only)"},
 		{"arc workspace system", "<slug>", "get/set system prompt  (CLI only)"},
 	}},
 	{"keys", []cmdCompletion{

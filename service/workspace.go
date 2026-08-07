@@ -411,6 +411,49 @@ func (s *Service) ListWorkspaceOutcomes(ctx context.Context, workspaceName strin
 	return fs.ListWorkspaceOutcomes(s.cfg.DataRoot, workspaceName)
 }
 
+// AddOutcomesToWorkspace copies one or more local files into workspace/outcomes/.
+// Outcomes are flat — directories and URLs are rejected. If asName is non-empty
+// it renames the stored file (only meaningful for a single path).
+func (s *Service) AddOutcomesToWorkspace(ctx context.Context, workspaceName string, paths []string, asName string) error {
+	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
+		return err
+	}
+	if asName != "" && len(paths) > 1 {
+		return fmt.Errorf("--as can only be used with a single outcome")
+	}
+	var errs []string
+	for _, p := range paths {
+		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+			errs = append(errs, fmt.Sprintf("%s: URLs belong in resources, not outcomes", p))
+			continue
+		}
+		if _, err := fs.AddFileOutcome(s.cfg.DataRoot, workspaceName, p, asName); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", p, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// RemoveOutcomesFromWorkspace removes one or more files from workspace/outcomes/.
+func (s *Service) RemoveOutcomesFromWorkspace(ctx context.Context, workspaceName string, basenames []string) error {
+	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
+		return err
+	}
+	var errs []string
+	for _, b := range basenames {
+		if err := fs.RemoveWorkspaceOutcome(s.cfg.DataRoot, workspaceName, b); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", b, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
 // ReadWorkspaceOutcome reads a file from workspace/outcomes/.
 func (s *Service) ReadWorkspaceOutcome(ctx context.Context, workspaceName, filename string) (string, error) {
 	data, err := fs.ReadWorkspaceOutcome(s.cfg.DataRoot, workspaceName, filename)

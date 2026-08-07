@@ -1352,12 +1352,12 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 	case "/resource-mkdir":
 		return m.cmdResourceMkdir(fullArg)
 
-	case "/resource-remove", "/resource-delete":
+	case "/resource-delete", "/resource-remove":
 		arg := ""
 		if len(parts) > 1 {
 			arg = parts[1]
 		}
-		m.cmdResourceRemove(arg)
+		m.cmdResourceDelete(arg)
 		return nil
 
 	case "/resource-view":
@@ -1384,6 +1384,46 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 
 	case "/resource-save":
 		return m.chatSaveResource(fullArg)
+
+	case "/outcome-list":
+		m.cmdOutcomeList()
+		return nil
+
+	case "/outcome-add":
+		return m.cmdOutcomeAdd(fullArg)
+
+	case "/outcome-delete", "/outcome-remove":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		m.cmdOutcomeDelete(arg)
+		return nil
+
+	case "/outcome-view":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		m.cmdOutcomeView(arg)
+		return nil
+
+	case "/outcome-edit":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		return m.cmdOutcomeEdit(arg)
+
+	case "/outcome-new":
+		arg := ""
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		return m.cmdOutcomeNew(arg)
+
+	case "/outcome-save":
+		return m.chatSave(fullArg)
 
 	case "/scratch":
 		global := parts[0] == "/Scratch"
@@ -1717,16 +1757,7 @@ func (m *Model) cmdResourceList() {
 			lines = append(lines, fmt.Sprintf("  %-32s  %8s", r.Name+"/", "dir"))
 			continue
 		}
-		var sizeStr string
-		switch {
-		case r.Size >= 1024*1024:
-			sizeStr = fmt.Sprintf("%.1f MB", float64(r.Size)/1024/1024)
-		case r.Size >= 1024:
-			sizeStr = fmt.Sprintf("%.1f KB", float64(r.Size)/1024)
-		default:
-			sizeStr = fmt.Sprintf("%d B", r.Size)
-		}
-		lines = append(lines, fmt.Sprintf("  %-32s  %8s", r.Name, sizeStr))
+		lines = append(lines, fmt.Sprintf("  %-32s  %8s", r.Name, humanSize(r.Size)))
 	}
 	m.setStatusLines(lines)
 }
@@ -1880,10 +1911,10 @@ func (m *Model) cmdResourceMkdir(name string) tea.Cmd {
 	}
 }
 
-// cmdResourceRemove removes a resource file or directory from workspace/resources/ with confirmation.
-func (m *Model) cmdResourceRemove(name string) {
+// cmdResourceDelete removes a resource file or directory from workspace/resources/ with confirmation.
+func (m *Model) cmdResourceDelete(name string) {
 	if name == "" {
-		m.setStatusError("usage: /resource-remove <name>")
+		m.setStatusError("usage: /resource-delete <name>")
 		return
 	}
 	ws := m.chatWorkspace
@@ -1897,7 +1928,7 @@ func (m *Model) cmdResourceRemove(name string) {
 	m.askConfirm(prompt, func() tea.Cmd {
 		return func() tea.Msg {
 			if err := storefs.RemoveWorkspaceResource(cfg.DataRoot, ws, name); err != nil {
-				return cmdDoneMsg{err: "resource-remove: " + err.Error()}
+				return cmdDoneMsg{err: "resource-delete: " + err.Error()}
 			}
 			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q removed from workspace %q", name, ws), reloadWorkspaces: true}
 		}
@@ -2129,10 +2160,185 @@ func (m *Model) cmdRemoveFromAtticCollection(row *wsRow) {
 	})
 }
 
-// cmdOutcomeRemove removes an outcome from workspace/outcomes/ with confirmation.
-func (m *Model) cmdOutcomeRemove(name string) {
+// cmdOutcomeList lists outcomes for the current workspace.
+func (m *Model) cmdOutcomeList() {
+	names, err := storefs.ListWorkspaceOutcomes(m.cfg.DataRoot, m.chatWorkspace)
+	if err != nil {
+		m.setStatusError("outcome-list: " + err.Error())
+		return
+	}
+	if len(names) == 0 {
+		m.setStatusLines([]string{fmt.Sprintf("(no outcomes for workspace %q)", m.chatWorkspace)})
+		return
+	}
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "outcomes")
+	lines := []string{fmt.Sprintf("outcomes for workspace %q:", m.chatWorkspace)}
+	for _, n := range names {
+		sizeStr := "?"
+		if info, err := os.Stat(filepath.Join(dir, n)); err == nil {
+			sizeStr = humanSize(info.Size())
+		}
+		lines = append(lines, fmt.Sprintf("  %-32s  %8s", n, sizeStr))
+	}
+	m.setStatusLines(lines)
+}
+
+// humanSize renders a byte count for file listings and param pickers.
+func humanSize(size int64) string {
+	switch {
+	case size >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(size)/1024/1024)
+	case size >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(size)/1024)
+	default:
+		return fmt.Sprintf("%d B", size)
+	}
+}
+
+// cmdOutcomeAdd copies a local file into workspace/outcomes/. Outcomes are flat:
+// directories and URLs are rejected, but globs expand to multiple files.
+func (m *Model) cmdOutcomeAdd(rawArgs string) tea.Cmd {
+	const usage = "usage: /outcome-add <file> [--as <name>]"
+	if rawArgs == "" {
+		m.setStatusError(usage)
+		return nil
+	}
+	path, into, asName, _ := parseResourceAddFlags(rawArgs)
+	if path == "" {
+		m.setStatusError(usage)
+		return nil
+	}
+	if into != "" {
+		m.setStatusError("outcome-add: outcomes are flat — --into is not supported")
+		return nil
+	}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		m.setStatusError("outcome-add: URLs belong in resources — use /resource-add")
+		return nil
+	}
+	ws := m.chatWorkspace
+	cfg := m.cfg
+	return func() tea.Msg {
+		// Expand ~ before glob/stat.
+		expanded := path
+		if strings.HasPrefix(expanded, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = filepath.Join(home, expanded[2:])
+			}
+		}
+
+		if strings.ContainsAny(expanded, "*?[") {
+			matches, err := filepath.Glob(expanded)
+			if err != nil {
+				return cmdDoneMsg{err: "outcome-add: invalid glob pattern: " + err.Error()}
+			}
+			if len(matches) == 0 {
+				return cmdDoneMsg{err: "outcome-add: no files match " + path}
+			}
+			if asName != "" && len(matches) > 1 {
+				return cmdDoneMsg{err: "outcome-add: --as can only be used with a single file"}
+			}
+			var names []string
+			for _, match := range matches {
+				name, err := storefs.AddFileOutcome(cfg.DataRoot, ws, match, asName)
+				if err != nil {
+					return cmdDoneMsg{err: "outcome-add: " + err.Error()}
+				}
+				names = append(names, name)
+			}
+			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ %d outcomes added to workspace %q: %s", len(names), ws, strings.Join(names, ", ")), reloadWorkspaces: true}
+		}
+
+		name, err := storefs.AddFileOutcome(cfg.DataRoot, ws, expanded, asName)
+		if err != nil {
+			return cmdDoneMsg{err: "outcome-add: " + err.Error()}
+		}
+		return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ outcome %q added to workspace %q", name, ws), reloadWorkspaces: true}
+	}
+}
+
+// cmdOutcomeView opens an outcome file in the text overlay.
+func (m *Model) cmdOutcomeView(name string) {
 	if name == "" {
-		m.setStatusError("usage: delete outcome — select an outcome first")
+		m.setStatusError("usage: /outcome-view <name>")
+		return
+	}
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "outcomes")
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		m.setStatusError(fmt.Sprintf("outcome %q not found", name))
+		return
+	}
+	// Binary check.
+	check := data
+	if len(check) > 512 {
+		check = check[:512]
+	}
+	if !utf8.Valid(check) {
+		m.setStatusError(fmt.Sprintf("%q is not a text file", name))
+		return
+	}
+	const maxBytes = 200 * 1024
+	if len(data) > maxBytes {
+		data = append(data[:maxBytes], []byte("\n[file truncated at 200 KB]")...)
+	}
+	m.openResourceOverlay(name, string(data))
+}
+
+// cmdOutcomeEdit opens an outcome file in $EDITOR in a separate terminal window.
+func (m *Model) cmdOutcomeEdit(name string) tea.Cmd {
+	if name == "" {
+		m.setStatusError("usage: /outcome-edit <name>")
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		m.setStatusError("$EDITOR is not set — add 'export EDITOR=<path>' to your shell config")
+		return nil
+	}
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "outcomes")
+	filePath := filepath.Join(dir, name)
+	if _, err := os.Stat(filePath); err != nil {
+		m.setStatusError(fmt.Sprintf("outcome %q not found", name))
+		return nil
+	}
+	m.openEditorInTerminal(editor, filePath, name)
+	return nil
+}
+
+// cmdOutcomeNew creates a new outcome file and opens it in $EDITOR in a separate terminal window.
+func (m *Model) cmdOutcomeNew(name string) tea.Cmd {
+	if name == "" {
+		m.setStatusError("usage: /outcome-new <name>")
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		m.setStatusError("$EDITOR is not set — add 'export EDITOR=<path>' to your shell config")
+		return nil
+	}
+	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "outcomes")
+	filePath := filepath.Join(dir, name)
+	if _, err := os.Stat(filePath); err == nil {
+		m.setStatusError(fmt.Sprintf("outcome %q already exists — use /outcome-edit", name))
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		m.setStatusError("outcome-new: " + err.Error())
+		return nil
+	}
+	if err := os.WriteFile(filePath, nil, 0o644); err != nil {
+		m.setStatusError("outcome-new: " + err.Error())
+		return nil
+	}
+	m.openEditorInTerminal(editor, filePath, name)
+	return nil
+}
+
+// cmdOutcomeDelete removes an outcome from workspace/outcomes/ with confirmation.
+func (m *Model) cmdOutcomeDelete(name string) {
+	if name == "" {
+		m.setStatusError("usage: /outcome-delete <name> — or select an outcome in the tree")
 		return
 	}
 	ws := m.chatWorkspace
@@ -2140,7 +2346,7 @@ func (m *Model) cmdOutcomeRemove(name string) {
 	m.askConfirm(fmt.Sprintf("delete outcome %q? (yes/N)", name), func() tea.Cmd {
 		return func() tea.Msg {
 			if err := storefs.RemoveWorkspaceOutcome(cfg.DataRoot, ws, name); err != nil {
-				return cmdDoneMsg{err: "outcome-remove: " + err.Error()}
+				return cmdDoneMsg{err: "outcome-delete: " + err.Error()}
 			}
 			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ outcome %q removed from workspace %q", name, ws), reloadWorkspaces: true}
 		}

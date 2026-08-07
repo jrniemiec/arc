@@ -149,11 +149,19 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /resource-add <path|url>   copy file/dir or add URL into resources/
                                --into <dir> --as <name> --comment "..."
   /resource-mkdir <name>     create a directory in resources/
-  /resource-remove <name>    delete a resource file or directory
+  /resource-delete <name>    delete a resource file or directory
   /resource-view <name>      open resource file in viewer overlay
   /resource-edit <name>      open resource file in $EDITOR
   /resource-new <name>       create new resource file and open in $EDITOR
   /resource-save [filename]  save chat session as a resource file
+  /outcome-list              list files in workspace/outcomes/
+  /outcome-add <path>        copy a file into outcomes/ (flat, files only)
+                               --as <name>
+  /outcome-delete <name>     delete an outcome file
+  /outcome-view <name>       open outcome file in viewer overlay
+  /outcome-edit <name>       open outcome file in $EDITOR
+  /outcome-new <name>        create new outcome file and open in $EDITOR
+  /outcome-save [filename]   save chat session to outcomes/ (alias of /save)
   /populate [flags]          LLM-assisted article selection
   /remove [flags]            remove articles/collections from workspace
   /scratch [msg]             workspace-local scratch

@@ -988,6 +988,59 @@ func ListWorkspaceOutcomes(dataRoot, name string) ([]string, error) {
 	return names, nil
 }
 
+// AddFileOutcome copies a local file into workspace/outcomes/.
+// Outcomes are flat — no subdirectories. If asName is non-empty it becomes the
+// stored basename. Returns the basename of the stored file.
+func AddFileOutcome(dataRoot, workspaceName, srcPath, asName string) (string, error) {
+	// Expand ~ in path.
+	if strings.HasPrefix(srcPath, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("get home dir: %w", err)
+		}
+		srcPath = filepath.Join(home, srcPath[2:])
+	}
+
+	info, err := os.Stat(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("outcome file not found: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%q is a directory — outcomes are flat, only files are supported", srcPath)
+	}
+
+	basename := filepath.Base(srcPath)
+	if asName != "" {
+		basename = filepath.Base(asName)
+	}
+	dir := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "outcomes")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("create outcomes dir: %w", err)
+	}
+	destPath := filepath.Join(dir, basename)
+
+	if _, err := os.Stat(destPath); err == nil {
+		return "", fmt.Errorf("outcome %q already exists in workspace", basename)
+	}
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return "", fmt.Errorf("open source file: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return "", fmt.Errorf("create outcome file: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return "", fmt.Errorf("copy outcome file: %w", err)
+	}
+	return basename, nil
+}
+
 // ReadWorkspaceOutcome reads a file from workspace/outcomes/.
 func ReadWorkspaceOutcome(dataRoot, name, filename string) ([]byte, error) {
 	path := filepath.Join(WorkspaceDir(dataRoot, name), "outcomes", filename)
@@ -1009,8 +1062,11 @@ func RemoveWorkspaceOutcome(dataRoot, workspaceName, basename string) error {
 
 // WriteWorkspaceOutcome writes a file to workspace/outcomes/.
 func WriteWorkspaceOutcome(dataRoot, name, filename string, data []byte) error {
-	path := filepath.Join(WorkspaceDir(dataRoot, name), "outcomes", filename)
-	return os.WriteFile(path, data, 0644)
+	dir := filepath.Join(WorkspaceDir(dataRoot, name), "outcomes")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, filename), data, 0644)
 }
 
 // MkdirWorkspaceResource creates a directory inside workspace/resources/.
