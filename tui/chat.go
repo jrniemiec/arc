@@ -1787,13 +1787,8 @@ func (m *Model) cmdResourceAdd(rawArgs string) tea.Cmd {
 			return cmdDoneMsg{statusMsg: fmt.Sprintf("✓ resource %q added to workspace %q", name, ws), reloadWorkspaces: true}
 		}
 
-		// Expand ~ before stat.
-		expanded := path
-		if strings.HasPrefix(expanded, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				expanded = filepath.Join(home, expanded[2:])
-			}
-		}
+		// Expand ~ and $VAR before stat — the TUI has no shell to do it.
+		expanded := storefs.ExpandPath(path)
 
 		// Glob expansion: if path contains wildcard characters, expand and add each match.
 		if strings.ContainsAny(expanded, "*?[") {
@@ -2219,13 +2214,8 @@ func (m *Model) cmdOutcomeAdd(rawArgs string) tea.Cmd {
 	ws := m.chatWorkspace
 	cfg := m.cfg
 	return func() tea.Msg {
-		// Expand ~ before glob/stat.
-		expanded := path
-		if strings.HasPrefix(expanded, "~/") {
-			if home, err := os.UserHomeDir(); err == nil {
-				expanded = filepath.Join(home, expanded[2:])
-			}
-		}
+		// Expand ~ and $VAR before glob/stat — the TUI has no shell to do it.
+		expanded := storefs.ExpandPath(path)
 
 		if strings.ContainsAny(expanded, "*?[") {
 			matches, err := filepath.Glob(expanded)

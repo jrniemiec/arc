@@ -4426,12 +4426,8 @@ func (m *Model) updateCompletions() {
 		m.paramHint = m.paramHintFor(cmd)
 		arg := parts[1] // preserve case for display; lowercase when filtering
 		all := m.paramSuggestions(cmd, arg)
-		// Filter by partial last token
-		partial := strings.ToLower(arg)
-		// For multi-word args (e.g. "/help article "), filter on the last word
-		if idx := strings.LastIndex(partial, " "); idx >= 0 {
-			partial = partial[idx+1:]
-		}
+		// Filter by the last token — the same span acceptParam replaces.
+		partial := strings.ToLower(paramLastToken(cmd, arg))
 		m.paramItems, m.paramOverflow = filterParamItems(all, partial, m.paramPickerLimit())
 		if len(m.paramItems) > 0 {
 			m.paramIdx = 0
@@ -4656,6 +4652,101 @@ func (m *Model) wsFileParamItems(wsName, subdir string, names, dirs []string) []
 	return items
 }
 
+// pathScanMax bounds how many directory entries one keystroke reads. The picker
+// only ever shows a dozen, and ~/Downloads should not stall the input.
+const pathScanMax = 500
+
+// pathSuggestions completes the argument of a path-taking command. Not every
+// token is a path: --into names a directory inside resources/, --as and
+// --comment are free text, and a leading dash means the flags themselves.
+// Outcomes are flat, so they offer neither --into nor the URL-only flags.
+func (m *Model) pathSuggestions(cmd, arg string) []cmdCompletion {
+	start := paramTokenStart(cmd, arg)
+	token := strings.Trim(arg[start:], `"'`)
+
+	before := arg[:start]
+	// --comment swallows the rest of the line, so nothing after it is a path.
+	if strings.Contains(before, "--comment") {
+		return nil
+	}
+	fields := strings.Fields(before)
+	prev := ""
+	if len(fields) > 0 {
+		prev = fields[len(fields)-1]
+	}
+	switch prev {
+	case "--into":
+		if cmd != "/resource-add" {
+			return nil
+		}
+		ws := m.paramWorkspace()
+		if ws == nil {
+			return nil
+		}
+		items := make([]cmdCompletion, 0, len(ws.resourceDirs))
+		for _, d := range ws.resourceDirs {
+			items = append(items, cmdCompletion{cmd: d, desc: "existing resource folder"})
+		}
+		return items
+	case "--as", "--comment":
+		return nil
+	}
+
+	if strings.HasPrefix(token, "-") {
+		if cmd == "/outcome-add" {
+			return []cmdCompletion{{cmd: "--as", desc: "store the file under this name"}}
+		}
+		return []cmdCompletion{
+			{cmd: "--into", desc: "subdirectory within resources/"},
+			{cmd: "--as", desc: "store a URL under this name"},
+			{cmd: "--comment", desc: "note to save beside a URL"},
+		}
+	}
+	if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
+		return nil
+	}
+	return pathEntries(token)
+}
+
+// pathEntries lists the directory the typed path points into. The prefix is
+// kept exactly as typed, so ~ and $HOME survive into the input instead of being
+// replaced by an absolute path the user did not write.
+func pathEntries(token string) []cmdCompletion {
+	dir, name := "", token
+	if idx := strings.LastIndex(token, "/"); idx >= 0 {
+		dir, name = token[:idx+1], token[idx+1:]
+	}
+	// Nothing typed yet: home is where nearly every add starts.
+	lookup := dir
+	if lookup == "" {
+		lookup = "~/"
+	}
+	entries, err := os.ReadDir(storefs.ExpandPath(lookup))
+	if err != nil {
+		return nil
+	}
+	items := make([]cmdCompletion, 0, len(entries))
+	for _, e := range entries {
+		// Dotfiles stay out of the way until a dot says otherwise.
+		if strings.HasPrefix(e.Name(), ".") && !strings.HasPrefix(name, ".") {
+			continue
+		}
+		val := lookup + e.Name()
+		desc := ""
+		if e.IsDir() {
+			val += "/"
+			desc = "dir"
+		} else if info, err := e.Info(); err == nil {
+			desc = humanSize(info.Size())
+		}
+		items = append(items, cmdCompletion{cmd: val, desc: desc})
+		if len(items) >= pathScanMax {
+			break
+		}
+	}
+	return items
+}
+
 // paramSuggestions returns candidate values for commands that take a known arg.
 // arg is the partial text already typed after the command (may include spaces for /help).
 func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
@@ -4814,6 +4905,9 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 			return items
 		}
 
+	case "/resource-add", "/outcome-add":
+		return m.pathSuggestions(cmd, arg)
+
 	case "/outcome-view", "/outcome-edit", "/outcome-delete", "/outcome-remove":
 		ws := m.paramWorkspace()
 		if ws == nil {
@@ -4946,36 +5040,91 @@ func (m *Model) paramSuggestions(cmd, arg string) []cmdCompletion {
 	return nil
 }
 
+// pathParamCommand reports whether a command's argument is a filesystem path,
+// where a quoted token can contain spaces and so cannot be split on them.
+func pathParamCommand(cmd string) bool {
+	return cmd == "/resource-add" || cmd == "/outcome-add"
+}
+
+// paramTokenStart returns the byte offset in arg where the token the picker
+// filters and replaces begins. Ordinary commands break on the last space; for a
+// path argument an open quote holds "~/My Documents/a.pdf" together as one
+// token, which is the whole point of having typed the quote.
+func paramTokenStart(cmd, arg string) int {
+	if !pathParamCommand(cmd) {
+		if idx := strings.LastIndex(arg, " "); idx >= 0 {
+			return idx + 1
+		}
+		return 0
+	}
+	start := 0
+	var quote rune
+	for i, r := range arg {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		case r == ' ' || r == '\t':
+			start = i + 1
+		}
+	}
+	return start
+}
+
+// paramLastToken returns that token, without the quotes that only matter for
+// deciding where it starts.
+func paramLastToken(cmd, arg string) string {
+	return strings.Trim(arg[paramTokenStart(cmd, arg):], `"'`)
+}
+
 // paramAlreadyTyped reports whether the token the param picker would replace is
 // already exactly the selected suggestion, making acceptParam a no-op.
 func (m *Model) paramAlreadyTyped() bool {
 	if m.paramIdx < 0 || m.paramIdx >= len(m.paramItems) {
 		return false
 	}
-	input := m.input.Value()
-	idx := strings.LastIndex(input, " ")
-	if idx < 0 {
+	cmd, arg, ok := strings.Cut(m.input.Value(), " ")
+	if !ok {
 		return false
 	}
-	return strings.EqualFold(input[idx+1:], m.paramItems[m.paramIdx].cmd)
+	return strings.EqualFold(paramLastToken(strings.ToLower(cmd), arg), m.paramItems[m.paramIdx].cmd)
 }
 
-// acceptParam fills the selected param value into the input, replacing any partial last token.
+// acceptParam fills the selected param value into the input, replacing the
+// partial last token.
 func (m *Model) acceptParam() {
 	if m.paramIdx < 0 || m.paramIdx >= len(m.paramItems) {
 		return
 	}
 	val := m.paramItems[m.paramIdx].cmd
-	// Find the last space in the input and replace everything after it with val.
-	input := m.input.Value()
-	if idx := strings.LastIndex(input, " "); idx >= 0 {
-		input = input[:idx]
+	cmd, arg, ok := strings.Cut(m.input.Value(), " ")
+	if !ok {
+		return
 	}
-	m.input.SetValue(input + " " + val)
+	lower := strings.ToLower(cmd)
+	quoted := val
+	if pathParamCommand(lower) && strings.ContainsAny(val, " \t") {
+		// A directory is still being descended into, so leave the quote open —
+		// closing it would put everything typed next outside the path.
+		quoted = `"` + val
+		if !strings.HasSuffix(val, "/") {
+			quoted += `"`
+		}
+	}
+	m.input.SetValue(cmd + " " + arg[:paramTokenStart(lower, arg)] + quoted)
 	m.input.CursorEnd()
 	m.paramItems = nil
 	m.paramIdx = -1
 	m.paramOverflow = 0
+
+	// A directory is a step on the way, not an answer: list what is inside it
+	// straight away instead of making the user type a character to reopen.
+	if strings.HasSuffix(val, "/") {
+		m.updateCompletions()
+	}
 }
 
 // acceptCompletion fills the input with the selected command + space (if it takes an arg).

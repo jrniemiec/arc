@@ -701,18 +701,36 @@ func ListWorkspaceCollections(dataRoot, name string) ([]string, error) {
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
+// ExpandPath resolves ~ and $VAR in a user-typed path. A shell does this before
+// the CLI ever sees an argument, but the TUI has no shell, so paths typed there
+// arrive literal. A literal path that exists wins over an expansion that does
+// not, so a filename containing '$' still resolves to itself.
+func ExpandPath(p string) string {
+	switch {
+	case p == "~":
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	case strings.HasPrefix(p, "~/"):
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	if strings.Contains(p, "$") {
+		if _, err := os.Stat(p); err != nil {
+			if expanded := os.ExpandEnv(p); expanded != "" {
+				return expanded
+			}
+		}
+	}
+	return p
+}
+
 // AddFileResource copies a local file into workspace/resources/[into/].
 // If into is non-empty, the file is placed inside that subdirectory.
 // Returns the relative path of the stored file within resources/.
 func AddFileResource(dataRoot, workspaceName, srcPath, into string) (string, error) {
-	// Expand ~ in path.
-	if strings.HasPrefix(srcPath, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("get home dir: %w", err)
-		}
-		srcPath = filepath.Join(home, srcPath[2:])
-	}
+	srcPath = ExpandPath(srcPath)
 
 	info, err := os.Stat(srcPath)
 	if err != nil {
@@ -761,13 +779,7 @@ func AddDirResource(dataRoot, workspaceName, srcPath, into string) (string, erro
 	// Trailing slash means "copy contents of directory" (rsync convention).
 	copyContents := strings.HasSuffix(srcPath, "/") || strings.HasSuffix(srcPath, string(filepath.Separator))
 
-	if strings.HasPrefix(srcPath, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("get home dir: %w", err)
-		}
-		srcPath = filepath.Join(home, srcPath[2:])
-	}
+	srcPath = ExpandPath(srcPath)
 
 	info, err := os.Lstat(srcPath)
 	if err != nil {
@@ -992,14 +1004,7 @@ func ListWorkspaceOutcomes(dataRoot, name string) ([]string, error) {
 // Outcomes are flat — no subdirectories. If asName is non-empty it becomes the
 // stored basename. Returns the basename of the stored file.
 func AddFileOutcome(dataRoot, workspaceName, srcPath, asName string) (string, error) {
-	// Expand ~ in path.
-	if strings.HasPrefix(srcPath, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("get home dir: %w", err)
-		}
-		srcPath = filepath.Join(home, srcPath[2:])
-	}
+	srcPath = ExpandPath(srcPath)
 
 	info, err := os.Stat(srcPath)
 	if err != nil {

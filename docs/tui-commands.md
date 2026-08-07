@@ -146,7 +146,7 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /rename <new-name>         rename current workspace
   /describe <text>           set workspace description
   /resource-list             list files in workspace/resources/
-  /resource-add <path|url>   copy file/dir or add URL into resources/
+  /resource-add <path|url>   copy file/dir or add URL into resources/ (Tab completes paths)
                                --into <dir> --as <name> --comment "..."
   /resource-mkdir <name>     create a directory in resources/
   /resource-delete <name>    delete a resource file or directory
@@ -155,7 +155,8 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /resource-new <name>       create new resource file and open in $EDITOR
   /resource-save [filename]  save chat session as a resource file
   /outcome-list              list files in workspace/outcomes/
-  /outcome-add <path>        copy a file into outcomes/ (flat, files only)
+  /outcome-add <path>        copy a file into outcomes/ (flat, files only;
+                               Tab completes paths)
                                --as <name>
   /outcome-delete <name>     delete an outcome file
   /outcome-view <name>       open outcome file in viewer overlay

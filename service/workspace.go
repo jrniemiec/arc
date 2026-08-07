@@ -354,14 +354,9 @@ func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName str
 		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
 			_, err = fs.AddURLResource(s.cfg.DataRoot, workspaceName, p, "", comment)
 		} else {
-			// Expand ~ before stat.
-			expanded := p
-			if strings.HasPrefix(expanded, "~/") {
-				if home, herr := os.UserHomeDir(); herr == nil {
-					expanded = filepath.Join(home, expanded[2:])
-				}
-			}
-			info, serr := os.Stat(expanded)
+			// Expand ~ and $VAR before stat: a quoted CLI argument and every
+			// path typed in the TUI arrive without a shell having done it.
+			info, serr := os.Stat(fs.ExpandPath(p))
 			if serr != nil {
 				errs = append(errs, fmt.Sprintf("%s: %v", p, serr))
 				continue
