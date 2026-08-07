@@ -146,10 +146,10 @@ func TestUpdateToggleDeleteFeedPreserveComments(t *testing.T) {
 }
 `)
 
-	if err := UpdateFeed(path, 0, FeedConfig{URL: "https://a.example/feed", Name: "A2"}); err != nil {
+	if err := UpdateFeed(path, "https://a.example/feed", FeedConfig{URL: "https://a.example/feed", Name: "A2"}); err != nil {
 		t.Fatalf("UpdateFeed: %v", err)
 	}
-	if err := ToggleFeed(path, 1); err != nil {
+	if err := ToggleFeed(path, "https://b.example/feed"); err != nil {
 		t.Fatalf("ToggleFeed: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestUpdateToggleDeleteFeedPreserveComments(t *testing.T) {
 		t.Errorf("summary_profile lost: %q", cfg.SummaryProfile)
 	}
 
-	if err := DeleteFeed(path, 0); err != nil {
+	if err := DeleteFeed(path, "https://a.example/feed"); err != nil {
 		t.Fatalf("DeleteFeed: %v", err)
 	}
 	got := readCfg(t, path)
@@ -195,7 +195,7 @@ func TestDeleteLastFeedLeavesEmptyArray(t *testing.T) {
 }
 `)
 
-	if err := DeleteFeed(path, 0); err != nil {
+	if err := DeleteFeed(path, "https://a.example/feed"); err != nil {
 		t.Fatalf("DeleteFeed: %v", err)
 	}
 	cfg, err := LoadAgentConfig(path)
@@ -418,5 +418,153 @@ func TestBuildLibraryContextIncludesCollections(t *testing.T) {
 	}
 	if listCollections(filepath.Join(root, "nope")) != nil {
 		t.Error("missing dataRoot should degrade to no collections, not panic")
+	}
+}
+
+// The hazard URL addressing exists to prevent: the file changed under a
+// loaded list, so the position the user picked now names a different feed.
+func TestEditsFollowTheFeedNotThePosition(t *testing.T) {
+	path := writeCfg(t, `{
+  "feeds": [
+    { "url": "https://a.example/feed", "name": "A" },
+    { "url": "https://b.example/feed", "name": "B" },
+    { "url": "https://c.example/feed", "name": "C" }
+  ]
+}
+`)
+	// Someone edits the config in $EDITOR and drops the first feed; a TUI
+	// loaded before that still thinks B is at index 1 and C at index 2.
+	if err := DeleteFeed(path, "https://a.example/feed"); err != nil {
+		t.Fatalf("DeleteFeed: %v", err)
+	}
+
+	// Toggling "C" by its URL must hit C, though C now sits where B was.
+	if err := ToggleFeed(path, "https://c.example/feed"); err != nil {
+		t.Fatalf("ToggleFeed: %v", err)
+	}
+
+	cfg, err := LoadAgentConfig(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	for _, f := range cfg.Feeds {
+		switch f.URL {
+		case "https://c.example/feed":
+			if !f.Disabled {
+				t.Error("C should be disabled")
+			}
+		case "https://b.example/feed":
+			if f.Disabled {
+				t.Error("B was toggled — the edit followed the position, not the feed")
+			}
+		}
+	}
+}
+
+func TestEditsFailOnUnknownURL(t *testing.T) {
+	path := writeCfg(t, `{"feeds": [{ "url": "https://a.example/feed" }]}`)
+
+	for _, tc := range []struct {
+		name string
+		run  func() error
+	}{
+		{"update", func() error { return UpdateFeed(path, "https://gone.example/feed", FeedConfig{URL: "x"}) }},
+		{"delete", func() error { return DeleteFeed(path, "https://gone.example/feed") }},
+		{"toggle", func() error { return ToggleFeed(path, "https://gone.example/feed") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil {
+				t.Fatal("want an error for a feed that is no longer there")
+			}
+			if !strings.Contains(err.Error(), "changed on disk") {
+				t.Errorf("err = %v, want it to explain why", err)
+			}
+		})
+	}
+
+	// The failed edits must not have touched the file.
+	cfg, err := LoadAgentConfig(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(cfg.Feeds) != 1 || cfg.Feeds[0].URL != "https://a.example/feed" {
+		t.Fatalf("feeds = %+v, want the original untouched", cfg.Feeds)
+	}
+}
+
+// Duplicate URLs are ambiguous; guessing would reintroduce the silent
+// wrong-feed edit that URL addressing is meant to remove.
+func TestDuplicateURLIsRejected(t *testing.T) {
+	path := writeCfg(t, `{
+  "feeds": [
+    { "url": "https://dup.example/feed", "name": "one" },
+    { "url": "https://dup.example/feed", "name": "two" }
+  ]
+}
+`)
+	err := ToggleFeed(path, "https://dup.example/feed")
+	if err == nil {
+		t.Fatal("want an error for a duplicated url")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("err = %v, want it to name the fix", err)
+	}
+}
+
+// Changing the URL is a legitimate edit — that is how a typo gets fixed.
+func TestUpdateFeedCanChangeTheURL(t *testing.T) {
+	path := writeCfg(t, `{"feeds": [{ "url": "https://tpyo.example/feed", "name": "A" }]}`)
+
+	if err := UpdateFeed(path, "https://tpyo.example/feed",
+		FeedConfig{URL: "https://typo.example/feed", Name: "A"}); err != nil {
+		t.Fatalf("UpdateFeed: %v", err)
+	}
+	cfg, err := LoadAgentConfig(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(cfg.Feeds) != 1 || cfg.Feeds[0].URL != "https://typo.example/feed" {
+		t.Fatalf("feeds = %+v, want the corrected url", cfg.Feeds)
+	}
+}
+
+// A write must never leave a half-written config behind: the replacement is
+// a rename, so the file is either the old one or the new one.
+func TestWritesAreAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+	if err := os.WriteFile(path, ConfigTemplate, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AddFeed(path, FeedConfig{URL: "https://example.com/feed.xml"}); err != nil {
+		t.Fatalf("AddFeed: %v", err)
+	}
+
+	// No temp files left in the directory.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.jsonc" {
+			t.Errorf("stray file left behind: %s", e.Name())
+		}
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode().Perm() != before.Mode().Perm() {
+		t.Errorf("permissions changed: %v → %v", before.Mode().Perm(), after.Mode().Perm())
+	}
+	if _, err := LoadAgentConfig(path); err != nil {
+		t.Errorf("config unreadable after write: %v", err)
 	}
 }

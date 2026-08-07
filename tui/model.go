@@ -1445,10 +1445,13 @@ func loadAgentFeeds(agentPath string) tea.Cmd {
 	}
 }
 
-func toggleAgentFeed(agentPath string, idx int) tea.Cmd {
+// toggleAgentFeed and deleteAgentFeed identify the feed by URL, not by the
+// cursor position they were invoked from: the config is editable in $EDITOR
+// while this list is loaded, and a stale position still points at some feed.
+func toggleAgentFeed(agentPath string, url string) tea.Cmd {
 	return func() tea.Msg {
 		cfgPath := filepath.Join(agentPath, "config.jsonc")
-		if err := agentpkg.ToggleFeed(cfgPath, idx); err != nil {
+		if err := agentpkg.ToggleFeed(cfgPath, url); err != nil {
 			return agentFeedSavedMsg{err: err.Error()}
 		}
 		cfg, err := agentpkg.LoadAgentConfig(cfgPath)
@@ -1459,10 +1462,10 @@ func toggleAgentFeed(agentPath string, idx int) tea.Cmd {
 	}
 }
 
-func deleteAgentFeed(agentPath string, idx int) tea.Cmd {
+func deleteAgentFeed(agentPath string, url string) tea.Cmd {
 	return func() tea.Msg {
 		cfgPath := filepath.Join(agentPath, "config.jsonc")
-		if err := agentpkg.DeleteFeed(cfgPath, idx); err != nil {
+		if err := agentpkg.DeleteFeed(cfgPath, url); err != nil {
 			return agentFeedSavedMsg{err: err.Error()}
 		}
 		cfg, err := agentpkg.LoadAgentConfig(cfgPath)

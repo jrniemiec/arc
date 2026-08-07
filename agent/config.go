@@ -178,40 +178,68 @@ func AddFeed(path string, f FeedConfig) error {
 	return saveFeeds(path, cfg.Feeds)
 }
 
-// UpdateFeed replaces the feed at idx in the config at path and saves.
-func UpdateFeed(path string, idx int, f FeedConfig) error {
+// findFeed returns the index of the feed identified by url.
+//
+// Feeds are addressed by URL rather than position because the caller's list
+// and the file can disagree — the config is editable in $EDITOR while the TUI
+// holds a loaded copy. A position that has shifted still points at a feed, so
+// an index-based edit would silently modify the wrong one; a URL that has
+// moved or gone simply fails.
+func findFeed(feeds []FeedConfig, url string) (int, error) {
+	found := -1
+	for i, f := range feeds {
+		if f.URL != url {
+			continue
+		}
+		if found >= 0 {
+			return -1, fmt.Errorf("multiple feeds have url %q — remove the duplicate first", url)
+		}
+		found = i
+	}
+	if found < 0 {
+		return -1, fmt.Errorf("no feed with url %q — the config may have changed on disk", url)
+	}
+	return found, nil
+}
+
+// UpdateFeed replaces the feed identified by url with f and saves. f may carry
+// a different URL, which is how a mistyped one gets corrected.
+func UpdateFeed(path string, url string, f FeedConfig) error {
 	cfg, err := LoadAgentConfig(path)
 	if err != nil {
 		return err
 	}
-	if idx < 0 || idx >= len(cfg.Feeds) {
-		return fmt.Errorf("feed index %d out of range", idx)
+	idx, err := findFeed(cfg.Feeds, url)
+	if err != nil {
+		return err
 	}
 	cfg.Feeds[idx] = f
 	return saveFeeds(path, cfg.Feeds)
 }
 
-// DeleteFeed removes the feed at idx from the config at path and saves.
-func DeleteFeed(path string, idx int) error {
+// DeleteFeed removes the feed identified by url and saves.
+func DeleteFeed(path string, url string) error {
 	cfg, err := LoadAgentConfig(path)
 	if err != nil {
 		return err
 	}
-	if idx < 0 || idx >= len(cfg.Feeds) {
-		return fmt.Errorf("feed index %d out of range", idx)
+	idx, err := findFeed(cfg.Feeds, url)
+	if err != nil {
+		return err
 	}
 	cfg.Feeds = append(cfg.Feeds[:idx], cfg.Feeds[idx+1:]...)
 	return saveFeeds(path, cfg.Feeds)
 }
 
-// ToggleFeed flips the Disabled field of the feed at idx in the config at path and saves.
-func ToggleFeed(path string, idx int) error {
+// ToggleFeed flips the Disabled field of the feed identified by url and saves.
+func ToggleFeed(path string, url string) error {
 	cfg, err := LoadAgentConfig(path)
 	if err != nil {
 		return err
 	}
-	if idx < 0 || idx >= len(cfg.Feeds) {
-		return fmt.Errorf("feed index %d out of range", idx)
+	idx, err := findFeed(cfg.Feeds, url)
+	if err != nil {
+		return err
 	}
 	cfg.Feeds[idx].Disabled = !cfg.Feeds[idx].Disabled
 	return saveFeeds(path, cfg.Feeds)
@@ -266,8 +294,41 @@ func saveFeeds(path string, feeds []FeedConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return fmt.Errorf("write agent config: %w", err)
+	return writeFileAtomic(path, out)
+}
+
+// writeFileAtomic replaces path in one step: write a temp file alongside it,
+// then rename. A plain write truncates first, so an interrupted one leaves a
+// half-written config — and this file now holds the prompt as well as the
+// feeds, which is more than a crash should be able to take.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp*")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	// Flush before the rename, so a crash cannot leave the new name pointing
+	// at a file whose contents never reached the disk.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	// CreateTemp makes the file 0600; configs are 0644 like the rest.
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replace agent config: %w", err)
 	}
 	return nil
 }
@@ -443,8 +504,5 @@ func SaveAgentConfig(path string, cfg AgentConfig) error {
 	if err != nil {
 		return fmt.Errorf("marshal agent config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write agent config: %w", err)
-	}
-	return nil
+	return writeFileAtomic(resolvePath(path), data)
 }

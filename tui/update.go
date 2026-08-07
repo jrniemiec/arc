@@ -1687,19 +1687,14 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case "d":
-			if len(m.agentFeeds) > 0 {
-				return toggleAgentFeed(m.cfg.AgentPath, m.agentFeedsCursor)
+			if url, _, ok := m.selectedFeed(); ok {
+				return toggleAgentFeed(m.cfg.AgentPath, url)
 			}
 			return nil
 		case "D":
-			if len(m.agentFeeds) > 0 {
-				name := m.agentFeeds[m.agentFeedsCursor].Name
-				if name == "" {
-					name = m.agentFeeds[m.agentFeedsCursor].URL
-				}
-				idx := m.agentFeedsCursor
+			if url, name, ok := m.selectedFeed(); ok {
 				m.askConfirm(fmt.Sprintf("delete %q? yes/no", name), func() tea.Cmd {
-					return deleteAgentFeed(m.cfg.AgentPath, idx)
+					return deleteAgentFeed(m.cfg.AgentPath, url)
 				})
 			}
 			return nil
@@ -3216,6 +3211,21 @@ func (m *Model) viewWsFileInTerminal() tea.Cmd {
 // openEditorForFeed opens $EDITOR for adding (idx < 0) or editing (idx >= 0) a feed.
 // Writes a temp JSON file, waits for the editor to close in a background goroutine,
 // then parses the result and saves the config. Sends agentFeedSavedMsg when done.
+// selectedFeed returns the URL and display name of the feed under the cursor.
+// The URL is what the write path uses to identify it; the cursor position is
+// only how it was picked, and must not outlive the moment it was read.
+func (m *Model) selectedFeed() (url, name string, ok bool) {
+	if m.agentFeedsCursor < 0 || m.agentFeedsCursor >= len(m.agentFeeds) {
+		return "", "", false
+	}
+	f := m.agentFeeds[m.agentFeedsCursor]
+	name = f.Name
+	if name == "" {
+		name = f.URL
+	}
+	return f.URL, name, true
+}
+
 func (m *Model) openEditorForFeed(idx int) {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
@@ -3225,7 +3235,9 @@ func (m *Model) openEditorForFeed(idx int) {
 
 	var data []byte
 	var err error
+	var editingURL string // empty for a new feed; identifies the feed otherwise
 	if idx >= 0 && idx < len(m.agentFeeds) {
+		editingURL = m.agentFeeds[idx].URL
 		data, err = json.MarshalIndent(m.agentFeeds[idx], "", "  ")
 	} else {
 		// New feed: write a full template so the user knows all fields.
@@ -3279,7 +3291,10 @@ func (m *Model) openEditorForFeed(idx int) {
 		if idx < 0 {
 			err = agentpkg.AddFeed(cfgPath, updated)
 		} else {
-			err = agentpkg.UpdateFeed(cfgPath, idx, updated)
+			// Identified by the URL the editor opened with, so a feed that
+			// moved on disk fails loudly instead of overwriting its neighbour.
+			// updated may carry a new URL — that is how a typo gets fixed.
+			err = agentpkg.UpdateFeed(cfgPath, editingURL, updated)
 		}
 		if err != nil {
 			send(agentFeedSavedMsg{err: err.Error()})
@@ -5277,20 +5292,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 		return nil
 	case "/feed-toggle":
-		if len(m.agentFeeds) > 0 {
-			return toggleAgentFeed(m.cfg.AgentPath, m.agentFeedsCursor)
+		if url, _, ok := m.selectedFeed(); ok {
+			return toggleAgentFeed(m.cfg.AgentPath, url)
 		}
 		m.setStatusError("no feed selected")
 		return nil
 	case "/feed-delete":
-		if len(m.agentFeeds) > 0 {
-			name := m.agentFeeds[m.agentFeedsCursor].Name
-			if name == "" {
-				name = m.agentFeeds[m.agentFeedsCursor].URL
-			}
-			idx := m.agentFeedsCursor
+		if url, name, ok := m.selectedFeed(); ok {
 			m.askConfirm(fmt.Sprintf("delete %q? yes/no", name), func() tea.Cmd {
-				return deleteAgentFeed(m.cfg.AgentPath, idx)
+				return deleteAgentFeed(m.cfg.AgentPath, url)
 			})
 		} else {
 			m.setStatusError("no feed selected")
