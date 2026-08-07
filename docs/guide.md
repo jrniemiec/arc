@@ -66,7 +66,9 @@ arc workspace chat "attention research"       # start a grounded conversation
 
 ## 6. Set up the feed agent
 
-Configure feeds and interests in `~/.arc/agent/config.json`, then:
+Configure feeds and interests in `~/.arc/agent/config.jsonc` — by hand, or from the
+TUI with `/agent-config-edit` for the file and `/feed-add` / `/feed-edit` for
+individual feeds. Then:
 
 ```bash
 arc agent run                       # poll feeds, filter, ingest

@@ -10,7 +10,7 @@ var agentCmd = &cobra.Command{
 	Long: `arc agent polls configured RSS/Atom feeds, filters items using an LLM
 against your interest profile and library context, and ingests relevant articles.
 
-Configuration: ~/.arc/agent/config.json
+Configuration: ~/.arc/agent/config.jsonc
 State files:   ~/.arc/agent/state/
 Run log:       ~/.arc/agent/runs.jsonl
 

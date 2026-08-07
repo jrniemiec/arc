@@ -58,7 +58,9 @@ Or from the CLI:
 
 ## 8. Set up the agent
 
-Configure RSS feeds in ~/.arc/agent/config.json, then:
+Configure RSS feeds in ~/.arc/agent/config.jsonc — by hand, or in the TUI with
+/feed-add and /feed-edit on the Agent Feeds sub-tab (/agent-config-edit opens the
+whole file). Then:
 
   arc agent run --dry-run    # preview what would be ingested
   arc agent run              # ingest approved articles

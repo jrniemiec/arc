@@ -36,7 +36,7 @@ Filesystem is the source of truth. SQLite and vector indexes are derived — reb
       flash.<model>.txt
       flashcards.<style>.<model>.json
     agent/
-      config.json          Feed list + interest profile
+      config.jsonc         Feed list + interest profile
       state/               Per-feed GUID tracking
       runs.jsonl           Agent run log
     workspaces/<name>/

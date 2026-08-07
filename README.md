@@ -658,7 +658,7 @@ arc agent stats                  # per-feed signal/noise statistics
 
 ### Agent configuration
 
-Configure feeds and interest profile in `~/.arc/agent/config.json`:
+Configure feeds and interest profile in `~/.arc/agent/config.jsonc` (a legacy `config.json` is still read when no `.jsonc` sibling exists):
 
 ```jsonc
 {
@@ -684,6 +684,8 @@ Configure feeds and interest profile in `~/.arc/agent/config.json`:
 }
 ```
 
+From the TUI, `/agent-config-view` and `/agent-config-edit` open this file. Feeds themselves are better managed as records — on the Agent Feeds sub-tab, `/feed-add`, `/feed-edit`, `/feed-toggle` and `/feed-delete` edit one feed at a time and merge the change back without disturbing the rest of the file's comments and formatting.
+
 ### Decision override
 
 The agent saves its filter decisions to a file. You can review, edit, and re-run with your overrides:
@@ -707,6 +709,24 @@ Launch with `arc` (no subcommand). The TUI is the primary interface — designed
 Mouse support: click to navigate, middle-click to open in browser.
 
 Use `--no-tui` to disable the TUI and run in headless/CLI mode.
+
+### Config from the TUI
+
+Every config file is viewable and editable without leaving the TUI. The commands are subject-first: the bare `/config*` forms act on the root `config.jsonc`, and a subject prefix scopes them to that subject's config.
+
+```
+/config                    show resolved configuration
+/config-view               view config.jsonc in overlay
+/config-edit               open config.jsonc in $EDITOR
+/agent-config-view         view agent/config.jsonc in overlay
+/agent-config-edit         open agent/config.jsonc in $EDITOR
+/chat-config-view          view workspace chat/config.jsonc in overlay
+/chat-config-edit          open workspace chat/config.jsonc in $EDITOR
+```
+
+`/agent-config-*` and `/chat-config-*` were previously named `/config-agent-*` and `/config-chat-*`. The old names still work but are no longer listed in `/help` or tab-completion.
+
+Individual feeds are edited as records rather than as config text — see [Agent configuration](#agent-configuration) for `/feed-add`, `/feed-edit`, `/feed-toggle` and `/feed-delete`.
 
 ### Input correction
 
@@ -811,7 +831,7 @@ Filesystem is the source of truth. SQLite and vector indexes are derived — reb
 │   └── flashcards.<style>.<model>.json
 ├── collections/<slug>/    # Symlinks to article directories
 ├── agent/
-│   ├── config.json        # Feed list + interest profile
+│   ├── config.jsonc       # Feed list + interest profile
 │   ├── state/             # Per-feed GUID tracking
 │   └── runs.jsonl         # Agent run log
 └── workspaces/<name>/

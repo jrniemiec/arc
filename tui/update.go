@@ -5214,17 +5214,20 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	case "/config-view":
 		m.cmdConfigView()
 		return nil
-	case "/config-agent-view":
+	// Scoped config commands are subject-first, like every other command that
+	// names a subject (/agent-run, /chat-profile). The /config-<scope>-<verb>
+	// forms are the pre-rename names, kept dispatchable but out of help.
+	case "/agent-config-view", "/config-agent-view":
 		m.cmdAgentConfigView()
 		return nil
-	case "/config-chat-view":
+	case "/chat-config-view", "/config-chat-view":
 		m.cmdChatConfigView()
 		return nil
 	case "/config-edit":
 		return m.cmdConfigEdit()
-	case "/config-agent-edit":
+	case "/agent-config-edit", "/config-agent-edit":
 		return m.cmdAgentConfigEdit()
-	case "/config-chat-edit":
+	case "/chat-config-edit", "/config-chat-edit":
 		return m.cmdChatConfigEdit()
 	case "/stats":
 		return m.cmdStats()
@@ -9038,6 +9041,8 @@ var helpGroups = []struct {
 		{"/agent-run", "[--dry-run] [--focus \"...\"]", "fresh feed scan — poll all feeds, filter, ingest"},
 		{"/agent-rerun", "[--dry-run]", "process decisions for the selected run (mark items with a/s first)"},
 		{"/agent-prompt", "", "show the exact filter prompt the selected feed is judged by"},
+		{"/agent-config-view", "", "view agent/config.jsonc in overlay (old name: /config-agent-view)"},
+		{"/agent-config-edit", "", "open agent/config.jsonc in $EDITOR (old name: /config-agent-edit)"},
 		{"/feed-add", "", "add a new feed (opens $EDITOR with template)"},
 		{"/feed-edit", "", "edit selected feed in $EDITOR"},
 		{"/feed-toggle", "", "toggle selected feed enabled/disabled"},
@@ -9063,10 +9068,8 @@ var helpGroups = []struct {
 		{"/config", "", "show resolved configuration"},
 		{"/config-view", "", "view config.jsonc in overlay"},
 		{"/config-edit", "", "open config.jsonc in $EDITOR"},
-		{"/config-agent-view", "", "view agent/config.jsonc in overlay"},
-		{"/config-agent-edit", "", "open agent/config.jsonc in $EDITOR"},
-		{"/config-chat-view", "", "view workspace chat/config.jsonc in overlay"},
-		{"/config-chat-edit", "", "open workspace chat/config.jsonc in $EDITOR"},
+		{"/chat-config-view", "", "view workspace chat/config.jsonc in overlay (old name: /config-chat-view)"},
+		{"/chat-config-edit", "", "open workspace chat/config.jsonc in $EDITOR (old name: /config-chat-edit)"},
 		{"/tags", "", "list all tags"},
 		{"/stats", "", "show library stats"},
 		{"/models", "", "list available LLM profiles"},

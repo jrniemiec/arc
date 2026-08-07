@@ -19,10 +19,10 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /config                    show resolved configuration
   /config-view               view config.jsonc in overlay
   /config-edit               open config.jsonc in $EDITOR
-  /config-agent-view         view agent/config.jsonc in overlay
-  /config-agent-edit         open agent/config.jsonc in $EDITOR
-  /config-chat-view          view workspace chat/config.jsonc in overlay
-  /config-chat-edit          open workspace chat/config.jsonc in $EDITOR
+  /agent-config-view         view agent/config.jsonc in overlay
+  /agent-config-edit         open agent/config.jsonc in $EDITOR
+  /chat-config-view          view workspace chat/config.jsonc in overlay
+  /chat-config-edit          open workspace chat/config.jsonc in $EDITOR
   /stats                     show library stats
   /models                    list available LLM profiles
   /workspace-profile [name]  show or set workspace chat profile (persisted)
@@ -37,6 +37,10 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /chats-archive             archive pending AskX + article chat messages
   /chats-history             browse archived chat sessions (overlay)
   /chats-export [--md|--text]  export chat archive to file and open in $EDITOR
+
+The scoped config commands used to be named /config-agent-view, /config-agent-edit,
+/config-chat-view and /config-chat-edit. Those names still work but no longer appear
+in /help or tab-completion.
 
 ## Article commands (Articles sub-tab)
 
@@ -177,10 +181,10 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /config                    show resolved configuration
   /config-view               view config.jsonc in overlay
   /config-edit               open config.jsonc in $EDITOR
-  /config-agent-view         view agent/config.jsonc in overlay
-  /config-agent-edit         open agent/config.jsonc in $EDITOR
-  /config-chat-view          view workspace chat/config.jsonc in overlay
-  /config-chat-edit          open workspace chat/config.jsonc in $EDITOR
+  /agent-config-view         view agent/config.jsonc in overlay
+  /agent-config-edit         open agent/config.jsonc in $EDITOR
+  /chat-config-view          view workspace chat/config.jsonc in overlay
+  /chat-config-edit          open workspace chat/config.jsonc in $EDITOR
   /models                    list available LLM profiles
   /chats-archive             archive pending messages
   /chats-history             browse archived chat sessions
