@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,5 +380,43 @@ func TestTemplateDocumentsResponseFormatVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(tmpl, "DO NOT uncomment") {
 		t.Error("the warning against pasting the contract into the prompt is gone")
+	}
+}
+
+func TestBuildLibraryContextIncludesCollections(t *testing.T) {
+	root := t.TempDir()
+	for slug, desc := range map[string]string{
+		"transformers": "circuit analysis and attention internals",
+		"go-systems":   "",
+	} {
+		dir := filepath.Join(root, "collections", slug)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		meta := fmt.Sprintf(`{"slug":%q,"name":%q,"description":%q}`, slug, slug, desc)
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := listCollections(root)
+	want := map[string]bool{
+		"transformers: circuit analysis and attention internals": true,
+		"go-systems": true, // no description — slug alone, not a dangling colon
+	}
+	if len(got) != len(want) {
+		t.Fatalf("collections = %v, want %d entries", got, len(want))
+	}
+	for _, c := range got {
+		if !want[c] {
+			t.Errorf("unexpected entry %q", c)
+		}
+	}
+
+	if listCollections("") != nil {
+		t.Error("empty dataRoot should yield no collections")
+	}
+	if listCollections(filepath.Join(root, "nope")) != nil {
+		t.Error("missing dataRoot should degrade to no collections, not panic")
 	}
 }

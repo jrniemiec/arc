@@ -82,7 +82,7 @@ func RunFeeds(ctx context.Context, opts RunOptions) (RunRecord, error) {
 	slog.Info("agent run started", "run_id", runID, "feeds", len(opts.AgentCfg.Feeds))
 
 	// Build library context (recent titles + top tags).
-	libCtx, err := BuildLibraryContext(ctx, opts.DB)
+	libCtx, err := BuildLibraryContext(ctx, opts.DB, opts.ArcConfig.DataRoot)
 	if err != nil {
 		slog.Warn("could not build library context", "err", err)
 		libCtx = &feed.LibraryContext{} // degrade gracefully
@@ -533,21 +533,28 @@ func dedupByURL(ctx context.Context, db *sqlite.Store, items []feed.Item) ([]fee
 
 // buildInterestProfile composes the interest profile string from agent config and run options.
 func buildInterestProfile(opts RunOptions) string {
-	profile := opts.AgentCfg.InterestProfile
+	return InterestProfileFor(opts.AgentCfg, opts.Focus)
+}
 
-	focus := opts.Focus
+// InterestProfileFor composes what fills {interest_profile}: the profile, then
+// the focus (the run's own, or the config's), then notes, then learning goals.
+// focus may be empty to use the configured one. Exported so a preview can
+// render the same text a run would.
+func InterestProfileFor(cfg AgentConfig, focus string) string {
+	profile := cfg.InterestProfile
+
 	if focus == "" {
-		focus = opts.AgentCfg.Focus
+		focus = cfg.Focus
 	}
 	if focus != "" {
 		profile += "\n\nCurrent focus: " + focus
 	}
 
-	for _, note := range opts.AgentCfg.Notes {
+	for _, note := range cfg.Notes {
 		profile += "\nNote: " + note
 	}
 
-	for _, goal := range opts.AgentCfg.LearningGoals {
+	for _, goal := range cfg.LearningGoals {
 		profile += fmt.Sprintf("\nLearning goal (%s): %s", goal.Depth, goal.Topic)
 	}
 

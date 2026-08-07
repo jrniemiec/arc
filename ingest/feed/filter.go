@@ -269,6 +269,17 @@ func bulletList(items []string) string {
 	return sb.String()
 }
 
+// SampleUserMessage renders the per-item message for a representative item,
+// so a preview can show the shape of what accompanies the system prompt.
+func SampleUserMessage(summaryMaxChars int) string {
+	return buildFilterUserMessage(Item{
+		Title:   "Example: A Mathematical Framework for Transformer Circuits",
+		Author:  "Example Author",
+		Tags:    []string{"transformers", "interpretability"},
+		Summary: "The first paragraphs of the item's feed summary, HTML stripped and truncated.",
+	}, summaryMaxChars)
+}
+
 func buildFilterUserMessage(item Item, summaryMaxChars int) string {
 	if summaryMaxChars <= 0 {
 		summaryMaxChars = DefaultSummaryMaxChars

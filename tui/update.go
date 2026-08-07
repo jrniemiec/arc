@@ -21,6 +21,7 @@ import (
 
 	agentpkg "github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/ingest/feed"
 	"github.com/jrniemiec/arc/internal/help"
 	"github.com/jrniemiec/arc/service"
 	"github.com/jrniemiec/arc/store"
@@ -5262,6 +5263,9 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdAgentRun(arg)
 	case "/agent-rerun":
 		return m.cmdAgentRerun(arg)
+	case "/agent-prompt":
+		m.cmdAgentPrompt()
+		return nil
 	case "/feed-add":
 		m.openEditorForFeed(-1)
 		return nil
@@ -7024,6 +7028,84 @@ func (m *Model) cmdViewConfigFile(path, label string) {
 // cmdConfigView opens the global config in the resource overlay.
 func (m *Model) cmdConfigView() {
 	m.cmdViewConfigFile(filepath.Join(m.cfg.DataRoot, "config.jsonc"), "config.jsonc")
+}
+
+// cmdAgentPrompt renders the exact filter prompt for the selected feed and
+// shows it in the resource overlay. The config documents which fragment lands
+// where; this shows the result, with the real profile, library and feed filter
+// substituted in — the only way to see what an item is actually judged by.
+func (m *Model) cmdAgentPrompt() {
+	agentCfg, err := agentpkg.LoadAgentConfig(filepath.Join(m.cfg.AgentPath, "config.jsonc"))
+	if err != nil {
+		m.setStatusError("load agent config: " + err.Error())
+		return
+	}
+
+	feedCfg, label, ok := m.selectedFeedForPrompt(agentCfg)
+	if !ok {
+		m.setStatusError("no feeds configured — add one on the Agent → Feeds tab")
+		return
+	}
+
+	// Library context is best-effort: without it the prompt still renders,
+	// just without the sections the library fills.
+	ctx := context.Background()
+	libCtx, err := agentpkg.BuildLibraryContext(ctx, m.svc.Library().DB(), m.cfg.DataRoot)
+	if err != nil {
+		slog.Warn("/agent-prompt: library context unavailable", "err", err)
+		libCtx = &feed.LibraryContext{}
+	}
+
+	filterCfg := feed.FilterConfig{
+		InterestProfile: agentpkg.InterestProfileFor(agentCfg, ""),
+		FeedFilter:      feedCfg.Filter,
+		Prompt:          agentCfg.FilterPromptTemplate(),
+		SummaryMaxChars: agentCfg.FilterSummaryMaxCharsOrDefault(),
+		Library:         libCtx,
+	}
+	system := feed.RenderSystemPrompt(filterCfg)
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Feed:    %s\n", label)
+	fmt.Fprintf(&sb, "Profile: %s\n", agentCfg.FilterProfileName())
+	fmt.Fprintf(&sb, "Size:    %s\n", feed.PromptFingerprint(system))
+	sb.WriteString("\nSent once per item in this feed, as the system prompt.\n")
+	sb.WriteString(strings.Repeat("─", 60))
+	sb.WriteString("\n\n")
+	sb.WriteString(system)
+	sb.WriteString("\n\n")
+	sb.WriteString(strings.Repeat("─", 60))
+	sb.WriteString("\nThe user message, one per item, looks like this:\n\n")
+	sb.WriteString(feed.SampleUserMessage(filterCfg.SummaryMaxChars))
+
+	m.openResourceOverlay("filter prompt — "+label, sb.String())
+}
+
+// selectedFeedForPrompt picks the feed under the cursor on the Feeds sub-tab,
+// falling back to the first enabled feed so the command works from anywhere.
+func (m *Model) selectedFeedForPrompt(cfg agentpkg.AgentConfig) (agentpkg.FeedConfig, string, bool) {
+	name := func(f agentpkg.FeedConfig) string {
+		if f.Name != "" {
+			return f.Name
+		}
+		return f.URL
+	}
+
+	if m.activeTab == tabAgent && m.agentSubTab == agentSubTabFeeds &&
+		m.agentFeedsCursor >= 0 && m.agentFeedsCursor < len(cfg.Feeds) {
+		f := cfg.Feeds[m.agentFeedsCursor]
+		return f, name(f), true
+	}
+	for _, f := range cfg.Feeds {
+		if !f.Disabled {
+			return f, name(f) + " (first enabled)", true
+		}
+	}
+	if len(cfg.Feeds) > 0 {
+		f := cfg.Feeds[0]
+		return f, name(f) + " (disabled)", true
+	}
+	return agentpkg.FeedConfig{}, "", false
 }
 
 // cmdAgentConfigView opens the agent config in the resource overlay.
@@ -8945,6 +9027,7 @@ var helpGroups = []struct {
 	{"agent", []cmdCompletion{
 		{"/agent-run", "[--dry-run] [--focus \"...\"]", "fresh feed scan — poll all feeds, filter, ingest"},
 		{"/agent-rerun", "[--dry-run]", "process decisions for the selected run (mark items with a/s first)"},
+		{"/agent-prompt", "", "show the exact filter prompt the selected feed is judged by"},
 		{"/feed-add", "", "add a new feed (opens $EDITOR with template)"},
 		{"/feed-edit", "", "edit selected feed in $EDITOR"},
 		{"/feed-toggle", "", "toggle selected feed enabled/disabled"},

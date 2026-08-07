@@ -766,6 +766,7 @@ var globalCommands = []cmdCompletion{
 	{"/log", "", "open/close debug log tail"},
 	{"/agent-run", "[--dry-run] [--focus \"...\"]", "start a fresh agent feed scan"},
 	{"/agent-rerun", "[--dry-run]", "re-run decisions for the selected agent run"},
+	{"/agent-prompt", "", "show the filter prompt for the selected feed"},
 	{"/chats-archive", "", "archive pending AskX + article chat messages"},
 	{"/chats-history", "", "browse archived chat sessions (overlay)"},
 	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
@@ -832,6 +833,7 @@ var feedCommands = []cmdCompletion{
 	{"/feed-edit", "", "edit selected feed in $EDITOR"},
 	{"/feed-toggle", "", "toggle selected feed enabled/disabled"},
 	{"/feed-delete", "", "delete selected feed (with confirmation)"},
+	{"/agent-prompt", "", "show the filter prompt for the selected feed"},
 }
 
 // askxCommands are available when the AskX pane is open.
