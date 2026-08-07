@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -512,8 +513,17 @@ func (m *Model) sendAskXQuery(llmPrompt string, profileOverride string) tea.Cmd 
 		verbatimRatio = 0.4
 	}
 	summarizerProfileName := cfg.AskX.SummarizerProfile
+	global := m.askxGlobal
+	noHistory := m.askxNoHistory
 
 	return func() tea.Msg {
+		slog.Info("askx query start",
+			"workspace", ws,
+			"profile", profileName,
+			"global", global,
+			"strategy", stratName,
+			"no_history", noHistory)
+
 		prov, err := chatprovider.New(prof, maxTokens)
 		if err != nil {
 			return askxStreamDoneMsg{err: fmt.Sprintf("askX: %v", err)}
@@ -545,6 +555,11 @@ func (m *Model) sendAskXQuery(llmPrompt string, profileOverride string) tea.Cmd 
 		contextMsgs := strat.Apply(hist, llmPrompt)
 		allMsgs := append(contextMsgs, chat.Message{Role: chat.RoleUser, Content: llmPrompt})
 
+		slog.Debug("askx LLM request", "model", prof.Model, "system_prompt", systemPrompt, "user_prompt", llmPrompt)
+		for i, msg := range allMsgs {
+			slog.Debug("askx LLM context msg", "idx", i, "role", msg.Role, "content", msg.Content)
+		}
+
 		start := time.Now()
 		fullText, usage, err := prov.ChatStream(ctx, systemPrompt, allMsgs, func(delta string) error {
 			shared.Append(delta)
@@ -552,10 +567,19 @@ func (m *Model) sendAskXQuery(llmPrompt string, profileOverride string) tea.Cmd 
 		})
 		elapsed := time.Since(start)
 		if err != nil {
+			slog.Error("askx query failed", "workspace", ws, "err", err, "elapsed", elapsed)
 			return askxStreamDoneMsg{err: fmt.Sprintf("askX: %v", err), fullText: fullText, elapsed: elapsed}
 		}
+		slog.Debug("askx LLM response", "model", prof.Model, "response", fullText,
+			"input_tokens", usage.InputTokens, "output_tokens", usage.OutputTokens)
 		costUSD := cfg.CalcCost(prof.Model, usage.InputTokens, usage.OutputTokens)
 		appendAskXEvent(cfg.EventsPath, prof.Model, usage.InputTokens, usage.OutputTokens, costUSD)
+		slog.Info("askx query done",
+			"workspace", ws,
+			"input_tokens", usage.InputTokens,
+			"output_tokens", usage.OutputTokens,
+			"cost_usd", fmt.Sprintf("%.6f", costUSD),
+			"elapsed", elapsed)
 		return askxStreamDoneMsg{fullText: fullText, costUSD: costUSD, elapsed: elapsed, inputTokens: usage.InputTokens, outputTokens: usage.OutputTokens}
 	}
 }

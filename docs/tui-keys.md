@@ -45,12 +45,19 @@
   b              move from attic back to workspace
   U              unlink article/collection from workspace
 
+## Agent run actions (Runs sub-tab nav pane)
+
+  D              delete selected run's history record (with confirmation) —
+                 keeps ingested articles
+
 ## Agent feed actions (Feeds sub-tab nav pane)
 
   a              add new feed
   e              edit selected feed in $EDITOR
   d              toggle feed enabled/disabled
   D              delete feed (with confirmation)
+  R              clear seen-item state (with confirmation) — next run
+                 re-checks everything
 
 ## Tab bar (when focused)
 

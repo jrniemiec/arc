@@ -802,7 +802,14 @@ func Run(ctx context.Context, cfg config.Config, req Request) (Result, error) {
 
 // chat wraps llm.Provider.Chat for single-turn calls using brief's interface.
 func chat(ctx context.Context, p llm.Provider, system, prompt string) (string, llm.Usage, error) {
-	return p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
+	slog.Debug("ingest LLM request", "model", p.Name(), "system", system, "prompt", prompt)
+	out, u, err := p.Chat(ctx, system, []llm.Message{{Role: llm.RoleUser, Content: prompt}})
+	if err != nil {
+		return out, u, err
+	}
+	slog.Debug("ingest LLM response", "model", p.Name(), "response", out,
+		"input_tokens", u.InputTokens, "output_tokens", u.OutputTokens)
+	return out, u, err
 }
 
 // briefAdapter bridges github.com/jrniemiec/llm.Provider → brief/llm.Provider.
@@ -824,6 +831,7 @@ func (a *briefAdapter) Chat(ctx context.Context, system, prompt string) (string,
 	if a.onCall != nil {
 		a.onCall()
 	}
+	slog.Debug("summarize LLM request", "model", a.model, "system", system, "prompt", prompt)
 	start := time.Now()
 	var out string
 	// total accumulates across attempts. A failed attempt can still have been
@@ -854,6 +862,10 @@ func (a *briefAdapter) Chat(ctx context.Context, system, prompt string) (string,
 	}
 	if err == nil && a.onDone != nil {
 		a.onDone(time.Since(start), total)
+	}
+	if err == nil {
+		slog.Debug("summarize LLM response", "model", a.model, "response", out,
+			"input_tokens", total.InputTokens, "output_tokens", total.OutputTokens)
 	}
 	return out, briefllm.Usage{InputTokens: total.InputTokens, OutputTokens: total.OutputTokens}, err
 }
@@ -917,9 +929,7 @@ func summarizeText(ctx context.Context, p llm.Provider, text, title, source, sty
 }
 
 func generateFlash(ctx context.Context, p llm.Provider, text, systemPrompt string, maxTokens int) (string, llm.Usage, error) {
-	out, u, err := p.Chat(ctx, systemPrompt, []llm.Message{
-		{Role: llm.RoleUser, Content: "Write a flash summary for this text:\n\n" + text},
-	})
+	out, u, err := chat(ctx, p, systemPrompt, "Write a flash summary for this text:\n\n"+text)
 	_ = maxTokens // passed to provider config in future; LLMs self-limit short outputs well
 	return out, u, err
 }

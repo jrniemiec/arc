@@ -34,6 +34,8 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /log                       open/close debug log tail
   /agent-run [flags]         start agent feed scan (--dry-run, --focus "...")
   /agent-rerun [--dry-run]   re-run decisions for selected agent run
+  /agent-run-delete [run-id] delete a run's history record (selected run if no id) —
+                             keeps ingested articles
   /chats-archive             archive pending AskX + article chat messages
   /chats-history             browse archived chat sessions (overlay)
   /chats-export [--md|--text]  export chat archive to file and open in $EDITOR
@@ -109,6 +111,8 @@ in /help or tab-completion.
   /feed-edit                 edit selected feed in $EDITOR
   /feed-toggle               toggle selected feed enabled/disabled
   /feed-delete               delete selected feed (with confirmation)
+  /feed-reset                clear seen-item state for selected feed — next run
+                             re-checks everything (with confirmation)
 
 ## AskX commands (when AskX pane is open)
 

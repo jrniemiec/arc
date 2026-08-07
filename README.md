@@ -684,7 +684,7 @@ Configure feeds and interest profile in `~/.arc/agent/config.jsonc` (a legacy `c
 }
 ```
 
-From the TUI, `/agent-config-view` and `/agent-config-edit` open this file. Feeds themselves are better managed as records — on the Agent Feeds sub-tab, `/feed-add`, `/feed-edit`, `/feed-toggle` and `/feed-delete` edit one feed at a time and merge the change back without disturbing the rest of the file's comments and formatting.
+From the TUI, `/agent-config-view` and `/agent-config-edit` open this file. Feeds themselves are better managed as records — on the Agent Feeds sub-tab, `/feed-add`, `/feed-edit`, `/feed-toggle` and `/feed-delete` edit one feed at a time and merge the change back without disturbing the rest of the file's comments and formatting. `/feed-reset` is separate from all of these — it doesn't touch `config.jsonc`, it clears the feed's seen-item dedup state (`agent/state/`) so the next run re-checks everything currently in the feed, including items it already skipped.
 
 ### Decision override
 
@@ -726,7 +726,7 @@ Every config file is viewable and editable without leaving the TUI. The commands
 
 `/agent-config-*` and `/chat-config-*` were previously named `/config-agent-*` and `/config-chat-*`. The old names still work but are no longer listed in `/help` or tab-completion.
 
-Individual feeds are edited as records rather than as config text — see [Agent configuration](#agent-configuration) for `/feed-add`, `/feed-edit`, `/feed-toggle` and `/feed-delete`.
+Individual feeds are edited as records rather than as config text — see [Agent configuration](#agent-configuration) for `/feed-add`, `/feed-edit`, `/feed-toggle`, `/feed-delete` and `/feed-reset`.
 
 ### Input correction
 

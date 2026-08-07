@@ -187,6 +187,19 @@ func RunFeeds(ctx context.Context, opts RunOptions) (RunRecord, error) {
 	return rec, nil
 }
 
+// ResetFeedState clears a feed's seen-item state, so the next run treats
+// every item currently in the feed as new — including ones a prior run
+// already skipped. It does not touch already-ingested articles: those are
+// still caught by URL dedup within runFeed, so re-ingestion can't duplicate
+// them.
+func ResetFeedState(stateDir, feedURL string) error {
+	stateStore, err := feed.NewStore(stateDir)
+	if err != nil {
+		return fmt.Errorf("open feed state store: %w", err)
+	}
+	return stateStore.Reset(feedURL)
+}
+
 // runFeed handles one feed within a run cycle.
 func runFeed(
 	ctx context.Context,

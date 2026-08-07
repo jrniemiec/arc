@@ -72,6 +72,16 @@ func (s *Store) MarkSeen(feedURL string, items []Item) error {
 	return s.save(feedURL, state)
 }
 
+// Reset clears the seen-item state for a feed, so its next poll treats every
+// currently-published item as new again. No-op if no state exists yet.
+func (s *Store) Reset(feedURL string) error {
+	path := s.path(feedURL)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove state %s: %w", path, err)
+	}
+	return nil
+}
+
 // Load returns the current state for a feed, or empty state if none exists.
 func (s *Store) load(feedURL string) (FeedState, error) {
 	path := s.path(feedURL)

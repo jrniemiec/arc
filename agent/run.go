@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -152,6 +153,54 @@ func AppendRun(path string, rec RunRecord) error {
 	data = append(data, '\n', '\n') // blank line between records
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write run record: %w", err)
+	}
+	return nil
+}
+
+// DeleteRun removes runID's entry from the runs.jsonl file at runsPath and
+// deletes its decisions-<runID>.json file from decisionsDir, if present.
+// It does not touch already-ingested articles or feed dedup state — those
+// are the run's downstream effects, not part of its history record.
+func DeleteRun(runsPath, decisionsDir, runID string) error {
+	recs, err := LoadRuns(runsPath)
+	if err != nil {
+		return fmt.Errorf("load runs: %w", err)
+	}
+
+	kept := recs[:0]
+	found := false
+	for _, r := range recs {
+		if r.RunID == runID {
+			found = true
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if !found {
+		return fmt.Errorf("run %q not found", runID)
+	}
+
+	var buf []byte
+	for _, r := range kept {
+		data, err := json.MarshalIndent(r, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal run record: %w", err)
+		}
+		buf = append(buf, data...)
+		buf = append(buf, '\n', '\n')
+	}
+
+	tmp := runsPath + ".tmp"
+	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
+		return fmt.Errorf("write runs file: %w", err)
+	}
+	if err := os.Rename(tmp, runsPath); err != nil {
+		return fmt.Errorf("replace runs file: %w", err)
+	}
+
+	decisionsPath := filepath.Join(decisionsDir, "decisions-"+runID+".json")
+	if err := os.Remove(decisionsPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove decisions file: %w", err)
 	}
 	return nil
 }

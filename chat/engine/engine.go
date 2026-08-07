@@ -485,7 +485,10 @@ func (e *Engine) ChatWithTools(ctx context.Context, userPrompt string, opts Chat
 	e.sessionWebSearches += turnUsage.WebSearchRequests
 	e.mu.Unlock()
 
-	_ = finalText // response text is in history; callers read it from there
+	slog.Debug("chat LLM response",
+		"workspace", e.workspaceName,
+		"turn", e.turnID,
+		"response", finalText)
 
 	return ChatResult{Usage: turnUsage, Elapsed: elapsed, Rounds: round, ToolCalls: totalToolCalls}, nil
 }

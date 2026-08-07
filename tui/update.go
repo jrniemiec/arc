@@ -610,6 +610,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.restoredState.AgentRunID = ""
 		}
+		if m.agentRunsCursor >= len(m.agentRuns) {
+			m.agentRunsCursor = max(0, len(m.agentRuns)-1)
+		}
 		// Auto-load decisions for the selected run.
 		cmds = append(cmds, m.triggerAgentRunDetail())
 
@@ -635,6 +638,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.agentFeedsCursor = max(0, len(m.agentFeeds)-1)
 			}
 			m.statusMsg = "feed saved"
+		}
+
+	case agentFeedStateResetMsg:
+		if msg.err != "" {
+			m.setStatusError("feed reset: " + msg.err)
+		} else {
+			m.statusMsg = "✓ cleared seen-items for " + msg.name
+		}
+
+	case agentRunDeletedMsg:
+		if msg.err != "" {
+			m.setStatusError("delete run: " + msg.err)
+		} else {
+			m.statusMsg = "✓ deleted run " + msg.runID + " (history only — articles kept)"
+			// Drop cached detail state if it belonged to the deleted run so a
+			// stale decisions file/ingested list doesn't linger in the UI.
+			if m.agentRunDecisionsID == msg.runID {
+				m.agentRunDecisionsID = ""
+				m.agentRunDecisions = agentpkg.DecisionsFile{}
+				m.agentFeedExpanded = nil
+				m.agentContentCursor = 0
+				m.agentContentScroll = 0
+			}
+			if m.agentRunIngestedID == msg.runID {
+				m.agentRunIngested = nil
+				m.agentRunIngestedID = ""
+				m.agentRunIngestedErr = ""
+			}
+			cmds = append(cmds, loadAgentRuns(m.cfg.AgentPath))
+			return m, tea.Batch(cmds...)
 		}
 
 	case agentFeedRunDecisionsLoadedMsg:
@@ -1008,7 +1041,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.restoreContentPosition(msg)
 
 	case chatHistoryLoadedMsg:
-		if msg.err != "" {
+		// Background preview loads (focus=false, fired as the nav cursor passes
+		// over a workspace row) resolve asynchronously. If the user has since
+		// left the Workspaces nav — e.g. switched to the Agent tab — applying
+		// the result would flip chatMode on underneath them, stealing the
+		// command palette and prompt for a tab they're no longer viewing.
+		if !msg.focus && (m.activeTab != tabLibrary || m.navSubTab != navSubTabWorkspaces) {
+			// Stale — drop it.
+		} else if msg.err != "" {
 			m.statusMsg = "✗ " + msg.err
 		} else {
 			// Cancel any in-flight stream from a previous workspace.
@@ -1698,7 +1738,19 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				})
 			}
 			return nil
+		case "R":
+			if url, name, ok := m.selectedFeed(); ok {
+				m.askConfirm(fmt.Sprintf("clear seen-items for %q? next run re-checks everything (yes/N)", name), func() tea.Cmd {
+					return resetAgentFeedState(m.cfg.AgentPath, url, name)
+				})
+			}
+			return nil
 		}
+	}
+	// Run-specific operations in the Agent Runs sub-tab.
+	if m.activeTab == tabAgent && m.agentSubTab == agentSubTabRuns && msg.Type == tea.KeyRunes && msg.String() == "D" {
+		m.cmdAgentRunDelete("")
+		return nil
 	}
 	switch {
 	case key.Matches(msg, keys.ContentTabPrev):
@@ -1735,16 +1787,16 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		return m.navSelect()
-	case key.Matches(msg, keys.MarkRead):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.MarkRead):
 		return m.cmdMarkRead()
-	case key.Matches(msg, keys.MarkUnread):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.MarkUnread):
 		return m.cmdMarkUnread()
-	case key.Matches(msg, keys.ToggleFav):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.ToggleFav):
 		if m.navSubTab == navSubTabWorkspaces {
 			return m.cmdTogglePin()
 		}
 		return m.cmdToggleFavorite()
-	case key.Matches(msg, keys.Delete):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.Delete):
 		switch m.navSubTab {
 		case navSubTabWorkspaces:
 			row := m.selectedWsRow()
@@ -1779,7 +1831,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		default:
 			return m.cmdDeleteArticle()
 		}
-	case key.Matches(msg, keys.Open):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.Open):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
 			if row != nil {
@@ -1793,7 +1845,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		return m.openCurrentURL()
-	case key.Matches(msg, keys.View):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.View):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
 			if row != nil {
@@ -1806,9 +1858,9 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		return m.openArticleOverlay(m.selectedNavItem())
-	case msg.String() == "O":
+	case m.activeTab == tabLibrary && msg.String() == "O":
 		return m.openCurrentURLNoTrack()
-	case msg.String() == "U":
+	case m.activeTab == tabLibrary && msg.String() == "U":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
 			if row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
@@ -1830,7 +1882,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return m.cmdArticleRemove("")
 		}
-	case msg.String() == "e":
+	case m.activeTab == tabLibrary && msg.String() == "e":
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
 			if row != nil && (row.kind == wsRowResource || row.kind == wsRowOutcome || row.kind == wsRowScratch) {
@@ -1853,7 +1905,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 		}
-	case key.Matches(msg, keys.Attic):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.Attic):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
 			if row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
@@ -1869,7 +1921,7 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 		}
-	case key.Matches(msg, keys.UnAttic):
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.UnAttic):
 		if m.navSubTab == navSubTabWorkspaces {
 			row := m.selectedWsRow()
 			if row != nil && row.wsIdx >= 0 && row.wsIdx < len(m.workspaceItems) {
@@ -1883,12 +1935,12 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 		}
-	case msg.String() == "!":
+	case m.activeTab == tabLibrary && msg.String() == "!":
 		if m.navSubTab == navSubTabWorkspaces {
 			m.wsToggleFocus()
 			return nil
 		}
-	case msg.String() == "c":
+	case m.activeTab == tabLibrary && msg.String() == "c":
 		if m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections ||
 			(m.navSubTab == navSubTabWorkspaces && m.selectedNavItem() != nil) {
 			if m.achatMode {
@@ -4592,6 +4644,11 @@ func (m *Model) paramHintFor(cmd string) string {
 			subdir = "resources"
 		}
 		return "creating in: " + ws.name + "/" + subdir
+	case "/feed-delete", "/feed-toggle", "/feed-edit", "/feed-reset":
+		// These act on the feed under the nav cursor, not an argument — name it.
+		if _, name, ok := m.selectedFeed(); ok {
+			return "acting on: " + name
+		}
 	}
 	return ""
 }
@@ -5281,6 +5338,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdAgentRun(arg)
 	case "/agent-rerun":
 		return m.cmdAgentRerun(arg)
+	case "/agent-run-delete":
+		return m.cmdAgentRunDelete(arg)
 	case "/agent-prompt":
 		m.cmdAgentPrompt()
 		return nil
@@ -5304,6 +5363,15 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		if url, name, ok := m.selectedFeed(); ok {
 			m.askConfirm(fmt.Sprintf("delete %q? yes/no", name), func() tea.Cmd {
 				return deleteAgentFeed(m.cfg.AgentPath, url)
+			})
+		} else {
+			m.setStatusError("no feed selected")
+		}
+		return nil
+	case "/feed-reset":
+		if url, name, ok := m.selectedFeed(); ok {
+			m.askConfirm(fmt.Sprintf("clear seen-items for %q? next run re-checks everything (yes/N)", name), func() tea.Cmd {
+				return resetAgentFeedState(m.cfg.AgentPath, url, name)
 			})
 		} else {
 			m.setStatusError("no feed selected")
@@ -8034,6 +8102,32 @@ func (m *Model) cmdAgentRerun(arg string) tea.Cmd {
 	return nil
 }
 
+// cmdAgentRunDelete deletes an agent run's history record (runs.jsonl entry +
+// decisions file) after confirmation. arg, if given, is an explicit run ID;
+// otherwise the currently selected run in the Agent/Runs nav is used.
+// Ingested articles and feed dedup state are untouched — this only clears
+// the run from history.
+func (m *Model) cmdAgentRunDelete(arg string) tea.Cmd {
+	arg = strings.TrimSpace(arg)
+	runID := arg
+	if runID == "" {
+		if m.agentRunsCursor < 0 || m.agentRunsCursor >= len(m.agentRuns) {
+			m.statusMsg = "✗ no run selected — select a run in the Agent nav pane"
+			return nil
+		}
+		runID = m.agentRuns[m.agentRunsCursor].RunID
+	}
+	if m.agentRunning {
+		m.statusMsg = "✗ agent run in progress"
+		return nil
+	}
+	agentPath := m.cfg.AgentPath
+	m.askConfirm(fmt.Sprintf("delete run %q? history only, articles are kept (yes/N)", runID), func() tea.Cmd {
+		return deleteAgentRun(agentPath, runID)
+	})
+	return nil
+}
+
 // parseIngestFlags parses "<url> [--profile <name>] [--style <name>]".
 // The URL is the first non-flag token. Flags may appear before or after the URL.
 func parseIngestFlags(arg string) (url, profile, style string) {
@@ -9040,6 +9134,7 @@ var helpGroups = []struct {
 	{"agent", []cmdCompletion{
 		{"/agent-run", "[--dry-run] [--focus \"...\"]", "fresh feed scan — poll all feeds, filter, ingest"},
 		{"/agent-rerun", "[--dry-run]", "process decisions for the selected run (mark items with a/s first)"},
+		{"/agent-run-delete", "[run-id]", "delete a run's history record (selected run if no id) — keeps ingested articles"},
 		{"/agent-prompt", "", "show the exact filter prompt the selected feed is judged by"},
 		{"/agent-config-view", "", "view agent/config.jsonc in overlay (old name: /config-agent-view)"},
 		{"/agent-config-edit", "", "open agent/config.jsonc in $EDITOR (old name: /config-agent-edit)"},
@@ -9047,6 +9142,7 @@ var helpGroups = []struct {
 		{"/feed-edit", "", "edit selected feed in $EDITOR"},
 		{"/feed-toggle", "", "toggle selected feed enabled/disabled"},
 		{"/feed-delete", "", "delete selected feed (with confirmation)"},
+		{"/feed-reset", "", "clear seen-item state for selected feed — next run re-checks everything"},
 	}},
 	{"chats", []cmdCompletion{
 		{"/chats-archive", "", "archive pending AskX + article chat messages into chat_archive.jsonl"},
@@ -9152,6 +9248,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"v", "", "view ingested article in library"},
 		{"o", "", "open article URL in browser"},
 		{"space / enter", "", "expand / collapse feed"},
+		{"D", "", "delete selected run (history only — articles are kept)"},
 	}
 
 	agentFeedKeys := []cmdCompletion{
@@ -9159,6 +9256,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"e", "", "edit selected feed in $EDITOR"},
 		{"d", "", "toggle feed enabled/disabled"},
 		{"D", "", "delete selected feed"},
+		{"R", "", "clear seen-items — next run re-checks everything"},
 	}
 
 	render := func(header string, cmds []cmdCompletion) []string {

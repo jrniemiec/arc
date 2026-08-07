@@ -766,6 +766,7 @@ var globalCommands = []cmdCompletion{
 	{"/log", "", "open/close debug log tail"},
 	{"/agent-run", "[--dry-run] [--focus \"...\"]", "start a fresh agent feed scan"},
 	{"/agent-rerun", "[--dry-run]", "re-run decisions for the selected agent run"},
+	{"/agent-run-delete", "[run-id]", "delete a run's history record (selected run if no id) — keeps ingested articles"},
 	{"/agent-prompt", "", "show the filter prompt for the selected feed"},
 	{"/chats-archive", "", "archive pending AskX + article chat messages"},
 	{"/chats-history", "", "browse archived chat sessions (overlay)"},
@@ -833,6 +834,7 @@ var feedCommands = []cmdCompletion{
 	{"/feed-edit", "", "edit selected feed in $EDITOR"},
 	{"/feed-toggle", "", "toggle selected feed enabled/disabled"},
 	{"/feed-delete", "", "delete selected feed (with confirmation)"},
+	{"/feed-reset", "", "clear seen-item state for selected feed (with confirmation)"},
 	{"/agent-prompt", "", "show the filter prompt for the selected feed"},
 }
 
@@ -1080,6 +1082,20 @@ type agentFeedRunDecisionsLoadedMsg struct {
 	fileID string
 	df     agentpkg.DecisionsFile
 	err    string
+}
+
+// agentRunDeletedMsg signals that an agent run's history record (runs.jsonl
+// entry + decisions file) was deleted. Does not affect ingested articles.
+type agentRunDeletedMsg struct {
+	runID string
+	err   string
+}
+
+// agentFeedStateResetMsg signals that a feed's seen-item state was cleared.
+type agentFeedStateResetMsg struct {
+	url  string
+	name string
+	err  string
 }
 
 type collectionArticlesLoadedMsg struct {
@@ -1473,6 +1489,26 @@ func deleteAgentFeed(agentPath string, url string) tea.Cmd {
 			return agentFeedSavedMsg{err: err.Error()}
 		}
 		return agentFeedSavedMsg{feeds: cfg.Feeds}
+	}
+}
+
+func resetAgentFeedState(agentPath, url, name string) tea.Cmd {
+	return func() tea.Msg {
+		stateDir := filepath.Join(agentPath, "state")
+		if err := agentpkg.ResetFeedState(stateDir, url); err != nil {
+			return agentFeedStateResetMsg{url: url, name: name, err: err.Error()}
+		}
+		return agentFeedStateResetMsg{url: url, name: name}
+	}
+}
+
+func deleteAgentRun(agentPath, runID string) tea.Cmd {
+	return func() tea.Msg {
+		runsPath := filepath.Join(agentPath, "runs.jsonl")
+		if err := agentpkg.DeleteRun(runsPath, agentPath, runID); err != nil {
+			return agentRunDeletedMsg{runID: runID, err: err.Error()}
+		}
+		return agentRunDeletedMsg{runID: runID}
 	}
 }
 
