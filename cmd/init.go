@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,12 +15,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jrniemiec/arc/agent"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/internal/clog"
 )
-
-//go:embed agent_config.jsonc
-var agentConfigTemplate []byte
 
 func init() {
 	initCmd.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
@@ -463,7 +460,7 @@ func (w *wizard) stepAgent(agentPath string) {
 	}
 
 	agentCfgPath := filepath.Join(agentPath, "config.jsonc")
-	if err := os.WriteFile(agentCfgPath, agentConfigTemplate, 0644); err != nil {
+	if err := os.WriteFile(agentCfgPath, agent.ConfigTemplate, 0644); err != nil {
 		w.print("\n  Error writing agent config: %v\n", err)
 		return
 	}

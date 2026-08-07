@@ -98,6 +98,8 @@ func RunFeeds(ctx context.Context, opts RunOptions) (RunRecord, error) {
 	baseCfg := feed.FilterConfig{
 		InterestProfile: buildInterestProfile(opts),
 		Library:         libCtx,
+		Prompt:          opts.AgentCfg.FilterPromptTemplate(),
+		SummaryMaxChars: opts.AgentCfg.FilterSummaryMaxCharsOrDefault(),
 	}
 
 	// Open feed state store.
@@ -252,6 +254,17 @@ func runFeed(
 	// Assemble per-feed filter config.
 	filterCfg := baseCfg
 	filterCfg.FeedFilter = feedCfg.Filter
+
+	// Logged once per feed, not once per item: the system prompt varies only
+	// with {feed_filter}, so every item in this feed is judged by this text.
+	// feed.Filter logs a matching fingerprint on each item.
+	if sys := feed.RenderSystemPrompt(filterCfg); slog.Default().Enabled(ctx, slog.LevelDebug) {
+		slog.Debug("feed filter system prompt",
+			"feed", fr.Name,
+			"fingerprint", feed.PromptFingerprint(sys),
+			"prompt", sys,
+		)
+	}
 
 	// ── Phase 1: parallel LLM filter ─────────────────────────────────────────
 	// Run up to FilterConcurrency filter calls simultaneously.

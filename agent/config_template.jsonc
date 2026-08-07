@@ -1,0 +1,96 @@
+{
+  // ── Interest profile ──────────────────────────────────────────
+  // Describe your interests in plain language.
+  // The agent uses this to decide which articles are worth ingesting.
+  // Example: "distributed systems, LLM architectures, Go performance"
+  "interest_profile": "",
+
+  // ── Learning goals (optional) ─────────────────────────────────
+  // Topics you're actively learning, with a depth level:
+  //   "building"  — hands-on, building from scratch
+  //   "exploring" — broad survey, not building yet
+  //   "awareness" — just keeping up with developments
+  "learning_goals": [
+    // { "topic": "distributed systems", "depth": "building" },
+    // { "topic": "LLM agents", "depth": "exploring" }
+  ],
+
+  // ── Feeds ─────────────────────────────────────────────────────
+  // RSS/Atom feeds to poll. Add as many as you like.
+  // Required: "url"
+  // Optional: "name"   — human-readable label for logs
+  //           "filter" — per-feed narrowing instruction for the LLM
+  //           "tags"   — only accept items with these RSS categories
+  //           "block_domains" — reject items from these hostnames
+  //           "disabled"      — skip this feed without removing it
+  "feeds": [
+    // {
+    //   "url": "https://example.com/feed.xml",
+    //   "name": "Example Blog",
+    //   "filter": "only posts about Go and Kubernetes"
+    // },
+    // {
+    //   "url": "https://news.ycombinator.com/rss",
+    //   "name": "Hacker News",
+    //   "block_domains": ["youtube.com"]
+    // }
+  ],
+
+  // ── Filter prompt ─────────────────────────────────────────────
+  // The system prompt the relevance filter runs on. Edit freely — this is
+  // the agent's judgement, in your words.
+  //
+  // ORDER — how the prompt below assembles, top to bottom. Move a
+  // placeholder and its content moves with it; the order here is the
+  // default, not a rule.
+  //
+  //   1. (your opening line)  "You are a content relevance filter…"
+  //   2. {interest_profile}   "interest_profile" above, followed by
+  //                           "focus", then each "notes" entry, then each
+  //                           "learning_goals" entry — assembled in that
+  //                           order into one block
+  //   3. {feed_filter}        the "filter" field of the feed being polled,
+  //                           so this text changes feed to feed
+  //   4. {recent_titles}      last 30 article titles in your library
+  //   5. {top_tags}           25 most frequent tags
+  //   6. {collections}        existing collections
+  //   7. {response_format}    supplied by arc — see below
+  //   8. (your rules)         the "Rules:" block, last
+  //
+  // 4-6 come from your library automatically; nothing to configure.
+  //
+  // A paragraph whose placeholders are all empty is dropped, so a feed with
+  // no filter of its own will not leave a bare heading behind. A paragraph
+  // mixing filled and empty placeholders is kept.
+  //
+  // {response_format} expands to exactly this:
+  //
+  //   Evaluate the article below. Respond with JSON only, no markdown fences:
+  //   {"verdict": "ingest|skip|maybe", "reason": "one sentence why", "collections": ["suggested-collection-slugs"]}
+  //
+  // Shown for reference only — DO NOT uncomment it or paste it into the
+  // prompt. arc already inserts it at {response_format}, and a second copy
+  // only gives the model contradictory instructions to follow. The keys are
+  // the contract the response parser reads, so they are not yours to change
+  // here; delete the placeholder and arc appends the block at the end
+  // anyway.
+  "filter_prompt": "You are a content relevance filter for a personal knowledge library.\n\n## User interests\n{interest_profile}\n\n## Feed-specific instructions\n{feed_filter}\n\n## Recently ingested articles (newest first)\n{recent_titles}\n\n## Most frequent topics in the library\n{top_tags}\n\n## Existing collections\n{collections}\n\n{response_format}\n\nRules:\n- \"ingest\" = clearly relevant to the user's interests\n- \"skip\" = not relevant or too shallow/clickbait\n- \"maybe\" = borderline, might be interesting\n- Use the recently ingested list to avoid re-ingesting already-covered topics.\n- Be selective. When in doubt, skip.\n- Non-English articles: skip unless the topic is exceptionally relevant.",
+
+  // How much of a feed item's summary the filter sees, in characters.
+  // Higher means better decisions and more input tokens on every item.
+  "filter_summary_max_chars": 500,
+
+  // ── Agent LLM profiles ────────────────────────────────────────
+  // LLM profile for filtering articles (default: haiku — cheap and fast)
+  "filter_profile": "haiku",
+
+  // LLM profile for summarizing ingested articles (default: haiku)
+  // Override to "sonnet" for higher-quality summaries
+  "summary_profile": "haiku",
+
+  // ── Language filter (optional) ────────────────────────────────
+  // Only accept articles in these languages (ISO 639-1 codes).
+  // Empty means accept all languages.
+  // Example: ["en", "de"]
+  "languages": []
+}
