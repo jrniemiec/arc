@@ -29,6 +29,8 @@ arc
 - Commands start with `/` — type `/` for completions, `/help` to list them
 - `?` — bindings for current view
 - `/?` — full binding list
+- This tutorial is also browsable inside arc — **Help** tab, **Tutorial** sub-tab — or via `arc help tutorial`
+- The full TUI and CLI command references live in the same **Help** tab — **TUI Commands**, **TUI Keys**, **CLI Commands** sub-tabs
 
 ## Part 2 — First article
 
@@ -169,6 +171,8 @@ Attach a non-article resource (notes file) — same context:
 - `/resource-add <path|url> [--into <dir>] [--as <name>] [--comment "..."]` — copies a file/dir, or fetches a URL, into `workspace/resources/`
 
 ## Part 8 — Configure the workspace chat
+
+Selecting the workspace in the **Workspaces** sub-tab puts you in its chat automatically — no keypress needed, unlike article chat's `c`. The command input is now the chat input.
 
 ```
 /model opus

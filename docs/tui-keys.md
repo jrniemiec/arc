@@ -2,11 +2,12 @@
 
 ## Global
 
-  Tab            cycle panes forward (tab bar → nav → content → split → command)
-  Shift+Tab      cycle panes backward
+  Tab            cycle panes forward (nav → content → open split pane → nav)
+  Shift+Tab      cycle panes backward (nav → open split pane → content → nav)
   Alt+1          focus nav pane
   Alt+2          focus content pane
   Alt+3          focus tab bar
+  Esc            focus command input; press again with input empty to focus nav
   Ctrl+S         toggle selection mode (freeze screen for native text copy)
   Ctrl+L         toggle scratch pane
   Ctrl+X         toggle askX pane

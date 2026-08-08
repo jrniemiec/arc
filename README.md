@@ -310,7 +310,7 @@ provider, most capable first, with legacy models last — the same order as the 
 | Provider | Config value | Models | Notes |
 |---|---|---|---|
 | OpenAI | `openai` | gpt-4o-mini, gpt-4.1, gpt-5-mini | Default for bulk operations |
-| Anthropic | `anthropic` | claude-opus-5, claude-sonnet-5, claude-haiku-4-5 | Direct HTTP API |
+| Anthropic | `anthropic` | claude-opus-5, claude-sonnet-5, claude-haiku-4-5-20251001 | Direct HTTP API |
 | Ollama | `ollama` | llama3.1:8b, qwen2.5-coder:7b | Local, no API key, no tool calling |
 
 Embedding: OpenAI `text-embedding-3-small`, via the `oai-embed` profile set in `ingest.embed_profile` (required for semantic search). Generated during ingest, and rebuildable at any time with `arc embed`.
@@ -613,7 +613,7 @@ Three chat modes, all with streaming and tool use:
 
 | Mode | Scope | Access |
 |---|---|---|
-| Workspace chat | Full knowledge base + tools | `arc workspace chat <name>` |
+| Workspace chat | Full knowledge base + tools | CLI: `arc workspace chat <name>` · TUI: select a workspace in the Workspaces sub-tab — no keypress needed, the command input becomes the chat input |
 | Article chat | Single article context | TUI: press `c` on an article |
 | AskX | Single-shot query, no history | TUI |
 
@@ -702,11 +702,13 @@ arc agent run --decisions <file>  # re-run with your choices
 
 Launch with `arc` (no subcommand). The TUI is the primary interface — designed for keyboard-driven browsing, reading, and chatting.
 
-**Views:** Library (articles) · Collections · Workspaces · Search · Agent · Stats
+**Top-level tabs:** Library · Agent · Stats · Help
+
+Library's nav pane has its own sub-tabs — Articles, Collections, Workspaces — and Search is a command (`/search`) run within them, not a separate view. Help holds the readme, tutorial, and TUI/CLI command references, all browsable in-app.
 
 **Theming:** `--theme auto|light|dark`
 
-Mouse support: click to navigate, middle-click to open in browser.
+Mouse support: click to navigate.
 
 Use `--no-tui` to disable the TUI and run in headless/CLI mode.
 
@@ -830,6 +832,7 @@ Filesystem is the source of truth. SQLite and vector indexes are derived — reb
 │   ├── flash.<model>.txt
 │   └── flashcards.<style>.<model>.json
 ├── collections/<slug>/    # Symlinks to article directories
+├── cookies/                # Netscape-format cookie jars for paywalled sites
 ├── agent/
 │   ├── config.jsonc       # Feed list + interest profile
 │   ├── state/             # Per-feed GUID tracking
@@ -961,7 +964,7 @@ arc collections rename <old> <new>            rename a collection
 arc collections delete <slug>                 delete a collection
   --force                                       skip confirmation
   --purge                                       also delete articles unique to this collection
-arc collections describe <slug> [text]        set collection description
+arc collections describe <slug> <text>        set collection description
 arc collections describe-all                  bulk edit descriptions
 arc collections generate-description <slug>   LLM-generate a description
 arc collections generate-description-all      generate descriptions for all
@@ -984,7 +987,7 @@ arc workspace new <name> [description]        create a workspace
 arc workspace list                            list workspaces
   --all                                         include archived
 arc workspace show <name>                     show workspace details
-arc workspace describe <name> [text]          set description
+arc workspace describe <name> <text>          set description
 arc workspace rename <old> <new>              rename workspace
 arc workspace system <name> [text]            set/view custom system prompt
 arc workspace archive <name>                  archive workspace

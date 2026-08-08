@@ -32,15 +32,24 @@ Filesystem is the source of truth. SQLite and vector indexes are derived — reb
     articles/<slug>/       One directory per article (flat, no nesting)
       body.txt
       meta.json
+      source.url / source.html
       summary.<style>.<model>.txt
       flash.<model>.txt
       flashcards.<style>.<model>.json
+    collections/<slug>/    Symlinks to article directories
+    cookies/                Netscape-format cookie jars for paywalled sites
     agent/
       config.jsonc         Feed list + interest profile
       state/               Per-feed GUID tracking
       runs.jsonl           Agent run log
     workspaces/<name>/
-      chat/history.jsonl
+      meta.json
+      articles/            Symlinks to articles
+      collections/         Symlinks to collections
+      chat/
+        config.jsonc       Chat configuration
+        corpus-map.txt     Cached corpus map for tool grounding
+        history.json       Conversation history
       system.txt           Custom system prompt
       resources/           Attached articles, PDFs, notes
       outcomes/            Generated output documents
@@ -61,7 +70,7 @@ By default arc stores everything under ~/.arc. Override with:
 Three provider backends, assignable per operation via profiles:
 
   OpenAI       gpt-4o-mini, gpt-4.1, gpt-5-mini
-  Anthropic    claude-opus-5, claude-sonnet-5, claude-haiku-4-5
+  Anthropic    claude-opus-5, claude-sonnet-5, claude-haiku-4-5-20251001
   Ollama       llama3.1:8b, qwen2.5-coder:7b (local, offline)
 
 Embedding: OpenAI text-embedding-3-small, via the oai-embed profile set in
