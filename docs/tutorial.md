@@ -1,84 +1,284 @@
 # Getting Started with arc
 
-## 1. Initialize
+## Part 0 — Prerequisites
 
-Run `arc init` to create your data directory and config:
+- macOS (arc currently builds/runs on macOS only)
+- Any terminal emulator — iTerm2, Terminal.app, Kitty, Alacritty, WezTerm, VS Code's integrated terminal all detected and supported
+- `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (OpenAI needed for `[vector]` results)
+- `pdftotext`
+- Ollama: no tool calling — workspace/agent steps need OpenAI or Anthropic
 
-  arc init
+## Part 1 — Install and first launch
 
-This creates ~/.arc/, writes a default config.jsonc, and walks you through API key setup.
+```
+brew install jrniemiec/arc/arc
+arc --version 
+```
 
-## 2. Set API keys
+`arc init` is a guided setup wizard — it creates `~/.arc`, then walks you through LLM providers, ingest pipeline, chat modes, and the optional agent. Re-running it later on an existing config offers to overwrite it.
 
-Set at least one API key in your shell profile:
+```
+arc init
+arc
+```
 
-  export OPENAI_API_KEY=sk-...
-  export ANTHROPIC_API_KEY=sk-ant-...
+- `Tab` / `Shift+Tab` — cycle focus: nav → content → open split pane → nav
+- `Alt+1` / `Alt+2` / `Alt+3` — jump straight to nav / content / tab bar
+- `Esc` — focus the command input; `Esc` again (with input empty) moves focus to nav
+- Panes and tabs are also clickable
+- Commands start with `/` — type `/` for completions, `/help` to list them
+- `?` — bindings for current view
+- `/?` — full binding list
 
-OpenAI is needed for embeddings (semantic search). Anthropic or OpenAI for summaries and chat.
+## Part 2 — First article
 
-## 3. Ingest your first article
+Parts 2–5 all happen in the nav pane's `Articles` sub-tab — the default on launch, no switching needed. Part 6 introduces the `Collections` and `Workspaces` sub-tabs.
 
-  arc ingest https://example.com/interesting-article
+`/ingest` runs the full pipeline on a URL: extract → summarize → flash → embed → index. Flashcards are generated on demand (Part 4), not during ingest.
 
-This runs the full pipeline: extract → summarize → flash → [flashcards] → embed → index.
+```
+/ingest https://arxiv.org/pdf/1706.03762
+```
 
-Flashcards are the one optional stage — `ingest.flashcards` is `false` by
-default, so no deck is generated unless you pass `--flashcards` or flip that
-setting. You can also add one later with `arc flashcards <slug> --write`.
+- `Enter` — open article
+- `h` / `l` (or `←` / `→`) — cycle body / summary / flash
+- `s` — read current section aloud
+- `o` — open original in browser
+- `?` — more bindings for this view
 
-## 4. Launch the TUI
+## Part 3 — Build the library
 
-  arc
+Ingest a few more articles to give the library something to organize and search across:
 
-No subcommand needed. The TUI is the primary interface. Use Tab to cycle panes, j/k to navigate, Enter to select.
+```
+/ingest https://jalammar.github.io/illustrated-transformer/
+/ingest https://nlp.seas.harvard.edu/annotated-transformer/
+/ingest https://lilianweng.github.io/posts/2023-01-27-the-transformer-family-v2/
+/ingest https://transformer-circuits.pub/2021/framework/index.html
+```
 
-## 5. Search your knowledge
+- `j` / `k` (or `↓` / `↑`) — navigate
+- `f` — favorite
+- `r` — mark read
+- `?` — more bindings for this view
 
-  arc search "attention mechanisms"
+## Part 4 — What one article gives you
 
-Hybrid search combining full-text (FTS5) and vector semantic search.
+- `c` — article chat: grounded on this article only (summary, no cross-article search or web tools); history persists per article
 
-## 6. Create a workspace
+Inside the chat, `/model <name>` switches the model; everything else you type is a plain chat query, not a command:
 
-Workspaces are research environments with persistent chat:
+```
+/model sonnet
+The article says the encoder-decoder attention layer works differently from the self-attention layers. What's the difference?
+Walk me through what happens to a single word as it moves through one encoder layer.
+```
 
-  arc workspace new "my research" "Exploring a topic"
-  arc workspace populate "my research"
+- `s` — speak the selected exchange aloud
+- `v` — fold/unfold the selected exchange
 
-The populate command uses an LLM to select relevant articles from your library.
+```
+/flashcards
+```
 
-## 7. Chat with your knowledge
+- `[Cards]` tab — questions visible, answers hidden
+- `space` — reveal one answer
+- `A` — reveal all / collapse
+- `?` — more bindings for this view
 
-In the TUI, navigate to a workspace and press 'c' to start chatting. The LLM has tools to search and read your articles.
+## Part 5 — Search across the library
 
-Or from the CLI:
+```
+/search positional encoding
+/search why do models forget earlier tokens
+```
 
-  arc workspace chat "my research"
+- Badges: `[fts]` keyword, `[vector]` semantic, `[both]`
 
-## 8. Set up the agent
+## Part 6 — Organize
 
-Configure RSS feeds in ~/.arc/agent/config.jsonc — by hand, or in the TUI with
-/feed-add and /feed-edit on the Agent Feeds sub-tab (/agent-config-edit opens the
-whole file). Then:
+Create the collection — **Collections** sub-tab:
 
-  arc agent run --dry-run    # preview what would be ingested
-  arc agent run              # ingest approved articles
+```
+/new transformers "Transformer internals — attention, positional encoding, interpretability - from the original attention mechanism to modern variants."
+```
 
-## Pipeline commands
+- `/new <slug> [description]` — description matters: it's what `arc collections assign` matches article titles against later
+- CLI equivalent: `arc collections create <slug>`
 
-Each ingestion stage is composable via Unix pipes:
+Add articles — **Articles** sub-tab, cursor on the article:
 
-  arc extract <url>                          extract text only
-  arc summarize [slug]                       generate summary
-  arc flash [slug]                           generate flash summary
-  arc flashcards [slug]                      generate flashcards
-  arc extract <url> | arc summarize          pipe extract into summarize
+```
+/collection-add transformers
+```
 
-## Reprocessing
+- One article per invocation; the article is the selected row
+- Picker shows `adding: <article-slug>` above the collection list
+- `/collection-remove transformers` — reverse, same context
 
-Regenerate summaries or re-fetch articles:
+Remove from the **Collections** sub-tab, cursor on the article inside the collection:
 
-  arc reprocess 20260521-article             reprocess one article
-  arc reprocess --all                        reprocess everything
-  arc reprocess --collection ml-papers       reprocess a collection
+- `U` — remove it from that collection
+- `/article-remove [<article-slug>]` — same, defaults to the selected row
+
+Bulk-fill one collection with AI — CLI (description already set at creation above):
+
+```
+arc collections assign transformers
+arc collections assign transformers --apply
+```
+
+- Dry-run by default; prints current members (capped at 10), then the proposals
+- Considers every article not already a member — `--limit N` / `--uncollected-fresh` narrow it
+- `arc collections show transformers` — members and description
+
+Whole library at once:
+
+```
+arc collections assign                # spread uncollected articles across all collections
+arc collections suggest               # propose new collections to create
+arc collections suggest --uncollected # per-article, reads flash summaries
+```
+
+## Part 7 — Workspace
+
+```
+/workspace new transformers
+```
+
+Attach an article — **Workspaces** sub-tab, cursor on the workspace:
+
+```
+/article-add <article-slug>
+```
+
+- Tab-complete the slug from your ingested articles
+
+Attach the collection — same context:
+
+```
+/collection-add transformers
+```
+
+Attach a non-article resource (notes file) — same context:
+
+```
+/resource-add ~/notes/transformer-questions.md
+```
+
+- `/resource-add <path|url> [--into <dir>] [--as <name>] [--comment "..."]` — copies a file/dir, or fetches a URL, into `workspace/resources/`
+
+## Part 8 — Configure the workspace chat
+
+```
+/model opus
+/mode open
+```
+
+- `/model opus` — switches the model; persists to this workspace, applies on the next message
+- `/mode open` — grounding: web search enabled (Anthropic only)
+- Grounding alternatives: `corpus-only`, `corpus-first` (default)
+
+## Part 9 — The payoff
+
+Start the workspace conversation:
+
+```
+Compare how the original Transformer paper and the annotated Transformer implementation handle positional encoding.
+What have people published on transformer architecture variants since 2024?
+```
+
+- First question spans multiple articles → `search_articles` tool call
+- Second needs current information → web search via `open` grounding
+
+Clean up and preserve the conversation — cursor on an exchange in the chat pane:
+
+- `x` — delete the selected exchange
+- `#` — comment out the selected exchange (excluded from the model's context, stays visible) — the closest thing to "turn into a note"; not the same as a `//`-prefixed note, which adds a new annotation rather than converting an existing message
+- `/outcome-save [name]` — save the conversation to `workspace/outcomes/` (defaults to a timestamped filename)
+
+## Part 10 — Optional: the agent
+
+The agent polls the feeds you configure, uses an LLM to filter each item against your interest profile, and ingests what's relevant — unattended library growth instead of manual `/ingest`.
+
+Create a feed — **Agent** tab, **Feeds** sub-tab:
+
+```
+/feed-add
+```
+
+Opens `$EDITOR` with a JSON template; fill it in and save:
+
+```json
+{
+  "name": "arXiv cs.CL",
+  "url": "https://rss.arxiv.org/rss/cs.CL",
+  "filter": "only papers about transformer architecture, attention mechanisms, or LLM internals",
+  "tags": [],
+  "disabled": false
+}
+```
+
+Run it for real — **Runs** sub-tab:
+
+```
+/agent-run
+```
+
+- Relevant items are ingested immediately; skipped items are left `pending` so you can act on them
+- Cursor on a pending item: `a` accept, `s` re-skip — the LLM's filter reasoning is shown under each item
+- `--dry-run` previews decisions without ingesting anything, but leaves nothing to accept/skip against — use the real run to get operable items
+
+Ingest anything you flipped to accept:
+
+```
+/agent-rerun
+```
+
+- `/agent-rerun` ingests everything left marked `+` from the selected run
+- `/agent-run` (no flags) does a fresh poll-and-ingest in one shot, skipping the review step
+
+Schedule it — CLI, outside the TUI:
+
+```
+# crontab: run the feed agent every morning at 7
+0 7 * * * /usr/local/bin/arc agent run
+```
+
+## Part 11 — Batch and automation (CLI)
+
+Every operation above has a CLI equivalent — scriptable, no TUI required. A few are CLI-only, being bulk or pipeline-shaped:
+
+```
+arc ingest --file reading-list.txt
+arc extract <url> | arc summarize --style bullets
+arc list --json | jq '.[] | select(.unread) | .title'
+arc embed --dry-run
+```
+
+Browse and read without the TUI:
+
+```
+arc list --unread
+arc read 20260807-the-annotated-transformer --summary
+```
+
+Regenerate an article after an edit, a source refetch, or a prompt change:
+
+```
+arc reprocess 20260807-the-annotated-transformer --clean
+arc reprocess --collection transformers
+arc reprocess --all --refetch
+```
+
+Mail yourself what the agent found — pipe to any mailer, `msmtp` here, already installed and configured with SMTP credentials:
+
+```
+arc agent digest | msmtp you@example.com
+```
+
+TTS voice and rate — `~/.arc/config.jsonc`:
+
+```json
+{ "tts_voice": "Samantha", "tts_rate": 200 }
+```

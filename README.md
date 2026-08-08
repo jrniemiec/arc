@@ -195,7 +195,7 @@ arc                                 # launch the TUI
 
 `arc init` creates `~/.arc/`, writes `~/.arc/config.jsonc` with all available LLM profiles and pricing notes, prints API key setup instructions, and validates the configuration.
 
-For a guided walkthrough of the full workflow (ingest → browse → search → organize → chat → agent), see [docs/guide.md](docs/guide.md).
+For a guided walkthrough of the full workflow (ingest → browse → search → organize → chat → agent), see [docs/tutorial.md](docs/tutorial.md).
 
 ---
 
