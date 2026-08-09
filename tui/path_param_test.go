@@ -46,9 +46,13 @@ func TestPathEntriesKeepsTypedPrefix(t *testing.T) {
 		t.Errorf("~/ = %v, want %v", got, want)
 	}
 
-	// Nothing typed yet starts at home, since that is where adds come from.
-	if got := itemNames(m.paramSuggestions("/resource-add", "")); len(got) != 2 || got[0] != "~/notes.md" {
-		t.Errorf("empty arg = %v, want the home listing", got)
+	// Nothing typed yet: no listing until an explicit trigger appears.
+	if got := m.paramSuggestions("/resource-add", ""); got != nil {
+		t.Errorf("empty arg = %v, want nil", got)
+	}
+	// A bare name with no separator is not a trigger either.
+	if got := m.paramSuggestions("/resource-add", "note"); got != nil {
+		t.Errorf("bare name = %v, want nil", got)
 	}
 
 	// $VAR expands for the lookup but stays in the value.
@@ -89,6 +93,54 @@ func TestPathEntriesHidesDotfilesUntilAsked(t *testing.T) {
 	if !found {
 		t.Error("dotfile missing after a dot was typed")
 	}
+}
+
+// Relative prefixes anchor at the arc doc root, not $HOME or the process's
+// launch directory, and only kick in once an explicit trigger is typed.
+func TestPathEntriesAnchorsAtArcRoot(t *testing.T) {
+	pathHome(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "articles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(root), "outside.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Model{input: textarea.New(), cfg: config.Config{DataRoot: root}}
+
+	// A bare relative name, with no separator typed, is not a trigger.
+	if got := m.paramSuggestions("/resource-add", "articles"); got != nil {
+		t.Errorf("bare relative name = %v, want nil", got)
+	}
+
+	// "./" is a trigger, and lists the arc root itself rather than $HOME or CWD.
+	got := itemNames(m.paramSuggestions("/resource-add", "./"))
+	want := []string{"./articles/", "./config.json"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("./ = %v, want %v", got, want)
+	}
+
+	// "../" is a trigger too, and walks up from the arc root, not $HOME or CWD.
+	if got := itemNames(m.paramSuggestions("/resource-add", "../")); !containsItem(got, "../outside.txt") {
+		t.Errorf("../ = %v, want it to include ../outside.txt", got)
+	}
+
+	// A plain "/" is unchanged: absolute paths still mean the filesystem root.
+	if got := m.paramSuggestions("/resource-add", "/"); got == nil {
+		t.Error("/ = nil, want the filesystem root listing")
+	}
+}
+
+func containsItem(items []string, want string) bool {
+	for _, it := range items {
+		if it == want {
+			return true
+		}
+	}
+	return false
 }
 
 // /outcome-add completes paths the same way, minus the flags a flat directory

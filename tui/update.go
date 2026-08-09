@@ -4722,23 +4722,37 @@ func (m *Model) pathSuggestions(cmd, arg string) []cmdCompletion {
 	if strings.HasPrefix(token, "http://") || strings.HasPrefix(token, "https://") {
 		return nil
 	}
-	return pathEntries(token)
+	return m.pathEntries(token)
 }
 
-// pathEntries lists the directory the typed path points into. The prefix is
-// kept exactly as typed, so ~ and $HOME survive into the input instead of being
-// replaced by an absolute path the user did not write.
-func pathEntries(token string) []cmdCompletion {
+// pathEntries lists the directory the typed path points into. It only scans
+// once an explicit trigger has been typed — a "/", a bare "~", or a "$VAR" —
+// so opening the picker does not itself go dig through a directory. The
+// prefix is kept exactly as typed, so ~, .., and $HOME survive into the
+// input instead of being replaced by an absolute path the user did not
+// write. Relative prefixes (../, sub/, ...) anchor at the arc doc root
+// rather than wherever the process happened to be launched from.
+func (m *Model) pathEntries(token string) []cmdCompletion {
 	dir, name := "", token
 	if idx := strings.LastIndex(token, "/"); idx >= 0 {
 		dir, name = token[:idx+1], token[idx+1:]
 	}
-	// Nothing typed yet: home is where nearly every add starts.
-	lookup := dir
-	if lookup == "" {
-		lookup = "~/"
+	switch {
+	case dir != "":
+		// Explicit / already typed — proceed below.
+	case token == "~":
+		dir = "~/"
+	default:
+		// Nothing that counts as a trigger yet: no listing.
+		return nil
 	}
-	entries, err := os.ReadDir(storefs.ExpandPath(lookup))
+
+	scan := dir
+	if !strings.HasPrefix(dir, "/") && !strings.HasPrefix(dir, "~") && !strings.Contains(dir, "$") {
+		scan = filepath.Join(m.cfg.DataRoot, dir) + "/"
+	}
+
+	entries, err := os.ReadDir(storefs.ExpandPath(scan))
 	if err != nil {
 		return nil
 	}
@@ -4748,7 +4762,7 @@ func pathEntries(token string) []cmdCompletion {
 		if strings.HasPrefix(e.Name(), ".") && !strings.HasPrefix(name, ".") {
 			continue
 		}
-		val := lookup + e.Name()
+		val := dir + e.Name()
 		desc := ""
 		if e.IsDir() {
 			val += "/"
