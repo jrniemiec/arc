@@ -2,6 +2,8 @@
 
 > Terminal-first personal knowledge OS. Filesystem-native, LLM-agnostic, keyboard-driven.
 
+See the [illustrated tutorial](docs/tutorial-illustrated.md) for a walkthrough of the full workflow.
+
 `arc` ingests articles, PDFs, RSS feeds, and local files, and distills each
 into a summary and a **flash** — a 3-5 sentence synthesis derived
 from the summary, useful for quick triage, RAG context, and audio playback. Content is indexed for hybrid

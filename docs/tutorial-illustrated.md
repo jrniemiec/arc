@@ -2,6 +2,8 @@
 
 > Illustrated version of the [tutorial](tutorial.md) — same steps, with screenshots.
 > If you're only editing prose, edit `tutorial.md` and mirror the change here.
+>
+> Screenshots are scaled down — click any of them to view full size.
 
 ## Part 0 — Prerequisites
 
