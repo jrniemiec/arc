@@ -125,10 +125,21 @@ Walk me through what happens to a single word as it moves through one encoder la
 - `A` — reveal all / collapse
 - `?` — more bindings for this view
 
+<a href="images/04-flashcards-answers.png">
+  <img src="images/04-flashcards-answers.png" alt="Cards tab with two answers revealed via space" width="900">
+</a>
+
 ## Part 5 — Search across the library
 
 ```
 /search positional encoding
+```
+
+<a href="images/05-search-fts-and-vector.png">
+  <img src="images/05-search-fts-and-vector.png" alt="Search results with a mix of [fts], [vector], and [both] badges" width="900">
+</a>
+
+```
 /search why do models forget earlier tokens
 ```
 
@@ -204,10 +215,6 @@ arc collections suggest --uncollected # per-article, reads flash summaries
 ```
 /workspace new transformers
 ```
-
-<a href="images/07-workspace-created.png">
-  <img src="images/07-workspace-created.png" alt="Newly created, empty transformers workspace prompting to type a message to start chatting" width="900">
-</a>
 
 Attach an article — **Workspaces** sub-tab, cursor on the workspace:
 
