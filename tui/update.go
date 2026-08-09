@@ -2844,30 +2844,10 @@ func (m *Model) triggerWorkspaceChatLoad() tea.Cmd {
 	}
 	row := m.wsRows[m.wsCursor]
 
-	// Article row — handle article chat auto-open/close.
+	// Article row — close article chat if we've navigated to a different article.
 	if row.kind == wsRowArticle && row.slug != "" {
 		if m.achatMode && row.slug != m.achatSlug {
 			m.exitArticleChat()
-		}
-		if !m.achatMode && !m.scratchOpen && !m.previewOpen && !m.askxOpen &&
-			m.achatHasChat[row.slug] {
-			// Find the navItem to get root path for content loading.
-			var item *navItem
-			for i := range m.navItemsAll {
-				if m.navItemsAll[i].id == row.slug {
-					item = &m.navItemsAll[i]
-					break
-				}
-			}
-			if item != nil {
-				m.achatMode = true
-				m.achatSlug = row.slug
-				m.achatFocused = false
-				m.achatAutoScroll = true
-				m.achatBoxCursor = 0
-				m.achatCollapsed = nil
-				return m.loadArticleChatHistoryCmd(row.slug)
-			}
 		}
 		return nil
 	}
@@ -2902,23 +2882,6 @@ func (m *Model) triggerCollectionContentLoad() tea.Cmd {
 	// Close article chat if we've navigated to a different article.
 	if m.achatMode && row.item.id != m.achatSlug {
 		m.exitArticleChat()
-	}
-	// Auto-open article chat if the new article has chat history
-	// and no other split pane is open.
-	if !m.achatMode && !m.scratchOpen && !m.previewOpen && !m.askxOpen &&
-		m.achatHasChat[row.item.id] {
-		m.achatMode = true
-		m.achatSlug = row.item.id
-		m.achatFocused = false
-		m.achatAutoScroll = true
-		m.achatBoxCursor = 0
-		m.achatCollapsed = nil
-		m.contentLoading = true
-		m.contentLines = nil
-		return tea.Batch(
-			m.loadContentFor(row.item.root),
-			m.loadArticleChatHistoryCmd(row.item.id),
-		)
 	}
 	m.contentLoading = true
 	m.contentLines = nil
@@ -4367,25 +4330,6 @@ func (m *Model) triggerContentLoad() tea.Cmd {
 			"item.id", item.id,
 			"achatSlug", m.achatSlug)
 		m.exitArticleChat()
-	}
-	// Auto-open article chat if the new article has chat history,
-	// no other split pane is open, and we're on articles/collections sub-tab.
-	if !m.achatMode && !m.scratchOpen && !m.previewOpen && !m.askxOpen &&
-		(m.navSubTab == navSubTabArticles || m.navSubTab == navSubTabCollections) &&
-		m.achatHasChat[item.id] {
-		m.achatMode = true
-		m.achatSlug = item.id
-		m.achatFocused = false
-		m.achatAutoScroll = true
-		m.achatBoxCursor = 0
-		m.achatCollapsed = nil
-		m.contentLoading = true
-		m.contentLines = nil
-		m.contentLineCursor = 0
-		return tea.Batch(
-			m.loadContentFor(item.root),
-			m.loadArticleChatHistoryCmd(item.id),
-		)
 	}
 	m.contentLoading = true
 	m.contentLines = nil
