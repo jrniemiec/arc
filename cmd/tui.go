@@ -28,8 +28,25 @@ var tuiCmd = &cobra.Command{
 	},
 }
 
+// requireCapableTerminal rejects launching the TUI on a terminal that can't
+// support it: not a tty (piped/redirected), or a tty with no usable cursor
+// addressing (TERM unset or "dumb" — e.g. Emacs' M-x shell, which allocates
+// a real pty via comint but doesn't implement raw-mode escapes).
+func requireCapableTerminal() error {
+	if !isTTY(os.Stdout) || !isTTY(os.Stdin) {
+		return fmt.Errorf("arc's TUI requires an interactive terminal (stdin/stdout is not a tty)")
+	}
+	if term := os.Getenv("TERM"); term == "" || term == "dumb" {
+		return fmt.Errorf("arc's TUI requires a capable terminal (TERM=%q is not supported, e.g. Emacs shell-mode); run arc's CLI subcommands there instead", term)
+	}
+	return nil
+}
+
 // runTUI launches the TUI. Used by both rootCmd (bare "arc") and tuiCmd ("arc tui").
 func runTUI(cmd *cobra.Command) error {
+	if err := requireCapableTerminal(); err != nil {
+		return err
+	}
 	svc := svcFrom(cmd)
 	cfg := cfgFrom(cmd)
 	themeMode := cfg.Theme
