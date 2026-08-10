@@ -5255,6 +5255,8 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return m.cmdWorkspaceProfile(arg)
 	case "/correction-profile", "/correction-model":
 		return m.cmdCorrectionProfile(arg)
+	case "/theme":
+		return m.cmdTheme(arg)
 	case "/log", "/logs":
 		return m.cmdLog()
 	case "/chats-archive":
@@ -7308,6 +7310,27 @@ func (m *Model) cmdWorkspaceProfile(arg string) tea.Cmd {
 	return nil
 }
 
+// cmdTheme shows or sets the active TUI theme. Session-only: it re-runs
+// ApplyTheme + AdjustThemeForTerminal in memory and does not persist to
+// config.jsonc — restart falls back to the configured/detected theme.
+func (m *Model) cmdTheme(arg string) tea.Cmd {
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	if arg == "" {
+		m.statusMsg = "theme: " + ActiveThemeName
+		return nil
+	}
+	switch arg {
+	case "light", "dark", "auto":
+	default:
+		m.setStatusError("✗ unknown theme: " + arg + " (light|dark|auto)")
+		return nil
+	}
+	ApplyTheme(arg)
+	AdjustThemeForTerminal()
+	m.statusMsg = "theme → " + ActiveThemeName
+	return nil
+}
+
 // cmdCorrectionProfile shows or sets the profile used for Ctrl+G input corrections.
 // The change is persisted to config.jsonc so it survives restarts.
 func (m *Model) cmdCorrectionProfile(arg string) tea.Cmd {
@@ -9119,6 +9142,7 @@ var helpGroups = []struct {
 		{"/chat-profile", "[name]", "show or set global article chat profile (persisted to config; alias: /chat-model)"},
 		{"/correction-profile", "[name]", "show or set correction profile for Ctrl+G (persisted to config; alias: /correction-model)"},
 		{"/arc-home", "", "show active arc data root"},
+		{"/theme", "[light|dark|auto]", "show or set TUI theme (session-only, not persisted)"},
 		{"/config", "", "show resolved configuration"},
 		{"/config-view", "", "view config.jsonc in overlay"},
 		{"/config-edit", "", "open config.jsonc in $EDITOR"},

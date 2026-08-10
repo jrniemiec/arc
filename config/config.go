@@ -81,6 +81,11 @@ type Config struct {
 	// Logging
 	LogPath  string `json:"log_path,omitempty"`  // default: <DataRoot>/arc.log
 	LogLevel string `json:"log_level,omitempty"` // debug|info|warn|error; default: info
+
+	// Theme selects the TUI color theme: "auto" (detect from terminal
+	// background), "light", or "dark". The --theme flag overrides this
+	// when passed explicitly.
+	Theme string `json:"theme"`
 }
 
 // ChatConfig holds the configuration for a workspace chat session.
@@ -924,6 +929,7 @@ func Default() Config {
 		DBPath:       filepath.Join(dataRoot, "arc.db"),
 		VectorPath:   filepath.Join(dataRoot, "index"),
 		EventsPath:   filepath.Join(dataRoot, "events.jsonl"),
+		Theme:        "auto",
 		Profiles:     builtinProfiles,
 		Search: SearchConfig{
 			MinSimilarity: DefaultMinSimilarity,
@@ -1033,6 +1039,7 @@ func Load(path string) (Config, error) {
 		LogLevel          string                  `json:"log_level"`
 		CorrectionProfile string                  `json:"correction_profile"`
 		CorrectionPrompt  string                  `json:"correction_prompt"`
+		Theme             string                  `json:"theme"`
 	}
 	if err := jsonc.Unmarshal(data, &overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -1225,6 +1232,9 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.CorrectionPrompt != "" {
 		cfg.CorrectionPrompt = overlay.CorrectionPrompt
+	}
+	if overlay.Theme != "" {
+		cfg.Theme = overlay.Theme
 	}
 
 	return cfg, nil

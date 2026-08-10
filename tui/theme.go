@@ -66,6 +66,13 @@ type Theme struct {
 	ChatHeader    lipgloss.Color // markdown heading text
 	ChatQuote     lipgloss.Color // blockquote text
 	ChatCode      lipgloss.Color // inline/block code text
+
+	// Focus / cursor indicators (only colors that need contrast on both
+	// dark and light backgrounds — everything else is theme-neutral gold
+	// elsewhere in the codebase).
+	FocusMark lipgloss.Color // nav/list selection indicator (▌)
+	CursorBg  lipgloss.Color // input text-cursor block background
+	CursorFg  lipgloss.Color // input text-cursor block foreground
 }
 
 // Nord is a cool-blues dark theme based on the Nord palette.
@@ -105,6 +112,10 @@ var Nord = Theme{
 	ChatHeader:    "#88C0D0", // nord8 — cyan for headings
 	ChatQuote:     "#8890A0", // mid-gray (was #4C566A nord3) — dimmed for blockquotes
 	ChatCode:      "#EBCB8B", // nord13 — yellow for code
+
+	FocusMark: "#FFD700", // gold
+	CursorBg:  "#FFD700", // gold
+	CursorFg:  "#000000", // black
 }
 
 // ClaudeCode approximates the color palette used by Claude Code's TUI.
@@ -183,43 +194,62 @@ var Light = Theme{
 	ChatHeader:    "#1A5E8A", // dark blue for headings
 	ChatQuote:     "#9A9A9A", // muted for blockquotes
 	ChatCode:      "#8A5E00", // dark amber for code
+
+	FocusMark: "#5A2D9A", // purple
+	CursorBg:  "#5A2D9A", // purple
+	CursorFg:  "#FFFFFF", // white
 }
 
 // ActiveTheme is the theme used by all view functions.
 var ActiveTheme = Nord
+
+// ActiveThemeName is the resolved theme mode ("light" or "dark") behind
+// ActiveTheme. Tracked separately because AdjustThemeForTerminal mutates
+// ActiveTheme's fields in place, so the struct itself can no longer be
+// compared against Light/Nord to recover which mode is active.
+var ActiveThemeName = "dark"
 
 // ApplyTheme sets ActiveTheme from a mode string: "light", "dark", or "auto".
 func ApplyTheme(mode string) {
 	switch strings.ToLower(mode) {
 	case "light":
 		ActiveTheme = Light
+		ActiveThemeName = "light"
 	case "dark":
 		ActiveTheme = Nord
+		ActiveThemeName = "dark"
 	default:
 		DetectTheme()
 	}
 }
 
-// DetectTheme sets ActiveTheme based on terminal-specific heuristics.
+// DetectTheme sets ActiveTheme by querying the terminal background.
+// Tries OSC 11 first regardless of terminal — most emulators answer it —
+// and falls back to COLORFGBG only when the query goes unanswered.
+// Defaults to dark otherwise. Idempotent: always resets ActiveTheme before
+// detecting, so repeated calls (e.g. /theme auto after /theme light) work.
 func DetectTheme() {
-	switch ActiveTerminal {
-	case TermITerm2:
-		fgbg := os.Getenv("COLORFGBG")
-		if fgbg == "" {
-			return
-		}
-		parts := strings.SplitN(fgbg, ";", 2)
-		if len(parts) != 2 {
-			return
-		}
-		var bg int
-		fmt.Sscanf(parts[1], "%d", &bg)
-		if bg >= 8 {
+	ActiveTheme = Nord
+	ActiveThemeName = "dark"
+	if light, ok := queryBackgroundLight(); ok {
+		if light {
 			ActiveTheme = Light
+			ActiveThemeName = "light"
 		}
-	case TermApple:
-		if queryBackgroundLight() {
-			ActiveTheme = Light
-		}
+		return
+	}
+	fgbg := os.Getenv("COLORFGBG")
+	if fgbg == "" {
+		return
+	}
+	parts := strings.SplitN(fgbg, ";", 2)
+	if len(parts) != 2 {
+		return
+	}
+	var bg int
+	fmt.Sscanf(parts[1], "%d", &bg)
+	if bg >= 8 {
+		ActiveTheme = Light
+		ActiveThemeName = "light"
 	}
 }

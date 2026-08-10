@@ -30,9 +30,12 @@ var tuiCmd = &cobra.Command{
 
 // runTUI launches the TUI. Used by both rootCmd (bare "arc") and tuiCmd ("arc tui").
 func runTUI(cmd *cobra.Command) error {
-	themeMode, _ := cmd.Flags().GetString("theme")
 	svc := svcFrom(cmd)
 	cfg := cfgFrom(cmd)
+	themeMode := cfg.Theme
+	if cmd.Flags().Changed("theme") {
+		themeMode, _ = cmd.Flags().GetString("theme")
+	}
 
 	// Resolve the config file path so the TUI can patch fields in place.
 	cfgPath := cfgFile

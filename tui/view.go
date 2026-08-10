@@ -68,12 +68,38 @@ func reverse(text string) string {
 	return "\033[7m" + text + "\033[0m"
 }
 
+// bgSeq returns the raw ANSI escape (no reset) for a background color,
+// truecolor or ANSI-256 depending on how the color was specified.
+func bgSeq(col lipgloss.Color) string {
+	s := string(col)
+	if r, g, b, ok := hexToRGB(s); ok {
+		return fmt.Sprintf("\033[48;2;%d;%d;%dm", r, g, b)
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return fmt.Sprintf("\033[48;5;%dm", n)
+	}
+	return ""
+}
+
+// fgSeq returns the raw ANSI escape (no reset) for a foreground color,
+// truecolor or ANSI-256 depending on how the color was specified.
+func fgSeq(col lipgloss.Color) string {
+	s := string(col)
+	if r, g, b, ok := hexToRGB(s); ok {
+		return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return fmt.Sprintf("\033[38;5;%dm", n)
+	}
+	return ""
+}
+
 // navSelected renders a selected nav row.
 // When the nav pane (or nav sub-tab) has focus, the yellow ▌ indicator is shown.
 // Otherwise the item stays reverse-video (selected) but the indicator moves away.
 func (m Model) navSelected(text string) string {
 	if m.focus == paneNav || m.focus == paneNavSubTab {
-		return fg("#FFD700", "▌") + reverse(text)
+		return fg(ActiveTheme.FocusMark, "▌") + reverse(text)
 	}
 	return reverse(text)
 }
@@ -1547,7 +1573,7 @@ func (m Model) renderContentLibrary(height, width int) []string {
 				if isCursor && wi == 0 {
 					markerColor := lipgloss.Color(t.InputPrompt)
 					if m.focus == paneContent {
-						markerColor = "#FFD700"
+						markerColor = t.FocusMark
 					}
 					lines = append(lines, fgBold(markerColor, "▶ ")+fg(t.TopBarText, wl))
 				} else if isCursor {
@@ -2191,7 +2217,7 @@ func (m Model) renderContentAgentFeeds(height, width int) []string {
 				statsText := fmt.Sprintf("    run %s", rec.RunID)
 				if selected {
 					rowLines = append(rowLines, rowLine{curNavPos,
-						fg("#FFD700", fmt.Sprintf("  %s ", arrow)) + fgBold(t.Accent, date+fmt.Sprintf("   +%d  maybe:%d  skip:%d", ingest, maybe, skip))})
+						fg(t.FocusMark, fmt.Sprintf("  %s ", arrow)) + fgBold(t.Accent, date+fmt.Sprintf("   +%d  maybe:%d  skip:%d", ingest, maybe, skip))})
 				} else {
 					rowLines = append(rowLines, rowLine{curNavPos, fg(t.ContentText, label)})
 				}
@@ -2214,7 +2240,7 @@ func (m Model) renderContentAgentFeeds(height, width int) []string {
 			iconPart := fg(iconCol, "    "+icon+" ")
 			titlePart := fg(t.ContentText, r.title)
 			if selected {
-				iconPart = fg("#FFD700", "▌") + fg(iconCol, "   "+icon+" ")
+				iconPart = fg(t.FocusMark, "▌") + fg(iconCol, "   "+icon+" ")
 				titlePart = fgBold(t.ContentText, r.title)
 			}
 			rowLines = append(rowLines, rowLine{curNavPos, iconPart + titlePart})
@@ -2389,7 +2415,7 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 			text := fmt.Sprintf("  %s %s%s", arrow, r.feedName, feedErr)
 			statsText := "    " + r.feedStats
 			if selected {
-				arrowColored := fg("#FFD700", fmt.Sprintf("  %s ", arrow)) + fgBold(t.Accent, r.feedName+feedErr)
+				arrowColored := fg(t.FocusMark, fmt.Sprintf("  %s ", arrow)) + fgBold(t.Accent, r.feedName+feedErr)
 				rowLines = append(rowLines, rowLine{curNavPos, arrowColored})
 				rowLines = append(rowLines, rowLine{-1, fg(t.ContentDimmed, statsText)})
 			} else {
@@ -2416,7 +2442,7 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 			iconPart := fg(iconCol, "    "+icon+" ")
 			titlePart := fg(t.ContentText, r.title)
 			if selected {
-				iconPart = fg("#FFD700", "▌") + fg(iconCol, "   "+icon+" ")
+				iconPart = fg(t.FocusMark, "▌") + fg(iconCol, "   "+icon+" ")
 				titlePart = fgBold(t.ContentText, r.title)
 			}
 			rowLines = append(rowLines, rowLine{curNavPos, iconPart + titlePart})
@@ -3009,8 +3035,8 @@ func (m Model) renderCommandInput() string {
 					}
 					var cursorSeq string
 					if m.cursorVisible {
-						// Yellow background block cursor — visible even on a space character.
-						cursorSeq = "\033[48;2;255;215;0m\033[30m" + curChar + "\033[0m"
+						// Solid background block cursor — visible even on a space character.
+						cursorSeq = bgSeq(t.CursorBg) + fgSeq(t.CursorFg) + curChar + "\033[0m"
 					} else {
 						cursorSeq = fg(t.InputText, curChar)
 						if curChar == " " {
@@ -3476,7 +3502,7 @@ func (m Model) renderContentHelp(height, width int) []string {
 			if isCursor && wi == 0 {
 				markerColor := lipgloss.Color(t.InputPrompt)
 				if m.focus == paneContent {
-					markerColor = "#FFD700"
+					markerColor = t.FocusMark
 				}
 				lines = append(lines, fgBold(markerColor, "▶ ")+fg(t.TopBarText, wl))
 			} else if isCursor {

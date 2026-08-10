@@ -47,14 +47,17 @@ func DetectTerminal() {
 	}
 }
 
-// queryBackgroundLight sends an OSC 11 query to the terminal and returns true
-// if the background color luminance indicates a light theme.
+// queryBackgroundLight sends an OSC 11 query to the terminal and reports
+// whether the background color luminance indicates a light theme. ok is
+// false when the terminal gave no usable answer (unopenable tty, ioctl
+// failure, no response, or an unparseable reply) — distinct from a real
+// "dark" read, so callers can fall back instead of assuming dark.
 // Reads synchronously using VTIME so the response is always fully consumed
 // before bubbletea starts — no leakage into keyboard input.
-func queryBackgroundLight() bool {
+func queryBackgroundLight() (light, ok bool) {
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer tty.Close()
 	fd := int(tty.Fd())
@@ -63,7 +66,7 @@ func queryBackgroundLight() bool {
 	var oldState syscall.Termios
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd),
 		syscall.TIOCGETA, uintptr(unsafe.Pointer(&oldState))); errno != 0 {
-		return false
+		return false, false
 	}
 	// Raw mode: no echo, no canonical, VMIN=0, VTIME=2 (200ms timeout per read).
 	raw := oldState
@@ -103,17 +106,21 @@ func queryBackgroundLight() bool {
 		}
 	}
 
+	if resp.Len() == 0 {
+		return false, false // VTIME expired with no bytes at all — unanswered.
+	}
+
 	// Parse: \033]11;rgb:RRRR/GGGG/BBBB\007
 	s := resp.String()
 	idx := strings.Index(s, "rgb:")
 	if idx < 0 {
-		return false
+		return false, false
 	}
 	rgb := s[idx+4:]
 	rgb = strings.TrimRight(rgb, "\007\033\\")
 	parts := strings.Split(strings.TrimSpace(rgb), "/")
 	if len(parts) != 3 || len(parts[0]) < 2 {
-		return false
+		return false, false
 	}
 	// Components are 4 hex digits (0000–FFFF). High byte gives 0–255.
 	var r, g, b int
@@ -123,7 +130,7 @@ func queryBackgroundLight() bool {
 
 	// Perceived luminance — light if > 127.
 	luminance := (r*299 + g*587 + b*114) / 1000
-	return luminance > 127
+	return luminance > 127, true
 }
 
 // AdjustThemeForTerminal overrides theme colors that don't render correctly
@@ -154,6 +161,18 @@ func AdjustThemeForTerminal() {
 			ActiveTheme.Accent             = lipgloss.Color("31")
 			ActiveTheme.BoxBorder          = lipgloss.Color("31")
 			ActiveTheme.Dimmed             = lipgloss.Color("245")
+			ActiveTheme.FocusMark          = lipgloss.Color("55")  // dark purple
+			ActiveTheme.CursorBg           = lipgloss.Color("55")
+			ActiveTheme.CursorFg           = lipgloss.Color("255") // white
+			ActiveTheme.StatusError        = lipgloss.Color("160") // red
+			ActiveTheme.Favorite           = lipgloss.Color("136") // dark goldenrod
+			ActiveTheme.Pinned             = lipgloss.Color("55")  // dark purple
+			ActiveTheme.StreamingText      = lipgloss.Color("31")  // dark cyan
+			ActiveTheme.ChatUser           = lipgloss.Color("28")  // dark green
+			ActiveTheme.ChatAssistant      = lipgloss.Color("235") // near-black
+			ActiveTheme.ChatHeader         = lipgloss.Color("24")  // dark blue
+			ActiveTheme.ChatQuote          = lipgloss.Color("245") // gray
+			ActiveTheme.ChatCode           = lipgloss.Color("94")  // dark amber
 		default: // Nord
 			ActiveTheme.TopBarText         = lipgloss.Color("183") // light purple
 			ActiveTheme.TabActive          = lipgloss.Color("183")
@@ -174,6 +193,18 @@ func AdjustThemeForTerminal() {
 			ActiveTheme.Accent             = lipgloss.Color("116")
 			ActiveTheme.BoxBorder          = lipgloss.Color("116")
 			ActiveTheme.Dimmed             = lipgloss.Color("241")
+			ActiveTheme.FocusMark          = lipgloss.Color("220") // gold
+			ActiveTheme.CursorBg           = lipgloss.Color("220")
+			ActiveTheme.CursorFg           = lipgloss.Color("16")  // black
+			ActiveTheme.StatusError        = lipgloss.Color("167") // red
+			ActiveTheme.Favorite           = lipgloss.Color("214") // amber
+			ActiveTheme.Pinned             = lipgloss.Color("183") // light purple
+			ActiveTheme.StreamingText      = lipgloss.Color("116") // light cyan
+			ActiveTheme.ChatUser           = lipgloss.Color("108") // green
+			ActiveTheme.ChatAssistant      = lipgloss.Color("253") // soft white
+			ActiveTheme.ChatHeader         = lipgloss.Color("116") // light cyan
+			ActiveTheme.ChatQuote          = lipgloss.Color("241") // mid-gray
+			ActiveTheme.ChatCode           = lipgloss.Color("222") // yellow
 		}
 	}
 }
