@@ -3011,7 +3011,9 @@ func (m *Model) openWorkspaceFile(wsIdx int, subdir, filename string) tea.Cmd {
 		check = check[:512]
 	}
 	if !utf8.Valid(check) {
-		m.setStatusError(fmt.Sprintf("%q is not a text file", filename))
+		openPathExternal(filePath)
+		m.statusMsg = fmt.Sprintf("✓ opened %q externally — binary file", filename)
+		m.statusErr = false
 		return nil
 	}
 	const maxBytes = 200 * 1024
@@ -3139,9 +3141,13 @@ func (m *Model) openWsFileExternal() tea.Cmd {
 			return openInChrome(rawURL)
 		}
 	}
-	cmd := exec.Command("open", path)
-	cmd.Start()
+	openPathExternal(path)
 	return nil
+}
+
+// openPathExternal opens path with the OS default application (e.g. Preview for PDFs).
+func openPathExternal(path string) {
+	exec.Command("open", path).Start()
 }
 
 // readURLStub reads the first line of a .url stub file (the URL), or "" on error.
@@ -3156,7 +3162,8 @@ func readURLStub(path string) string {
 
 // viewWsFileInTerminal opens the selected resource/outcome in an external terminal window.
 // viewWsFileInOverlay reads the selected workspace resource/outcome and opens it
-// in the in-TUI resource overlay. Falls back to external terminal for binary files.
+// in the in-TUI resource overlay. Falls back to opening externally (OS default app)
+// for binary files.
 func (m *Model) viewWsFileInOverlay() tea.Cmd {
 	row := m.selectedWsRow()
 	if row == nil {
@@ -3173,6 +3180,16 @@ func (m *Model) viewWsFileInOverlay() tea.Cmd {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("view: %v", err))
+		return nil
+	}
+	check := data
+	if len(check) > 512 {
+		check = check[:512]
+	}
+	if !utf8.Valid(check) {
+		openPathExternal(path)
+		m.statusMsg = fmt.Sprintf("✓ opened %q externally — binary file", name)
+		m.statusErr = false
 		return nil
 	}
 	m.openResourceOverlay(name, string(data))

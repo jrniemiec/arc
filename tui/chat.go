@@ -2254,7 +2254,8 @@ func (m *Model) cmdOutcomeView(name string) {
 		return
 	}
 	dir := filepath.Join(storefs.WorkspaceDir(m.cfg.DataRoot, m.chatWorkspace), "outcomes")
-	data, err := os.ReadFile(filepath.Join(dir, name))
+	filePath := filepath.Join(dir, name)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("outcome %q not found", name))
 		return
@@ -2265,7 +2266,9 @@ func (m *Model) cmdOutcomeView(name string) {
 		check = check[:512]
 	}
 	if !utf8.Valid(check) {
-		m.setStatusError(fmt.Sprintf("%q is not a text file", name))
+		openPathExternal(filePath)
+		m.statusMsg = fmt.Sprintf("✓ opened %q externally — binary file", name)
+		m.statusErr = false
 		return
 	}
 	const maxBytes = 200 * 1024
@@ -2362,7 +2365,9 @@ func (m *Model) cmdResourceView(name string) {
 		check = check[:512]
 	}
 	if !utf8.Valid(check) {
-		m.setStatusError(fmt.Sprintf("%q is not a text file", name))
+		openPathExternal(filePath)
+		m.statusMsg = fmt.Sprintf("✓ opened %q externally — binary file", name)
+		m.statusErr = false
 		return
 	}
 	const maxBytes = 200 * 1024
