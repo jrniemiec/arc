@@ -84,6 +84,7 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 	}
 	cols, _ := fs.ListWorkspaceCollections(s.cfg.DataRoot, m.Name)
 	resources, _ := fs.ListWorkspaceResources(s.cfg.DataRoot, m.Name)
+	resourceCount, _ := fs.CountWorkspaceResources(s.cfg.DataRoot, m.Name)
 	outcomes, _ := fs.ListWorkspaceOutcomes(s.cfg.DataRoot, m.Name)
 	chatCfg, _ := fs.ReadChatConfig(s.cfg.DataRoot, m.Name)
 
@@ -108,7 +109,7 @@ func (s *Service) buildWorkspaceInfo(m fs.WorkspaceMeta) (WorkspaceInfo, error) 
 		CreatedAt:            m.CreatedAt,
 		ArticleCount:         len(articles),
 		CollectionCount:      len(cols),
-		ResourceCount:        len(resources),
+		ResourceCount:        resourceCount,
 		OutcomeCount:         len(outcomes),
 		HasSystem:            hasSystemErr == nil,
 		HasHistory:           hasHistoryErr == nil,
@@ -352,7 +353,7 @@ func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName str
 	for _, p := range paths {
 		var err error
 		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-			_, err = fs.AddURLResource(s.cfg.DataRoot, workspaceName, p, "", comment)
+			_, err = fs.AddURLResource(s.cfg.DataRoot, workspaceName, p, into, "", comment)
 		} else {
 			// Expand ~ and $VAR before stat: a quoted CLI argument and every
 			// path typed in the TUI arrive without a shell having done it.

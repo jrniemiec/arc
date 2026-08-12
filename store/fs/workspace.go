@@ -866,9 +866,9 @@ func AddDirResource(dataRoot, workspaceName, srcPath, into string) (string, erro
 	return relPath, nil
 }
 
-// AddURLResource writes a .url stub file containing the URL into workspace/resources/.
-// Returns the basename of the stored stub file.
-func AddURLResource(dataRoot, workspaceName, rawURL, customName, comment string) (string, error) {
+// AddURLResource writes a .url stub file containing the URL into workspace/resources/[into/].
+// Returns the basename of the stored stub file (including the into prefix, if any).
+func AddURLResource(dataRoot, workspaceName, rawURL, into, customName, comment string) (string, error) {
 	basename := urlToBasename(rawURL)
 	if customName != "" {
 		basename = customName
@@ -876,10 +876,16 @@ func AddURLResource(dataRoot, workspaceName, rawURL, customName, comment string)
 			basename += ".url"
 		}
 	}
-	destPath := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", basename)
+	resDir := filepath.Join(WorkspaceDir(dataRoot, workspaceName), "resources", into)
+	if into != "" {
+		if err := os.MkdirAll(resDir, 0755); err != nil {
+			return "", fmt.Errorf("create resource subdir: %w", err)
+		}
+	}
+	destPath := filepath.Join(resDir, basename)
 
 	if _, err := os.Stat(destPath); err == nil {
-		return "", fmt.Errorf("resource %q already exists in workspace", basename)
+		return "", fmt.Errorf("resource %q already exists in workspace", filepath.Join(into, basename))
 	}
 
 	content := rawURL + "\n"
@@ -889,7 +895,7 @@ func AddURLResource(dataRoot, workspaceName, rawURL, customName, comment string)
 	if err := os.WriteFile(destPath, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("write url stub: %w", err)
 	}
-	return basename, nil
+	return filepath.Join(into, basename), nil
 }
 
 // RemoveWorkspaceResource removes a file or directory from workspace/resources/.
@@ -941,6 +947,29 @@ func ListWorkspaceResources(dataRoot, name string) ([]ResourceEntry, error) {
 		resources = append(resources, re)
 	}
 	return resources, nil
+}
+
+// CountWorkspaceResources recursively counts resource files under
+// workspace/resources/, at any depth. Directories themselves are not counted.
+func CountWorkspaceResources(dataRoot, name string) (int, error) {
+	dir := filepath.Join(WorkspaceDir(dataRoot, name), "resources")
+	count := 0
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !d.IsDir() {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count workspace resources: %w", err)
+	}
+	return count, nil
 }
 
 // ListWorkspaceDirResources returns entries inside a subdirectory of workspace/resources/.

@@ -1859,6 +1859,12 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return m.openArticleOverlay(m.selectedNavItem())
 	case m.activeTab == tabLibrary && msg.String() == "O":
+		if m.navSubTab == navSubTabWorkspaces {
+			row := m.selectedWsRow()
+			if row != nil && row.kind == wsRowResourceDir {
+				return m.openWsFileExternal()
+			}
+		}
 		return m.openCurrentURLNoTrack()
 	case m.activeTab == tabLibrary && msg.String() == "U":
 		if m.navSubTab == navSubTabWorkspaces {
@@ -9216,6 +9222,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"f / *", "", "toggle pin"},
 		{"!", "", "toggle workspace focus"},
 		{"o", "", "open resource or source URL"},
+		{"O", "", "reveal resource folder in Finder"},
 		{"v", "", "view resource/scratch/article in overlay"},
 		{"e", "", "edit resource/outcome/scratch in $EDITOR"},
 		{"D", "", "delete workspace / selected item"},

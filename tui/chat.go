@@ -1780,7 +1780,7 @@ func (m *Model) cmdResourceAdd(rawArgs string) tea.Cmd {
 	return func() tea.Msg {
 		// URL resource — no file stat needed.
 		if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-			name, err := storefs.AddURLResource(cfg.DataRoot, ws, path, asName, comment)
+			name, err := storefs.AddURLResource(cfg.DataRoot, ws, path, into, asName, comment)
 			if err != nil {
 				return cmdDoneMsg{err: "resource-add: " + err.Error()}
 			}
