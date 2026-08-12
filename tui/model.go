@@ -2175,10 +2175,11 @@ func (m Model) buildWsRows() []wsRow {
 		}
 
 		// Resources folder (always visible, like collections).
-		rows = append(rows, wsRow{kind: wsRowResourceGroup, wsIdx: i, count: len(ws.resources) + len(ws.resourceDirs)})
+		rows = append(rows, wsRow{kind: wsRowResourceGroup, wsIdx: i, count: ws.resourceCount})
 		if ws.resourcesExpanded {
 			for _, dirName := range ws.resourceDirs {
-				rows = append(rows, wsRow{kind: wsRowResourceDir, wsIdx: i, resourceName: dirName})
+				count, _ := storefs.CountWorkspaceDirResources(m.cfg.DataRoot, ws.name, dirName)
+				rows = append(rows, wsRow{kind: wsRowResourceDir, wsIdx: i, resourceName: dirName, count: count})
 				if ws.expandedResourceDirs[dirName] {
 					rows = m.appendResourceDirRows(rows, i, ws, dirName)
 				}
@@ -2228,7 +2229,8 @@ func (m Model) appendResourceDirRows(rows []wsRow, wsIdx int, ws workspaceItem, 
 	}
 	for _, e := range entries {
 		if e.IsDir {
-			rows = append(rows, wsRow{kind: wsRowResourceDir, wsIdx: wsIdx, resourceName: e.Name})
+			count, _ := storefs.CountWorkspaceDirResources(m.cfg.DataRoot, ws.name, e.Name)
+			rows = append(rows, wsRow{kind: wsRowResourceDir, wsIdx: wsIdx, resourceName: e.Name, count: count})
 			if ws.expandedResourceDirs[e.Name] {
 				rows = m.appendResourceDirRows(rows, wsIdx, ws, e.Name)
 			}

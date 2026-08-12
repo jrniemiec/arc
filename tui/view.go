@@ -1043,11 +1043,12 @@ func (m Model) renderNavWorkspaces(maxLines int) []string {
 				arrow = "▼ "
 			}
 			dirName := filepath.Base(row.resourceName)
-			label = truncate(indent+arrow+dirName, w-1)
+			countSuffix := fmt.Sprintf(" (%d)", row.count)
+			label = truncate(indent+arrow+dirName+countSuffix, w-1)
 			if selected {
 				label = m.navSelected(label)
 			} else {
-				label = fg(t.NavDimmed, indent) + fg(t.NavText, arrow+dirName)
+				label = fg(t.NavDimmed, indent) + fg(t.NavText, arrow+dirName+countSuffix)
 			}
 
 		case wsRowResource:

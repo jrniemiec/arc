@@ -952,7 +952,15 @@ func ListWorkspaceResources(dataRoot, name string) ([]ResourceEntry, error) {
 // CountWorkspaceResources recursively counts resource files under
 // workspace/resources/, at any depth. Directories themselves are not counted.
 func CountWorkspaceResources(dataRoot, name string) (int, error) {
-	dir := filepath.Join(WorkspaceDir(dataRoot, name), "resources")
+	return CountWorkspaceDirResources(dataRoot, name, "")
+}
+
+// CountWorkspaceDirResources recursively counts resource files under a
+// subdirectory of workspace/resources/ (relDir relative to resources/, ""
+// for resources/ itself), at any depth. Directories themselves are not
+// counted.
+func CountWorkspaceDirResources(dataRoot, name, relDir string) (int, error) {
+	dir := filepath.Join(WorkspaceDir(dataRoot, name), "resources", relDir)
 	count := 0
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -967,7 +975,7 @@ func CountWorkspaceResources(dataRoot, name string) (int, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("count workspace resources: %w", err)
+		return 0, fmt.Errorf("count workspace dir resources: %w", err)
 	}
 	return count, nil
 }
