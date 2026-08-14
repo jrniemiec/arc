@@ -4034,6 +4034,26 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 				}
 				return m.sendArticleChatMsg(val)
 			}
+			if m.scratchInputMode {
+				if strings.HasPrefix(val, "/") {
+					return m.dispatchCommand(val)
+				}
+				if val == "" {
+					return nil
+				}
+				ws := m.scratchWorkspace()
+				if err := storefs.AppendScratch(m.cfg.DataRoot, ws, val); err != nil {
+					m.setStatusError("scratch: " + err.Error())
+					return nil
+				}
+				m.reloadScratchLines()
+				m.scratchScrollToBottom()
+				m.input.SetValue("")
+				m.input.CursorEnd()
+				m.syncInputHeight()
+				m.statusMsg = "✓ added to scratch"
+				return nil
+			}
 			if m.chatMode {
 				// "//" prefix → note: stored in history, never sent to LLM.
 				// Must be checked before the "/" command prefix.
@@ -4070,26 +4090,6 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					return m.startChatCmd(m.chatWorkspace)
 				}
 				return m.sendChatMsg(val)
-			}
-			if m.scratchInputMode {
-				if strings.HasPrefix(val, "/") {
-					return m.dispatchCommand(val)
-				}
-				if val == "" {
-					return nil
-				}
-				ws := m.scratchWorkspace()
-				if err := storefs.AppendScratch(m.cfg.DataRoot, ws, val); err != nil {
-					m.setStatusError("scratch: " + err.Error())
-					return nil
-				}
-				m.reloadScratchLines()
-				m.scratchScrollToBottom()
-				m.input.SetValue("")
-				m.input.CursorEnd()
-				m.syncInputHeight()
-				m.statusMsg = "✓ added to scratch"
-				return nil
 			}
 			if m.askxOpen {
 				if strings.HasPrefix(val, "//") {
