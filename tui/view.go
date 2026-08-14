@@ -307,56 +307,14 @@ func (m Model) View() string {
 		return m.renderResourceOverlay()
 	}
 
-	// Fixed rows: top bar (2) + split sep (1) + detail lines (N) + cmd (N) + status sep (1) + completions (N) + status bar (1) = 5+inputH+N
-	// During ingest/agent run, 3 extra log lines are added above the spinner status line.
-	// During agent confirm, agentConfirmLines are shown above the input line.
-	compLines := m.renderCompletionLines()
-	editDetailLines := m.reviewDetailLines()
-	inputH := m.inputVisualHeight()
-	ingestLogRows := 0
-	if m.ingestRunning || m.agentRunning {
-		ingestLogRows = 3
-		if m.ingestCostEstimate != "" {
-			ingestLogRows++ // one extra pinned row for cost estimate
-		}
-	}
-	agentConfirmRows := len(m.agentConfirmLines)
-	fixedRows := 5 + len(editDetailLines) + inputH + len(compLines) + ingestLogRows + agentConfirmRows
-	mainHeight := m.height - fixedRows
+	// Build each section into a []string of exactly the right line count.
+	botLines := m.renderBottomLines()
+	mainHeight := m.height - topBarHeight - len(botLines)
 	if mainHeight < 1 {
 		mainHeight = 1
 	}
-
-	// Build each section into a []string of exactly the right line count.
 	topLines := []string{m.renderTabBar(), m.renderSplitSep(m.width, true)}
 	mainLines := strings.Split(m.renderMainArea(mainHeight), "\n")
-	cmdInput := m.renderCommandInput()
-	botLines := make([]string, 0, 4+len(editDetailLines)+inputH+len(compLines)+agentConfirmRows)
-	botLines = append(botLines, m.renderSplitSep(m.width, false))
-	botLines = append(botLines, editDetailLines...)
-	if agentConfirmRows > 0 {
-		t := ActiveTheme
-		for _, line := range m.agentConfirmLines {
-			botLines = append(botLines, fg(t.ContentText, line))
-		}
-	}
-	botLines = append(botLines, strings.Split(cmdInput, "\n")...)
-	botLines = append(botLines, m.renderStatusSep())
-	botLines = append(botLines, compLines...)
-	botLines = append(botLines, m.renderStatusLine())
-	if m.ingestRunning || m.agentRunning {
-		if m.ingestCostEstimate != "" {
-			botLines = append(botLines, fg(ActiveTheme.Accent, "  "+m.ingestCostEstimate))
-		}
-		for i := 0; i < 3; i++ {
-			logIdx := len(m.ingestLog) - 3 + i
-			if logIdx >= 0 && logIdx < len(m.ingestLog) {
-				botLines = append(botLines, fg(ActiveTheme.ContentDimmed, "  "+m.ingestLog[logIdx]))
-			} else {
-				botLines = append(botLines, "")
-			}
-		}
-	}
 
 	// Assemble exactly m.height lines — clamp/pad each section defensively.
 	out := make([]string, 0, m.height)
@@ -385,6 +343,42 @@ func (m Model) View() string {
 	}
 
 	return strings.Join(out, "\n")
+}
+
+// renderBottomLines renders every row below the main area, in order:
+// split sep (1) + review detail (N) + agent confirm (N) + command input (N) +
+// status sep (1) + completions (N) + status bar (1) + ingest/agent log rows (N).
+// This is the single source of truth for the bottom chrome height — mainAreaHeight
+// measures it rather than re-deriving it, so layout math cannot drift from the render.
+func (m Model) renderBottomLines() []string {
+	t := ActiveTheme
+	editDetailLines := m.reviewDetailLines()
+	compLines := m.renderCompletionLines()
+
+	lines := make([]string, 0, 8+len(editDetailLines)+len(compLines)+len(m.agentConfirmLines))
+	lines = append(lines, m.renderSplitSep(m.width, false))
+	lines = append(lines, editDetailLines...)
+	for _, line := range m.agentConfirmLines {
+		lines = append(lines, fg(t.ContentText, line))
+	}
+	lines = append(lines, strings.Split(m.renderCommandInput(), "\n")...)
+	lines = append(lines, m.renderStatusSep())
+	lines = append(lines, compLines...)
+	lines = append(lines, m.renderStatusLine())
+	if m.ingestRunning || m.agentRunning {
+		if m.ingestCostEstimate != "" {
+			lines = append(lines, fg(t.Accent, "  "+m.ingestCostEstimate))
+		}
+		for i := 0; i < 3; i++ {
+			logIdx := len(m.ingestLog) - 3 + i
+			if logIdx >= 0 && logIdx < len(m.ingestLog) {
+				lines = append(lines, fg(t.ContentDimmed, "  "+m.ingestLog[logIdx]))
+			} else {
+				lines = append(lines, "")
+			}
+		}
+	}
+	return lines
 }
 
 // renderTabBar renders the top tab bar line with cost summary right-aligned.
@@ -734,12 +728,20 @@ func (m Model) renderScratchPane(height, width int) []string {
 		return lines[:height]
 	}
 
-	// Flat mode: plain scroll (scratch not focused).
-	end := m.scratchScroll + viewH
+	// Flat mode: plain scroll (scratch not focused). Clamp the offset so a stale
+	// scroll can never hide the tail — the pane height changes with the input.
+	start := m.scratchScroll
+	if start > len(m.scratchLines)-viewH {
+		start = len(m.scratchLines) - viewH
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + viewH
 	if end > len(m.scratchLines) {
 		end = len(m.scratchLines)
 	}
-	for i := m.scratchScroll; i < end; i++ {
+	for i := start; i < end; i++ {
 		lines = append(lines, fg(t.NavDimmed, m.scratchLines[i]))
 	}
 
@@ -1282,18 +1284,8 @@ func (m Model) renderContentPane(height, width int) []string {
 	splitH := 0
 	contentH := height
 	if m.scratchOpen || m.askxOpen || m.previewOpen || m.achatMode {
-		if m.achatMode {
-			splitH = height / 2
-		} else {
-			splitH = height / 3
-		}
-		if splitH < 3 {
-			splitH = 3
-		}
+		splitH = splitHeightFor(height, m.achatMode)
 		contentH = height - splitH
-		if contentH < 3 {
-			contentH = 3
-		}
 	}
 
 	var lines []string

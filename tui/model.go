@@ -626,6 +626,7 @@ type Model struct {
 	scratchOpen         bool           // true when scratch split is visible
 	scratchFocused      bool           // true when scratch region has focus (within paneContent)
 	scratchScroll       int            // scroll offset into scratchLines
+	scratchStickBottom  bool           // keep the pane pinned to the tail across layout changes
 	scratchLines        []string       // cached content for rendering
 	scratchBlocks       []scratchBlock // parsed blocks for block navigation
 	scratchBlockCursor  int            // selected block index
@@ -1934,17 +1935,62 @@ func (m Model) visibleCompletionCount() int {
 	return 0
 }
 
-// mainAreaHeight returns the height of the main content area in rows,
-// matching the View() calculation exactly. Use this for mouse hit-testing.
+// bottomChromeRows counts the rows View() renders below the main area. Must stay
+// equal to len(renderBottomLines()) — TestBottomChromeRowsMatchesRender enforces it.
+// Counting instead of rendering keeps this cheap enough to call from Update.
+func (m Model) bottomChromeRows() int {
+	rows := 3 // split sep + status sep + status bar
+	rows += len(m.reviewDetailLines())
+	rows += len(m.agentConfirmLines)
+	rows += strings.Count(m.renderCommandInput(), "\n") + 1
+	rows += len(m.renderCompletionLines())
+	if m.ingestRunning || m.agentRunning {
+		rows += 3 // pinned log tail
+		if m.ingestCostEstimate != "" {
+			rows++
+		}
+	}
+	return rows
+}
+
+// mainAreaHeight returns the height of the main content area in rows.
+// Derived from the bottom chrome View() actually emits, so scroll math and mouse
+// hit-testing can never drift from the rendered layout.
 func (m Model) mainAreaHeight() int {
-	inputH := m.inputVisualHeight()
-	compH := m.visibleCompletionCount()
-	editH := len(m.reviewDetailLines())
-	h := m.height - 5 - inputH - compH - editH
+	h := m.height - topBarHeight - m.bottomChromeRows()
 	if h < 1 {
 		h = 1
 	}
 	return h
+}
+
+// splitHeightFor returns the height of the bottom split pane inside a content
+// pane of the given height. Single source of truth for the split ratio.
+func splitHeightFor(height int, achat bool) int {
+	splitH := height / 3
+	if achat {
+		splitH = height / 2
+	}
+	if splitH < 3 {
+		splitH = 3
+	}
+	// Never let the split pane crowd the content pane out of the layout.
+	if splitH > height-3 {
+		splitH = height - 3
+	}
+	if splitH < 1 {
+		splitH = 1
+	}
+	return splitH
+}
+
+// splitPaneHeight returns the rendered height of the scratch/askX/preview/article-chat
+// split pane, or 0 when none is open.
+func (m Model) splitPaneHeight() int {
+	if !(m.scratchOpen || m.askxOpen || m.previewOpen || m.achatMode) {
+		return 0
+	}
+	return splitHeightFor(m.mainAreaHeight(), m.achatMode)
 }
 
 // chatViewHeight returns the number of visible lines in the chat content area.
@@ -1952,17 +1998,9 @@ func (m Model) mainAreaHeight() int {
 // when open. Matches the header line count that renderChatPane actually emits
 // (title + optional description lines + separator).
 func (m Model) chatViewHeight() int {
-	mainH := m.mainAreaHeight()
-	contentH := mainH
-	if m.scratchOpen || m.askxOpen || m.previewOpen {
-		splitH := mainH / 3
-		if splitH < 3 {
-			splitH = 3
-		}
-		contentH = mainH - splitH
-		if contentH < 3 {
-			contentH = 3
-		}
+	contentH := m.mainAreaHeight() - m.splitPaneHeight()
+	if contentH < 3 {
+		contentH = 3
 	}
 	headerLines := 2 // workspace title + separator
 	ws := m.selectedWorkspace()
@@ -1979,12 +2017,7 @@ func (m Model) chatViewHeight() int {
 // splitPaneStartRow returns the first screen row (0-indexed) of the
 // scratch/askX/preview split pane. Only valid when a split pane is open.
 func (m Model) splitPaneStartRow() int {
-	mainH := m.mainAreaHeight()
-	splitH := mainH / 3
-	if splitH < 3 {
-		splitH = 3
-	}
-	return topBarHeight + (mainH - splitH)
+	return topBarHeight + (m.mainAreaHeight() - m.splitPaneHeight())
 }
 
 // New creates the initial Model.

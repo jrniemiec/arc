@@ -806,12 +806,7 @@ func (m *Model) achatBuildWidth() int {
 
 // achatViewHeight returns the visible line count for the article chat split pane.
 func (m *Model) achatViewHeight() int {
-	mainH := m.mainAreaHeight()
-	splitH := mainH / 2
-	if splitH < 3 {
-		splitH = 3
-	}
-	h := splitH - 1 // 1 for separator header
+	h := m.splitPaneHeight() - 1 // 1 for separator header
 	if h < 1 {
 		h = 1
 	}

@@ -865,12 +865,11 @@ func (m *Model) askxBoxNext() {
 }
 
 func (m *Model) askxViewH() int {
-	mainH := m.height - 6 - m.completionCount()
-	h := mainH / 3
-	if h < 3 {
-		h = 3
+	h := m.splitPaneHeight() - 1 // minus header
+	if h < 1 {
+		h = 1
 	}
-	return h - 1 // minus header
+	return h
 }
 
 // askxSyncCursorToScroll sets askxBoxCursor to the box visible at the current scroll offset.

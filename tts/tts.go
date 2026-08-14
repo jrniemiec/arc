@@ -164,8 +164,11 @@ func (p *Player) Gen() int {
 	return p.gen
 }
 
-// Playing reports whether TTS is currently active.
+// Playing reports whether TTS is currently active. Safe on a nil player.
 func (p *Player) Playing() bool {
+	if p == nil {
+		return false
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.cmd != nil

@@ -307,12 +307,11 @@ func (m Model) renderPreviewPane(height, width int) []string {
 
 // previewViewH returns the usable height for preview content (excluding header).
 func (m *Model) previewViewH() int {
-	mainH := m.mainAreaHeight()
-	h := mainH / 3
-	if h < 3 {
-		h = 3
+	h := m.splitPaneHeight() - 1 // minus header
+	if h < 1 {
+		h = 1
 	}
-	return h - 1
+	return h
 }
 
 // ── Key handling ────────────────────────────────────────────────────────────

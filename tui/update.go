@@ -1267,6 +1267,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	}
 
+	// The scratch pane shrinks when the command input grows to several lines (edit
+	// mode) or on resize — re-pin the offset so the tail stays visible.
+	m.refreshScratchScroll()
+
 	return m, tea.Batch(cmds...)
 }
 
@@ -9633,24 +9637,20 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if msg.X > m.dividerCol() && (m.scratchOpen || m.askxOpen || m.previewOpen) {
 			splitStartRow := m.splitPaneStartRow()
 			if msg.Y >= splitStartRow {
-				mainH := m.mainAreaHeight()
-				splitH := mainH / 3
-				if splitH < 3 {
-					splitH = 3
+				viewH := m.splitPaneHeight() - 1
+				if viewH < 1 {
+					viewH = 1
 				}
-				viewH := splitH - 1
 				if m.scratchOpen {
 					m.scratchScroll += delta
 					if m.scratchScroll < 0 {
 						m.scratchScroll = 0
 					}
-					maxScroll := len(m.scratchLines) - viewH
-					if maxScroll < 0 {
-						maxScroll = 0
-					}
+					maxScroll := m.scratchMaxScroll()
 					if m.scratchScroll > maxScroll {
 						m.scratchScroll = maxScroll
 					}
+					m.scratchStickBottom = m.scratchScroll >= maxScroll
 				} else if m.askxOpen {
 					m.askxScroll += delta
 					if m.askxScroll < 0 {
@@ -9723,12 +9723,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 		// Article chat pane wheel (bottom of content pane, 50% split).
 		if msg.X > m.dividerCol() && m.achatMode {
-			mainH := m.mainAreaHeight()
-			achatSplitH := mainH / 2
-			if achatSplitH < 3 {
-				achatSplitH = 3
-			}
-			splitStartRow := topBarHeight + (mainH - achatSplitH)
+			splitStartRow := m.splitPaneStartRow()
 			if msg.Y >= splitStartRow {
 				chatViewH := m.achatViewHeight()
 				m.achatScroll += delta
@@ -9987,7 +9982,7 @@ func (m *Model) navPaneHeight() int {
 	if m.activeTab == tabLibrary {
 		overhead = 2 // sub-tab bar + blank
 	}
-	h := m.height - 6 - m.completionCount() - overhead
+	h := m.mainAreaHeight() - overhead
 	if h < 1 {
 		h = 1
 	}
@@ -10032,17 +10027,9 @@ func runShellCmd(cmd string) tea.Cmd {
 // contentViewHeight returns the number of lines available for scrollable content.
 // Layout: header (4 lines) + sep + tab strip + sep = 7 fixed lines in content pane.
 func (m *Model) contentViewHeight() int {
-	mainH := m.height - 6 - m.completionCount()
-	// Subtract scratch split if open.
-	if m.scratchOpen {
-		scratchH := mainH / 3
-		if scratchH < 3 {
-			scratchH = 3
-		}
-		mainH -= scratchH
-		if mainH < 3 {
-			mainH = 3
-		}
+	mainH := m.mainAreaHeight() - m.splitPaneHeight()
+	if mainH < 3 {
+		mainH = 3
 	}
 	h := mainH - contentHeaderLines(m.selectedNavItem())
 	if h < 1 {
@@ -10387,13 +10374,8 @@ func (m *Model) scratchBlockCursorSkipSep(dir int) {
 
 // scratchScrollToBottom scrolls the scratch pane to the bottom and moves cursor to last block.
 func (m *Model) scratchScrollToBottom() {
-	viewH := m.scratchViewH()
-	total := m.scratchTotalVLines()
-	maxScroll := total - viewH
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	m.scratchScroll = maxScroll
+	m.scratchScroll = m.scratchMaxScroll()
+	m.scratchStickBottom = true
 	// Move block cursor to last selectable block.
 	if len(m.scratchBlocks) > 0 {
 		m.scratchBlockCursor = len(m.scratchBlocks) - 1
@@ -10476,6 +10458,7 @@ func (m *Model) closeScratch() {
 	m.scratchFocused = false
 	m.scratchInputMode = false
 	m.scratchScroll = 0
+	m.scratchStickBottom = false
 	m.scratchLines = nil
 	m.scratchBlocks = nil
 	m.scratchBlockCursor = 0
@@ -10601,13 +10584,39 @@ func (m *Model) scratchSelectableCount() int {
 }
 
 // scratchViewH returns the viewable height of the scratch pane content (excluding header).
+// Derived from splitPaneHeight so it tracks the rendered layout exactly — in particular
+// the multi-line command input used by scratch edit mode, which shrinks the pane.
 func (m *Model) scratchViewH() int {
-	mainH := m.height - 6 - m.completionCount()
-	scratchH := mainH / 3
-	if scratchH < 3 {
-		scratchH = 3
+	viewH := m.splitPaneHeight() - 1 // minus header
+	if viewH < 1 {
+		viewH = 1
 	}
-	return scratchH - 1
+	return viewH
+}
+
+// scratchMaxScroll returns the largest valid scroll offset for the scratch pane.
+func (m *Model) scratchMaxScroll() int {
+	max := m.scratchTotalVLines() - m.scratchViewH()
+	if max < 0 {
+		max = 0
+	}
+	return max
+}
+
+// refreshScratchScroll re-pins the scratch scroll after a layout change (window resize,
+// command input growing to several lines). Keeps the tail visible when the pane was
+// already at the bottom, and never leaves the offset past the end.
+func (m *Model) refreshScratchScroll() {
+	if !m.scratchOpen {
+		return
+	}
+	max := m.scratchMaxScroll()
+	if m.scratchStickBottom || m.scratchScroll > max {
+		m.scratchScroll = max
+	}
+	if m.scratchScroll < 0 {
+		m.scratchScroll = 0
+	}
 }
 
 // scratchBlockPrev moves the block cursor to the previous selectable block.
@@ -10754,17 +10763,19 @@ func (m *Model) scrollToScratchBlock(viewH int) {
 	if first == -1 {
 		return
 	}
-	if first >= m.scratchScroll && last < m.scratchScroll+viewH {
-		return
-	}
-	m.scratchScroll = first
 	maxScroll := len(vlines) - viewH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
+	if first >= m.scratchScroll && last < m.scratchScroll+viewH {
+		m.scratchStickBottom = m.scratchScroll >= maxScroll
+		return
+	}
+	m.scratchScroll = first
 	if m.scratchScroll > maxScroll {
 		m.scratchScroll = maxScroll
 	}
+	m.scratchStickBottom = m.scratchScroll >= maxScroll
 }
 
 // cmdScratchDeleteBlock deletes the selected block from the scratch file.
@@ -11621,7 +11632,7 @@ func (m *Model) handleHelpContentKey(msg tea.KeyMsg) tea.Cmd {
 
 // helpViewHeight returns the visible line count for the help content pane.
 func (m *Model) helpViewHeight() int {
-	h := m.height - 6 - m.completionCount() - 2 // chrome + title + sep
+	h := m.mainAreaHeight() - 2 // title + sep
 	if h < 1 {
 		h = 1
 	}

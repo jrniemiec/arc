@@ -1571,8 +1571,7 @@ func (m *Model) addChatNote(text string) tea.Cmd {
 	}
 	rightW := m.chatBuildWidth()
 	m.rebuildChatLines(rightW)
-	chatViewH := m.height - 6 - m.completionCount() - 2
-	m.chatAutoScrollToBottom(chatViewH)
+	m.chatAutoScrollToBottom(m.chatViewHeight())
 
 	// Persist to history.json asynchronously.
 	// Load current history from disk and append the note, so we don't
