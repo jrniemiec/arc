@@ -1343,6 +1343,15 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.removeReviewing = false
 			m.statusMsg = "remove review cancelled"
 		}
+		if m.scratchEditBlockIdx >= 0 {
+			m.scratchEditBlockIdx = -1
+			m.input.SetValue("")
+			m.input.CursorEnd()
+			m.syncInputPrompt()
+			m.syncInputHeight()
+			m.statusMsg = "edit cancelled"
+			return nil
+		}
 		// Article chat: Esc with empty input exits article chat mode.
 		if m.achatMode && m.input.Value() == "" && m.focus == paneCommand {
 			m.exitArticleChat()
@@ -4035,6 +4044,54 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 				return m.sendArticleChatMsg(val)
 			}
 			if m.scratchInputMode {
+				if m.scratchEditBlockIdx >= 0 {
+					if strings.HasPrefix(val, "/") {
+						return m.dispatchCommand(val)
+					}
+					if val == "" {
+						return nil
+					}
+					idx := m.scratchEditBlockIdx
+					if idx >= len(m.scratchBlocks) {
+						m.scratchEditBlockIdx = -1
+						m.syncInputPrompt()
+						m.setStatusError("scratch: block no longer exists")
+						return nil
+					}
+					blk := m.scratchBlocks[idx]
+					ws := m.scratchWorkspace()
+					content, err := storefs.ReadScratch(m.cfg.DataRoot, ws)
+					if err != nil {
+						m.setStatusError("scratch: " + err.Error())
+						return nil
+					}
+					rawLines := splitLines(content)
+					start, end, found := locateScratchBlockLines(rawLines, blk)
+					if !found {
+						m.setStatusError("block not found in file")
+						return nil
+					}
+					editLines := strings.Split(val, "\n")
+					editLines[0] = "• " + editLines[0]
+					newLines := append(append(append([]string{}, rawLines[:start]...), editLines...), rawLines[end:]...)
+					path := m.scratchFilePath()
+					newContent := strings.Join(newLines, "\n")
+					if len(newLines) > 0 {
+						newContent += "\n"
+					}
+					if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+						m.setStatusError("scratch: " + err.Error())
+						return nil
+					}
+					m.scratchEditBlockIdx = -1
+					m.reloadScratchLines()
+					m.input.SetValue("")
+					m.input.CursorEnd()
+					m.syncInputPrompt()
+					m.syncInputHeight()
+					m.statusMsg = "✓ entry updated"
+					return nil
+				}
 				if strings.HasPrefix(val, "/") {
 					return m.dispatchCommand(val)
 				}
@@ -10024,10 +10081,14 @@ func (m *Model) scratchContextWorkspace() string {
 
 // scratchPromptPrefix returns the input prompt string for scratch mode (Ctrl+L).
 func (m *Model) scratchPromptPrefix() string {
-	if ws := m.scratchWorkspace(); ws != "" {
-		return ws + ":scratch> "
+	suffix := ""
+	if m.scratchEditBlockIdx >= 0 {
+		suffix = "(edit)"
 	}
-	return "Scratch> "
+	if ws := m.scratchWorkspace(); ws != "" {
+		return ws + ":scratch" + suffix + "> "
+	}
+	return "Scratch" + suffix + "> "
 }
 
 // toggleScratch toggles scratch mode (Ctrl+L): opens the scratch for the current
@@ -10421,6 +10482,7 @@ func (m *Model) closeScratch() {
 	m.scratchCollapsed = nil
 	m.scratchLoadedWs = ""
 	m.scratchGlobal = false
+	m.scratchEditBlockIdx = -1
 	m.clearScratchInput()
 	m.syncInputPrompt()
 }
@@ -10440,7 +10502,8 @@ func (m *Model) scratchFilePath() string {
 }
 
 // handleScratchKey handles keys when the scratch pane is focused (in content pane).
-// j/k navigate between blocks; s speaks, v opens overlay, d deletes the selected block.
+// j/k navigate between blocks; s speaks, v opens overlay, x deletes, e edits the
+// selected block in place, E opens the whole scratch file in $EDITOR.
 func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
 	numBlocks := m.scratchSelectableCount()
 	viewH := m.scratchViewH()
@@ -10457,7 +10520,12 @@ func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
 		case "x":
 			return m.cmdScratchDeleteBlock()
 		case "e":
-			// Edit scratch file in $EDITOR.
+			if len(m.scratchBlocks) > 0 {
+				m.cmdScratchEditBlock(m.scratchBlockCursor)
+			}
+			return nil
+		case "E":
+			// Edit the whole scratch file in $EDITOR.
 			editor := os.Getenv("EDITOR")
 			if editor == "" {
 				m.setStatusError("$EDITOR is not set")
@@ -10470,6 +10538,7 @@ func (m *Model) handleScratchKey(msg tea.KeyMsg) tea.Cmd {
 				label = ws + "/scratch"
 			}
 			m.openEditorInTerminal(editor, path, label)
+			return nil
 		case "[":
 			return m.cmdScratchTTSAdjustRate(-20)
 		case "]":
@@ -10699,6 +10768,28 @@ func (m *Model) scrollToScratchBlock(viewH int) {
 }
 
 // cmdScratchDeleteBlock deletes the selected block from the scratch file.
+// locateScratchBlockLines finds the raw line range [start, end) in rawLines
+// that make up blk: the bullet line plus any continuation lines, matched by
+// text content (same limitation as scratchBlock has no stable ID).
+func locateScratchBlockLines(rawLines []string, blk scratchBlock) (start, end int, found bool) {
+	textLines := strings.Split(blk.text, "\n")
+	bulletTarget := "• " + textLines[0]
+	for i, l := range rawLines {
+		if l != bulletTarget && !(len(textLines) == 1 && l == blk.text) {
+			continue
+		}
+		start = i
+		end = i + 1
+		if len(textLines) > 1 {
+			for end < len(rawLines) && !strings.HasPrefix(rawLines[end], "• ") && !strings.HasPrefix(rawLines[end], "----------") {
+				end++
+			}
+		}
+		return start, end, true
+	}
+	return 0, 0, false
+}
+
 func (m *Model) cmdScratchDeleteBlock() tea.Cmd {
 	if m.scratchBlockCursor < 0 || m.scratchBlockCursor >= len(m.scratchBlocks) {
 		return nil
@@ -10708,7 +10799,7 @@ func (m *Model) cmdScratchDeleteBlock() tea.Cmd {
 		return nil
 	}
 
-	// Read raw file, find and remove the block line.
+	// Read raw file, find and remove the block's lines.
 	ws := m.scratchWorkspace()
 	content, err := storefs.ReadScratch(m.cfg.DataRoot, ws)
 	if err != nil {
@@ -10716,35 +10807,12 @@ func (m *Model) cmdScratchDeleteBlock() tea.Cmd {
 		return nil
 	}
 	rawLines := splitLines(content)
-	// Match either bulleted or legacy (raw) form.
-	// For multi-line blocks, find the first line then skip continuations.
-	textLines := strings.Split(blk.text, "\n")
-	bulletTarget := "• " + textLines[0]
-	var newLines []string
-	found := false
-	skipping := false
-	for _, l := range rawLines {
-		if skipping {
-			// Continue skipping until we hit a new bullet or separator.
-			if strings.HasPrefix(l, "• ") || strings.HasPrefix(l, "----------") {
-				skipping = false
-				newLines = append(newLines, l)
-			}
-			continue
-		}
-		if !found && (l == bulletTarget || (len(textLines) == 1 && l == blk.text)) {
-			found = true
-			if len(textLines) > 1 {
-				skipping = true
-			}
-			continue // skip this line
-		}
-		newLines = append(newLines, l)
-	}
+	start, end, found := locateScratchBlockLines(rawLines, blk)
 	if !found {
 		m.setStatusError("block not found in file")
 		return nil
 	}
+	newLines := append(append([]string{}, rawLines[:start]...), rawLines[end:]...)
 
 	// Write back.
 	path := m.scratchFilePath()
@@ -10773,6 +10841,28 @@ func (m *Model) cmdScratchDeleteBlock() tea.Cmd {
 	m.reloadScratchLines()
 	m.statusMsg = "✓ deleted block"
 	return nil
+}
+
+// cmdScratchEditBlock begins in-place editing of the block at idx: pre-fills
+// the command input with its text and hands focus to the command pane. The
+// Enter handler (scratchEditBlockIdx branch) splices the edited text back
+// into the same position when confirmed.
+func (m *Model) cmdScratchEditBlock(idx int) {
+	if idx < 0 || idx >= len(m.scratchBlocks) {
+		return
+	}
+	blk := m.scratchBlocks[idx]
+	if blk.isSep {
+		return
+	}
+	m.scratchInputMode = true
+	m.scratchEditBlockIdx = idx
+	m.input.SetValue(blk.text)
+	m.input.CursorEnd()
+	m.syncInputPrompt()
+	m.syncInputHeight()
+	m.focus = paneCommand
+	m.cursorVisible = true
 }
 
 // cmdScratchTTS speaks the selected scratch block via TTS.

@@ -93,7 +93,6 @@ const (
 	paneNavSubTab                  // nav sub-tab bar (Workspaces/Collections/Articles or Runs/Decisions/Feeds)
 )
 
-
 // contentTab identifies the active sub-tab in the content pane.
 type contentTab int
 
@@ -124,7 +123,7 @@ func (c contentTab) String() string {
 type navSubTab int
 
 const (
-	navSubTabWorkspaces  navSubTab = iota
+	navSubTabWorkspaces navSubTab = iota
 	navSubTabCollections
 	navSubTabArticles
 	navSubTabCount
@@ -167,9 +166,9 @@ type feedDetailRow struct {
 type agentDetailRowKind int
 
 const (
-	agentRowHeader    agentDetailRowKind = iota // non-interactive header line
-	agentRowFeed                                // collapsible feed header
-	agentRowArticle                             // article title under an expanded feed
+	agentRowHeader  agentDetailRowKind = iota // non-interactive header line
+	agentRowFeed                              // collapsible feed header
+	agentRowArticle                           // article title under an expanded feed
 )
 
 // agentDetailRow is one display row in the agent run detail content pane.
@@ -214,7 +213,7 @@ func (a agentSubTab) String() string {
 type statsSubTab int
 
 const (
-	statsSubTabOverview  statsSubTab = iota
+	statsSubTabOverview statsSubTab = iota
 	statsSubTabCost
 	statsSubTabTokens
 	statsSubTabRequests
@@ -240,7 +239,7 @@ func (s statsSubTab) String() string {
 type helpSubTab int
 
 const (
-	helpSubTabReadme    helpSubTab = iota
+	helpSubTabReadme helpSubTab = iota
 	helpSubTabTutorial
 	helpSubTabTUICmds
 	helpSubTabTUIKeys
@@ -310,14 +309,14 @@ type workspaceItem struct {
 	hasHistory      bool
 	chatProfile     string
 	chatStrategy    string
-	articles        []string          // slugs
-	collectionSlugs []string          // slugs
-	resources       []string          // resource file basenames
-	resourceDirs    []string          // resource directory names
-	outcomes        []string          // outcome file basenames
+	articles        []string // slugs
+	collectionSlugs []string // slugs
+	resources       []string // resource file basenames
+	resourceDirs    []string // resource directory names
+	outcomes        []string // outcome file basenames
 
 	// attic
-	atticArticles   []string // slugs
+	atticArticles    []string // slugs
 	atticCollections []string // slugs
 
 	pinned bool
@@ -335,24 +334,24 @@ type workspaceItem struct {
 type wsRowKind int
 
 const (
-	wsRowWorkspace      wsRowKind = iota
-	wsRowScratch                  // scratch.md file (leaf, always present)
-	wsRowCollection               // collection under workspace
-	wsRowArticle                  // article (leaf)
-	wsRowResourceGroup            // "Resources (N)" foldable header
-	wsRowResourceDir              // resource directory (expandable)
-	wsRowResource                 // resource file (leaf)
-	wsRowOutcomeGroup             // "Outcomes (N)" foldable header
-	wsRowOutcome                  // outcome file (leaf)
-	wsRowAtticGroup               // "Attic (N)" foldable header
-	wsRowAtticArticle             // attic article (leaf)
-	wsRowAtticCollection          // attic collection (leaf)
+	wsRowWorkspace       wsRowKind = iota
+	wsRowScratch                   // scratch.md file (leaf, always present)
+	wsRowCollection                // collection under workspace
+	wsRowArticle                   // article (leaf)
+	wsRowResourceGroup             // "Resources (N)" foldable header
+	wsRowResourceDir               // resource directory (expandable)
+	wsRowResource                  // resource file (leaf)
+	wsRowOutcomeGroup              // "Outcomes (N)" foldable header
+	wsRowOutcome                   // outcome file (leaf)
+	wsRowAtticGroup                // "Attic (N)" foldable header
+	wsRowAtticArticle              // attic article (leaf)
+	wsRowAtticCollection           // attic collection (leaf)
 )
 
 // wsRow is one display row in the workspace foldable tree.
 type wsRow struct {
-	kind   wsRowKind
-	wsIdx  int    // index into workspaceItems
+	kind         wsRowKind
+	wsIdx        int    // index into workspaceItems
 	colSlug      string // wsRowCollection rows
 	slug         string // wsRowArticle rows
 	numID        int    // numeric ID (from navItemsAll)
@@ -405,7 +404,7 @@ type Model struct {
 
 	// Selection mode — screen frozen, mouse disabled for native text selection
 	selectionMode    bool
-	preSelNavWidth   int  // saved navWidthOverride before selection mode
+	preSelNavWidth   int       // saved navWidthOverride before selection mode
 	selectionMaxPane focusPane // which pane is maximized during selection (paneNav or paneContent)
 
 	// Spinner — drives cursor blink and future progress indicators
@@ -444,10 +443,10 @@ type Model struct {
 	agentFeedsStats  map[string]feedRunStats // keyed by feed URL
 
 	// Agent content — feed run history
-	agentFeedRunExpanded  map[int]bool                       // runIdx → expanded
-	agentFeedRunDecisions map[string]agentpkg.DecisionsFile  // fileID → loaded decisions
-	agentFeedDetailCursor int                                // cursor in feed run history
-	agentFeedDetailScroll int                                // navPos scroll offset
+	agentFeedRunExpanded  map[int]bool                      // runIdx → expanded
+	agentFeedRunDecisions map[string]agentpkg.DecisionsFile // fileID → loaded decisions
+	agentFeedDetailCursor int                               // cursor in feed run history
+	agentFeedDetailScroll int                               // navPos scroll offset
 
 	// Agent content — run detail
 	agentRunDecisions   agentpkg.DecisionsFile // decisions for selected run (may be empty)
@@ -481,45 +480,45 @@ type Model struct {
 	pendingExpandSlug string
 
 	// Library nav — Workspaces sub-tab
-	workspaceItems    []workspaceItem    // current (possibly filtered) list
-	workspaceItemsAll []workspaceItem    // unfiltered copy
-	wsRows            []wsRow            // flat tree rows rebuilt on expand/collapse
+	workspaceItems    []workspaceItem // current (possibly filtered) list
+	workspaceItemsAll []workspaceItem // unfiltered copy
+	wsRows            []wsRow         // flat tree rows rebuilt on expand/collapse
 	wsCursor          int
 	wsScroll          int
-	wsFocusName       string             // non-empty = solo mode, only this workspace visible
-	wsSearchName      string             // workspace name active during a scoped article search
+	wsFocusName       string // non-empty = solo mode, only this workspace visible
+	wsSearchName      string // workspace name active during a scoped article search
 	workspacesLoaded  bool
 	workspacesErr     string
 
 	// Content pane — single concatenated document: Flash → Summary → Body → Cards
 	contentScroll     int
-	contentLineCursor int      // persistent highlighted line index in contentLines (advances during TTS)
-	contentLines      []string // all sections joined
-	contentOffsets  [ctCount]int    // line index where each section starts (-1 = absent)
-	contentHas      [ctCount]bool   // which sections exist
-	contentFiles    store.Files
-	contentLoading  bool
-	contentCardIDs  []string        // parallel to contentLines; card owning each line ("" = none)
-	revealedCards   map[string]bool // card IDs whose answers are shown; space toggles one, A toggles all
-	cardsSlug       string          // article the reveal set belongs to; a change clears it
-	jumpToCards     bool            // after the next content load, scroll to the Cards section
-	pendingCardFocus string         // after the next content load, put the cursor on this card
-	pendingScroll   int             // scroll offset to restore alongside pendingCardFocus
-	cardsRunning    bool            // flashcard generation in flight — drives the status-line spinner
-	cardsLabel      string          // current step of that generation
+	contentLineCursor int           // persistent highlighted line index in contentLines (advances during TTS)
+	contentLines      []string      // all sections joined
+	contentOffsets    [ctCount]int  // line index where each section starts (-1 = absent)
+	contentHas        [ctCount]bool // which sections exist
+	contentFiles      store.Files
+	contentLoading    bool
+	contentCardIDs    []string        // parallel to contentLines; card owning each line ("" = none)
+	revealedCards     map[string]bool // card IDs whose answers are shown; space toggles one, A toggles all
+	cardsSlug         string          // article the reveal set belongs to; a change clears it
+	jumpToCards       bool            // after the next content load, scroll to the Cards section
+	pendingCardFocus  string          // after the next content load, put the cursor on this card
+	pendingScroll     int             // scroll offset to restore alongside pendingCardFocus
+	cardsRunning      bool            // flashcard generation in flight — drives the status-line spinner
+	cardsLabel        string          // current step of that generation
 
 	// Stats
 	stats       service.Stats
 	statsLoaded bool
 
 	// Help
-	helpSubTab     helpSubTab
-	helpDocLines   []string // content lines for current section
-	helpDocScroll  int      // scroll offset into helpDocLines
-	helpDocCursor  int      // highlighted line index (for TTS cursor)
-	helpLoaded     bool     // true after initial content load
-	helpTTSText    string             // text of the help block currently playing
-	helpTTSQueue   []resourceTTSBlock // paragraph blocks still to be spoken
+	helpSubTab    helpSubTab
+	helpDocLines  []string           // content lines for current section
+	helpDocScroll int                // scroll offset into helpDocLines
+	helpDocCursor int                // highlighted line index (for TTS cursor)
+	helpLoaded    bool               // true after initial content load
+	helpTTSText   string             // text of the help block currently playing
+	helpTTSQueue  []resourceTTSBlock // paragraph blocks still to be spoken
 
 	// Browser
 	chromeWindowIDs []string // IDs of Chrome windows opened via 'o', closed on exit
@@ -572,68 +571,69 @@ type Model struct {
 	pendingConfirmMsg string         // message shown while waiting
 
 	// Chat mode
-	chatMode           bool                  // true when workspace chat is active
-	chatEngine         *chatengine.Engine    // nil until first message is sent (lazy init)
-	chatWorkspace      string                // name of the workspace being chatted with
-	chatDisplayLines   []chatLine            // rendered conversation lines (for display)
-	chatScroll         int                   // scroll offset into chatDisplayLines
-	chatStreaming       bool                  // true while LLM response is in flight
-	chatStreamBuf      string                // accumulated streaming response text
-	chatSharedBuf      *streamBuf            // goroutine-safe buffer written by streaming goroutine
-	chatCancelStream   context.CancelFunc    // cancels the in-flight chat request
-	chatLastUsage      *chat.Usage           // per-turn token counts (nil until first response)
-	chatLastElapsed    time.Duration         // per-turn elapsed time
-	chatAutoScroll     bool                  // auto-scroll to bottom (true unless user scrolled up)
-	chatPendingPrompt  string                // prompt queued before engine is initialized
-	chatRawMsgs        []chat.Message        // history msgs for display before engine is ready
-	chatArticleCount   int                   // total articles in workspace (populated by loadChatHistoryCmd)
-	chatGroundingMode  string                // effective grounding mode ("corpus-only"/"corpus-first"/"open")
-	chatLoadedProfile         string                    // profile from workspace chat/chat.json (persisted on disk)
-	chatProfileOverride       string                    // session-only override (empty = use chatLoadedProfile)
-	chatActivityLine          string                    // tool activity indicator (e.g. "→ reading: wal-internals")
-	chatStreamingUserPrompt   string                    // user prompt in flight — shown before engine persists it to history
-	chatWorkspaceStats        chatengine.WorkspaceStats // lifetime stats for current workspace (from events.jsonl)
-	chatBoxCursor             int                       // selected box index in boxed view (focus==paneContent)
-	chatCollapsed      map[int]bool          // set of collapsed box indices
-	programSend        *func(tea.Msg)        // p.Send closure for async streaming callbacks (shared pointer)
+	chatMode                bool                      // true when workspace chat is active
+	chatEngine              *chatengine.Engine        // nil until first message is sent (lazy init)
+	chatWorkspace           string                    // name of the workspace being chatted with
+	chatDisplayLines        []chatLine                // rendered conversation lines (for display)
+	chatScroll              int                       // scroll offset into chatDisplayLines
+	chatStreaming           bool                      // true while LLM response is in flight
+	chatStreamBuf           string                    // accumulated streaming response text
+	chatSharedBuf           *streamBuf                // goroutine-safe buffer written by streaming goroutine
+	chatCancelStream        context.CancelFunc        // cancels the in-flight chat request
+	chatLastUsage           *chat.Usage               // per-turn token counts (nil until first response)
+	chatLastElapsed         time.Duration             // per-turn elapsed time
+	chatAutoScroll          bool                      // auto-scroll to bottom (true unless user scrolled up)
+	chatPendingPrompt       string                    // prompt queued before engine is initialized
+	chatRawMsgs             []chat.Message            // history msgs for display before engine is ready
+	chatArticleCount        int                       // total articles in workspace (populated by loadChatHistoryCmd)
+	chatGroundingMode       string                    // effective grounding mode ("corpus-only"/"corpus-first"/"open")
+	chatLoadedProfile       string                    // profile from workspace chat/chat.json (persisted on disk)
+	chatProfileOverride     string                    // session-only override (empty = use chatLoadedProfile)
+	chatActivityLine        string                    // tool activity indicator (e.g. "→ reading: wal-internals")
+	chatStreamingUserPrompt string                    // user prompt in flight — shown before engine persists it to history
+	chatWorkspaceStats      chatengine.WorkspaceStats // lifetime stats for current workspace (from events.jsonl)
+	chatBoxCursor           int                       // selected box index in boxed view (focus==paneContent)
+	chatCollapsed           map[int]bool              // set of collapsed box indices
+	programSend             *func(tea.Msg)            // p.Send closure for async streaming callbacks (shared pointer)
 
 	// Article chat mode (per-article conversational chat in askX pane area)
-	achatMode          bool                  // true when article chat is active
-	achatSlug          string                // article slug being chatted with
-	achatEngine        *chatengine.Engine    // nil until first message
-	achatProfile       string                // resolved profile name
-	achatDisplayLines  []chatLine            // rendered conversation lines
-	achatScroll        int                   // scroll offset into achatDisplayLines
-	achatStreaming      bool                  // true while LLM response is in flight
-	achatStreamBuf     string                // accumulated streaming response text
-	achatSharedBuf     *streamBuf            // goroutine-safe buffer
-	achatCancelStream  context.CancelFunc    // cancels in-flight request
-	achatLastUsage     *chat.Usage           // per-turn token counts
-	achatLastElapsed   time.Duration         // per-turn elapsed time
-	achatAutoScroll    bool                  // auto-scroll to bottom
-	achatRawMsgs       []chat.Message        // history for display before engine ready
-	achatBoxCursor     int                   // selected box index
-	achatCollapsed     map[int]bool          // collapsed box indices
-	achatPendingPrompt string                // prompt queued before engine ready
-	achatFocused       bool                  // true when chat split has focus (within paneContent)
-	achatHasChat       map[string]bool       // cached: slug → has chat history
+	achatMode           bool                      // true when article chat is active
+	achatSlug           string                    // article slug being chatted with
+	achatEngine         *chatengine.Engine        // nil until first message
+	achatProfile        string                    // resolved profile name
+	achatDisplayLines   []chatLine                // rendered conversation lines
+	achatScroll         int                       // scroll offset into achatDisplayLines
+	achatStreaming      bool                      // true while LLM response is in flight
+	achatStreamBuf      string                    // accumulated streaming response text
+	achatSharedBuf      *streamBuf                // goroutine-safe buffer
+	achatCancelStream   context.CancelFunc        // cancels in-flight request
+	achatLastUsage      *chat.Usage               // per-turn token counts
+	achatLastElapsed    time.Duration             // per-turn elapsed time
+	achatAutoScroll     bool                      // auto-scroll to bottom
+	achatRawMsgs        []chat.Message            // history for display before engine ready
+	achatBoxCursor      int                       // selected box index
+	achatCollapsed      map[int]bool              // collapsed box indices
+	achatPendingPrompt  string                    // prompt queued before engine ready
+	achatFocused        bool                      // true when chat split has focus (within paneContent)
+	achatHasChat        map[string]bool           // cached: slug → has chat history
 	achatWorkspaceStats chatengine.WorkspaceStats // lifetime stats from events.jsonl
-	achatSessionTurns  int                       // session turn count
-	achatSessionIn     int                       // session input tokens
-	achatSessionOut    int                       // session output tokens
-	achatSessionCost   float64                   // session cost USD
+	achatSessionTurns   int                       // session turn count
+	achatSessionIn      int                       // session input tokens
+	achatSessionOut     int                       // session output tokens
+	achatSessionCost    float64                   // session cost USD
 
 	// Scratch pane (split at bottom of content pane)
-	scratchOpen        bool           // true when scratch split is visible
-	scratchFocused     bool           // true when scratch region has focus (within paneContent)
-	scratchScroll      int            // scroll offset into scratchLines
-	scratchLines       []string       // cached content for rendering
-	scratchBlocks      []scratchBlock // parsed blocks for block navigation
-	scratchBlockCursor int            // selected block index
-	scratchLoadedWs    string         // workspace name scratch was last loaded for ("" = global)
-	scratchGlobal      bool           // true when the open scratch targets the global file (no workspace in context)
-	scratchInputMode   bool           // true when opened via Ctrl+L: input pane takes over for note entry, auto-closes on workspace focus loss
-	scratchCollapsed   map[int]bool   // set of collapsed block indices
+	scratchOpen         bool           // true when scratch split is visible
+	scratchFocused      bool           // true when scratch region has focus (within paneContent)
+	scratchScroll       int            // scroll offset into scratchLines
+	scratchLines        []string       // cached content for rendering
+	scratchBlocks       []scratchBlock // parsed blocks for block navigation
+	scratchBlockCursor  int            // selected block index
+	scratchLoadedWs     string         // workspace name scratch was last loaded for ("" = global)
+	scratchGlobal       bool           // true when the open scratch targets the global file (no workspace in context)
+	scratchInputMode    bool           // true when opened via Ctrl+L: input pane takes over for note entry, auto-closes on workspace focus loss
+	scratchCollapsed    map[int]bool   // set of collapsed block indices
+	scratchEditBlockIdx int            // -1 = not editing, else index into scratchBlocks being edited in place
 	// Preview pane (split at bottom of content pane, mutually exclusive with scratch/askX)
 	previewOpen         bool     // true when preview split is visible
 	previewFocused      bool     // true when preview region has focus (within paneContent)
@@ -643,50 +643,50 @@ type Model struct {
 	previewLastSlug     string   // article slug currently loaded (avoids redundant reloads)
 	previewLastResource string   // resource name currently loaded
 	// AskX pane (split at bottom of content pane, mutually exclusive with scratch)
-	askxGlobal        bool               // true when opened via Ctrl+X (always global, ignores workspace)
-	askxOpen          bool               // true when askX split is visible
-	askxFocused       bool               // true when askX region has focus (within paneContent)
-	askxScroll        int                // scroll offset into askxDisplayLines
-	askxMsgs          []chat.Message     // structured message history (user + assistant pairs)
-	askxDisplayLines  []chatLine         // rendered lines for display (reuses chat line types)
-	askxBoxCursor     int                // selected box index (each box = user+assistant exchange)
-	askxCollapsed     map[int]bool       // set of collapsed box indices
-	askxResetPending  bool               // true when /reset confirmation is awaiting y/n
-	askxResetTurnCount int               // number of active (non-commented) turns shown in confirmation
-	populateRunning bool   // true while workspace populate LLM is in flight
-	populateLabel   string // label shown in wave indicator during populate
+	askxGlobal         bool               // true when opened via Ctrl+X (always global, ignores workspace)
+	askxOpen           bool               // true when askX split is visible
+	askxFocused        bool               // true when askX region has focus (within paneContent)
+	askxScroll         int                // scroll offset into askxDisplayLines
+	askxMsgs           []chat.Message     // structured message history (user + assistant pairs)
+	askxDisplayLines   []chatLine         // rendered lines for display (reuses chat line types)
+	askxBoxCursor      int                // selected box index (each box = user+assistant exchange)
+	askxCollapsed      map[int]bool       // set of collapsed box indices
+	askxResetPending   bool               // true when /reset confirmation is awaiting y/n
+	askxResetTurnCount int                // number of active (non-commented) turns shown in confirmation
+	populateRunning    bool               // true while workspace populate LLM is in flight
+	populateLabel      string             // label shown in wave indicator during populate
 	ingestRunning      bool               // true while an article ingest is in flight
 	ingestCancelFn     context.CancelFunc // cancels the in-flight ingest
 	ingestLabel        string             // current step label shown in spinner line
 	ingestLog          []string           // rolling log of last 4 completed steps
 	ingestCostEstimate string             // pinned cost estimate line, set after chunking
-	statusSuccess   bool     // true = render statusMsg in accent color
+	statusSuccess      bool               // true = render statusMsg in accent color
 
 	// Agent run state
-	agentRunning      bool                // true while an agent run is in flight
-	agentRunCancelFn  context.CancelFunc  // cancels the in-flight agent run
-	agentConfirmLines []string            // multi-line confirmation block shown above input
+	agentRunning       bool               // true while an agent run is in flight
+	agentRunCancelFn   context.CancelFunc // cancels the in-flight agent run
+	agentConfirmLines  []string           // multi-line confirmation block shown above input
 	agentConfirmAction func() tea.Cmd     // action to execute on Enter
 
 	// Populate edit mode — sequential review of suggestions in input pane
-	populateEditing  bool                       // true while reviewing suggestions one-by-one
-	populateEditItems []populateEditItem         // all items to review (collections first, then articles)
-	populateEditIdx   int                        // current item index
-	populateEditWs    string                     // workspace name for linking
-	populateEditCost  float64                    // LLM cost for display
-	populateEditHint  string                     // hint used (for status output)
-	populateEditLog   []string                   // progress log from LLM run
+	populateEditing   bool               // true while reviewing suggestions one-by-one
+	populateEditItems []populateEditItem // all items to review (collections first, then articles)
+	populateEditIdx   int                // current item index
+	populateEditWs    string             // workspace name for linking
+	populateEditCost  float64            // LLM cost for display
+	populateEditHint  string             // hint used (for status output)
+	populateEditLog   []string           // progress log from LLM run
 
 	// Remove review mode — sequential review for --all-articles / --all-collections
-	removeReviewing   bool                       // true while reviewing items one-by-one
-	removeReviewItems []populateEditItem         // reuse same struct (slug, isCollection, accepted)
-	removeReviewIdx   int                        // current item index
-	removeReviewWs    string                     // workspace name
-	removeReviewDry   bool                       // dry-run mode
+	removeReviewing   bool               // true while reviewing items one-by-one
+	removeReviewItems []populateEditItem // reuse same struct (slug, isCollection, accepted)
+	removeReviewIdx   int                // current item index
+	removeReviewWs    string             // workspace name
+	removeReviewDry   bool               // dry-run mode
 
 	askxNoHistory       bool               // true when /no-history mode is active (skip prior context)
 	askxSessionProfile  string             // sticky profile for current session (set by /profile)
-	askxStreaming        bool              // true while LLM response is in flight
+	askxStreaming       bool               // true while LLM response is in flight
 	askxStreamBuf       string             // accumulated streaming response text
 	askxSharedBuf       *streamBuf         // goroutine-safe buffer written by streaming goroutine
 	askxCancelStream    context.CancelFunc // cancels the in-flight askX request
@@ -704,27 +704,27 @@ type Model struct {
 	askxLifetimeStats chatengine.WorkspaceStats
 
 	// Resource overlay (active when focus == paneResource)
-	resourceLines    []string // file content split into lines
-	resourceName     string   // file name shown in top bar
-	resourceCursor   int      // highlighted line index
-	resourceScroll   int      // scroll offset
+	resourceLines    []string  // file content split into lines
+	resourceName     string    // file name shown in top bar
+	resourceCursor   int       // highlighted line index
+	resourceScroll   int       // scroll offset
 	resourcePreFocus focusPane // focus to restore on close
 
 	// TTS (macOS say(1))
-	ttsPlayer        *tts.Player
-	ttsGen           int                // tracks Player.Gen() to discard stale DoneMsgs
-	ttsCurrentText   string             // text being spoken (for restart on rate change)
-	resourceTTSText  string             // text of the resource block currently playing (for speed-change restart)
-	resourceTTSQueue []resourceTTSBlock // paragraph blocks still to be spoken
-	contentTTSText   string             // text of the content block currently playing
-	contentTTSQueue  []resourceTTSBlock // paragraph blocks for content pane TTS
-	chatTTSText      string             // text of the chat block currently playing (for speed-change restart)
-	chatTTSQueue     []resourceTTSBlock // paragraph blocks still to be spoken in chat
-	chatTTSCursor    int                // absolute index into chatDisplayLines for the current TTS block
-	chatTTSBoxIdx    int                // box index being spoken (for cursor highlight)
-	previewTTSText   string             // text of the preview block currently playing (for speed-change restart)
-	previewTTSQueue  []resourceTTSBlock // paragraph blocks still to be spoken in preview
-	previewLineCursor int               // persistent highlighted line index in previewLines (advances during TTS)
+	ttsPlayer         *tts.Player
+	ttsGen            int                // tracks Player.Gen() to discard stale DoneMsgs
+	ttsCurrentText    string             // text being spoken (for restart on rate change)
+	resourceTTSText   string             // text of the resource block currently playing (for speed-change restart)
+	resourceTTSQueue  []resourceTTSBlock // paragraph blocks still to be spoken
+	contentTTSText    string             // text of the content block currently playing
+	contentTTSQueue   []resourceTTSBlock // paragraph blocks for content pane TTS
+	chatTTSText       string             // text of the chat block currently playing (for speed-change restart)
+	chatTTSQueue      []resourceTTSBlock // paragraph blocks still to be spoken in chat
+	chatTTSCursor     int                // absolute index into chatDisplayLines for the current TTS block
+	chatTTSBoxIdx     int                // box index being spoken (for cursor highlight)
+	previewTTSText    string             // text of the preview block currently playing (for speed-change restart)
+	previewTTSQueue   []resourceTTSBlock // paragraph blocks still to be spoken in preview
+	previewLineCursor int                // persistent highlighted line index in previewLines (advances during TTS)
 }
 
 // cmdCompletion is one entry in the command completion popup.
@@ -1018,8 +1018,8 @@ type collectionsLoadedMsg struct {
 // It carries both collection-level matches (by name/description) and article-level
 // matches (by content) so the handler can build a merged tree.
 type collectionSearchMsg struct {
-	collections []service.CollectionInfo  // collections matched by name/description
-	articles    []service.SearchResult    // articles matched by content (only collected ones)
+	collections []service.CollectionInfo // collections matched by name/description
+	articles    []service.SearchResult   // articles matched by content (only collected ones)
 	query       string
 	err         string
 	warning     string // non-fatal: part of the search could not run
@@ -1057,7 +1057,6 @@ type agentRunIngestedLoadedMsg struct {
 	articles []store.Article
 	err      string
 }
-
 
 // agentRunDoneMsg signals completion of a fresh or decisions agent run.
 type agentRunDoneMsg struct {
@@ -1348,7 +1347,10 @@ func (m Model) buildAgentDecisionRows() []agentDetailRow {
 	}
 
 	// Build feed stats lookup from selected run record for display.
-	type fstats struct{ new, ingest, maybe, skip int; cost float64 }
+	type fstats struct {
+		new, ingest, maybe, skip int
+		cost                     float64
+	}
 	statsMap := make(map[string]fstats)
 	if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
 		for _, f := range m.agentRuns[m.agentRunsCursor].Feeds {
@@ -1412,7 +1414,6 @@ func loadAgentDecisions(agentPath, runID string) tea.Cmd {
 		return agentDecisionsLoadedMsg{runID: runID, df: df}
 	}
 }
-
 
 // loadAgentRunIngested queries the article store for all articles ingested during
 // a specific decisions run (matched by agent_run_id).
@@ -1636,20 +1637,20 @@ func loadWorkspaces(svc *service.Service) tea.Cmd {
 		items := make([]workspaceItem, len(infos))
 		for i, w := range infos {
 			items[i] = workspaceItem{
-				name:            w.Name,
-				description:     w.Description,
-				status:          w.Status,
-				createdAt:       w.CreatedAt,
-				articleCount:    w.ArticleCount,
-				collectionCount: w.CollectionCount,
-				resourceCount:   w.ResourceCount,
-				outcomeCount:    w.OutcomeCount,
-				hasSystem:       w.HasSystem,
-				hasHistory:      w.HasHistory,
-				chatProfile:     w.ChatConfig.Profile,
-				chatStrategy:    w.ChatConfig.Strategy,
-				articles:        w.Articles,
-				collectionSlugs: w.CollectionSlugs,
+				name:                 w.Name,
+				description:          w.Description,
+				status:               w.Status,
+				createdAt:            w.CreatedAt,
+				articleCount:         w.ArticleCount,
+				collectionCount:      w.CollectionCount,
+				resourceCount:        w.ResourceCount,
+				outcomeCount:         w.OutcomeCount,
+				hasSystem:            w.HasSystem,
+				hasHistory:           w.HasHistory,
+				chatProfile:          w.ChatConfig.Profile,
+				chatStrategy:         w.ChatConfig.Strategy,
+				articles:             w.Articles,
+				collectionSlugs:      w.CollectionSlugs,
 				resources:            w.ResourceNames,
 				resourceDirs:         w.ResourceDirs,
 				outcomes:             w.OutcomeNames,
@@ -2021,27 +2022,28 @@ func New(svc *service.Service, cfg config.Config, cfgPath, themeMode string) Mod
 
 	sendFn := func(tea.Msg) {} // placeholder, overwritten by SetProgramSend
 	m := Model{
-		activeTab:          tabFromString(restored.ActiveTab),
-		navSubTab:          subTabFromString(restored.SubTab),
-		agentSubTab:        agentSubTabFromString(restored.AgentSubTab),
-		statsSubTab:        statsSubTabFromString(restored.StatsSubTab),
-		agentContentCursor: restored.AgentContentCursor,
-		focus:           paneNav,
-		themeMode:       themeMode,
-		cursorVisible:   true,
-		svc:             svc,
-		cfg:             cfg,
-		cfgPath:         cfgPath,
-		restoredState:   restored,
-		wsFocusName:     restored.WsFocus,
-		input:           ta,
-		inputHistory:    loadCommandHistory(historyPath(cfg.DataRoot)),
-		inputHistoryIdx: -1,
-		cmdCompleteIdx:  -1,
-		paramIdx:        -1,
-		chatAutoScroll:  true,
-		programSend:     &sendFn,
-		ttsPlayer:       tts.NewPlayer(cfg.TTSVoice, cfg.TTSRate),
+		activeTab:           tabFromString(restored.ActiveTab),
+		navSubTab:           subTabFromString(restored.SubTab),
+		agentSubTab:         agentSubTabFromString(restored.AgentSubTab),
+		statsSubTab:         statsSubTabFromString(restored.StatsSubTab),
+		agentContentCursor:  restored.AgentContentCursor,
+		focus:               paneNav,
+		themeMode:           themeMode,
+		cursorVisible:       true,
+		svc:                 svc,
+		cfg:                 cfg,
+		cfgPath:             cfgPath,
+		restoredState:       restored,
+		wsFocusName:         restored.WsFocus,
+		input:               ta,
+		inputHistory:        loadCommandHistory(historyPath(cfg.DataRoot)),
+		inputHistoryIdx:     -1,
+		cmdCompleteIdx:      -1,
+		scratchEditBlockIdx: -1,
+		paramIdx:            -1,
+		chatAutoScroll:      true,
+		programSend:         &sendFn,
+		ttsPlayer:           tts.NewPlayer(cfg.TTSVoice, cfg.TTSRate),
 	}
 	return m
 }
@@ -2072,7 +2074,7 @@ func (m Model) SaveState() {
 	if m.agentRunsCursor >= 0 && m.agentRunsCursor < len(m.agentRuns) {
 		s.AgentRunID = m.agentRuns[m.agentRunsCursor].RunID
 	}
-// Store currently selected workspace and its expand state.
+	// Store currently selected workspace and its expand state.
 	if m.wsCursor >= 0 && m.wsCursor < len(m.wsRows) {
 		row := m.wsRows[m.wsCursor]
 		wsIdx := row.wsIdx

@@ -164,8 +164,9 @@ workspace-scoped scratch, not the global one).
   s              speak block (TTS)
   v              collapse/expand block
   x              delete block
-  e              edit scratch file in $EDITOR
+  e              edit block in place
   V              view in overlay
+  E              edit scratch file in $EDITOR
   [              decrease TTS rate
   ]              increase TTS rate
   Esc            unfocus scratch pane
