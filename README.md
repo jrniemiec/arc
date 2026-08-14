@@ -120,6 +120,7 @@ than an afterthought.
 - **Collections** — group articles by topic; LLM-assisted creation and assignment
 - **Workspaces** — research environments with attached articles, collections, resources, persistent chat, and generated outcomes
 - **Three chat modes** — AskX (single-shot), article chat (scoped to one article), workspace chat (multi-turn, grounded)
+- **Scratch pad** — persistent notes, global or per-workspace; `Ctrl+L` opens the relevant one and switches input to note-entry
 - **Three grounding modes** — corpus-only (pure RAG), corpus-first (hybrid), open (with internet search)
 - **Three context strategies** — tail, token-budget, summarize (rolling LLM-generated summary)
 - **Autonomous agent** — polls RSS/Atom feeds, LLM-filters against interest profile, auto-ingests relevant articles

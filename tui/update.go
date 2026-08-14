@@ -2076,6 +2076,7 @@ func (m *Model) navCursorUp() tea.Cmd {
 			m.clampWsScroll()
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeCloseScratchMode()
 			m.maybeUpdatePreview()
 			return m.triggerWorkspaceChatLoad()
 		}
@@ -2113,6 +2114,7 @@ func (m *Model) navCursorDown() tea.Cmd {
 			m.clampWsScroll()
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeCloseScratchMode()
 			m.maybeUpdatePreview()
 			return m.triggerWorkspaceChatLoad()
 		}
@@ -2546,6 +2548,7 @@ func (m *Model) navPageUp() tea.Cmd {
 		m.clampWsScroll()
 		m.maybeReloadScratch()
 		m.maybeCloseAskX()
+		m.maybeCloseScratchMode()
 		m.maybeUpdatePreview()
 	}
 	return nil
@@ -2597,6 +2600,7 @@ func (m *Model) navPageDown() tea.Cmd {
 		m.clampWsScroll()
 		m.maybeReloadScratch()
 		m.maybeCloseAskX()
+		m.maybeCloseScratchMode()
 		m.maybeUpdatePreview()
 	}
 	return nil
@@ -2623,6 +2627,7 @@ func (m *Model) navHome() tea.Cmd {
 		m.clampWsScroll()
 		m.maybeReloadScratch()
 		m.maybeCloseAskX()
+		m.maybeCloseScratchMode()
 		m.maybeUpdatePreview()
 	}
 	return nil
@@ -2657,6 +2662,7 @@ func (m *Model) navEnd() tea.Cmd {
 			m.clampWsScroll()
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeCloseScratchMode()
 			m.maybeUpdatePreview()
 		}
 	}
@@ -2782,6 +2788,7 @@ func (m *Model) switchNavSubTab(sub navSubTab) tea.Cmd {
 		m.exitChatMode()
 	}
 	m.maybeCloseAskX()
+	m.maybeCloseScratchMode()
 	m.clearNavSearch()
 	m.navSubTab = sub
 	m.navRowCursor = 0
@@ -4063,6 +4070,26 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					return m.startChatCmd(m.chatWorkspace)
 				}
 				return m.sendChatMsg(val)
+			}
+			if m.scratchInputMode {
+				if strings.HasPrefix(val, "/") {
+					return m.dispatchCommand(val)
+				}
+				if val == "" {
+					return nil
+				}
+				ws := m.scratchWorkspace()
+				if err := storefs.AppendScratch(m.cfg.DataRoot, ws, val); err != nil {
+					m.setStatusError("scratch: " + err.Error())
+					return nil
+				}
+				m.reloadScratchLines()
+				m.scratchScrollToBottom()
+				m.input.SetValue("")
+				m.input.CursorEnd()
+				m.syncInputHeight()
+				m.statusMsg = "✓ added to scratch"
+				return nil
 			}
 			if m.askxOpen {
 				if strings.HasPrefix(val, "//") {
@@ -9197,7 +9224,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"alt+1/2/3", "", "jump to nav / content / tab bar"},
 		{"l / →", "", "next content tab (Body/Summary/Flash/Cards)"},
 		{"h / ←", "", "previous content tab"},
-		{"ctrl+l", "", "toggle scratch pane"},
+		{"ctrl+l", "", "scratch mode (workspace-aware, or global outside a workspace)"},
 		{"ctrl+x", "", "toggle global askX pane"},
 		{"ctrl+r", "", "refresh current view"},
 		{"/", "", "open command input"},
@@ -9867,6 +9894,7 @@ func (m *Model) clickNavRow(y int) tea.Cmd {
 			m.wsCursor = idx
 			m.maybeReloadScratch()
 			m.maybeCloseAskX()
+			m.maybeCloseScratchMode()
 			m.maybeUpdatePreview()
 			row := m.wsRows[idx]
 			switch row.kind {
@@ -9974,6 +10002,13 @@ func (m *Model) scratchWorkspace() string {
 	if m.scratchGlobal {
 		return ""
 	}
+	return m.scratchContextWorkspace()
+}
+
+// scratchContextWorkspace resolves the workspace implied by the current cursor/chat
+// context, ignoring scratchGlobal. Used to decide what Ctrl+L should open, and to
+// detect when workspace focus has moved on so scratch mode can auto-close.
+func (m *Model) scratchContextWorkspace() string {
 	// Nav cursor workspace takes priority — it reflects what the user is looking at.
 	if m.navSubTab == navSubTabWorkspaces {
 		if ws := m.selectedWorkspace(); ws != nil {
@@ -9987,8 +10022,18 @@ func (m *Model) scratchWorkspace() string {
 	return ""
 }
 
-// toggleScratch toggles the global scratch pane. When opening, pre-fills input with "/scratch ".
-// Always opens global scratch regardless of cursor context.
+// scratchPromptPrefix returns the input prompt string for scratch mode (Ctrl+L).
+func (m *Model) scratchPromptPrefix() string {
+	if ws := m.scratchWorkspace(); ws != "" {
+		return ws + ":scratch> "
+	}
+	return "Scratch> "
+}
+
+// toggleScratch toggles scratch mode (Ctrl+L): opens the scratch for the current
+// workspace context, or the global scratch when no workspace is in focus, and takes
+// over the input pane for note entry. Auto-closes when workspace focus is lost
+// (see maybeCloseScratchMode).
 func (m *Model) toggleScratch() {
 	if m.scratchOpen {
 		m.closeScratch()
@@ -10001,19 +10046,21 @@ func (m *Model) toggleScratch() {
 	if m.previewOpen {
 		m.closePreview()
 	}
-	m.scratchGlobal = true
+	ws := m.scratchContextWorkspace()
+	m.scratchGlobal = ws == ""
+	m.scratchInputMode = true
 	m.scratchOpen = true
 	m.reloadScratchLines()
 	m.scratchScrollToBottom()
-	// Don't move focus or pre-fill input — let the user stay where they are.
-	// m.focus = paneCommand
-	// m.cursorVisible = true
-	// m.input.SetValue("/scratch ")
-	// m.input.CursorEnd()
-	// m.cmdComplete = nil
-	// m.cmdCompleteIdx = -1
-	// m.paramItems = nil
-	// m.paramIdx = -1
+	m.focus = paneCommand
+	m.cursorVisible = true
+	m.input.SetValue("")
+	m.syncInputPrompt()
+	m.cmdComplete = nil
+	m.cmdCompleteIdx = -1
+	m.paramItems = nil
+	m.paramIdx = -1
+	m.paramHint = ""
 }
 
 // cmdScratch handles /scratch [msg]. Empty msg toggles pane; non-empty appends.
@@ -10220,9 +10267,10 @@ func (m *Model) reloadScratchLines() {
 }
 
 // maybeReloadScratch reloads the scratch pane if the cursor moved to a different workspace.
-// No-op when scratch was opened as global (via Ctrl+L).
+// No-op when scratch is global, or in scratch mode (which auto-closes instead — see
+// maybeCloseScratchMode).
 func (m *Model) maybeReloadScratch() {
-	if !m.scratchOpen || m.scratchGlobal {
+	if !m.scratchOpen || m.scratchGlobal || m.scratchInputMode {
 		return
 	}
 	ws := m.scratchWorkspace()
@@ -10231,6 +10279,17 @@ func (m *Model) maybeReloadScratch() {
 	}
 	m.reloadScratchLines()
 	m.scratchScrollToBottom()
+}
+
+// maybeCloseScratchMode closes the Ctrl+L scratch pane when workspace focus changes.
+// No-op when scratch wasn't opened via Ctrl+L (scratchInputMode) or targets the global file.
+func (m *Model) maybeCloseScratchMode() {
+	if !m.scratchOpen || !m.scratchInputMode || m.scratchGlobal {
+		return
+	}
+	if m.scratchContextWorkspace() != m.scratchLoadedWs {
+		m.closeScratch()
+	}
 }
 
 // maybeCloseAskX closes the workspace-local askX pane when the cursor moves away.
@@ -10354,6 +10413,7 @@ func (m *Model) cmdClearScratch(wsIdx int) {
 func (m *Model) closeScratch() {
 	m.scratchOpen = false
 	m.scratchFocused = false
+	m.scratchInputMode = false
 	m.scratchScroll = 0
 	m.scratchLines = nil
 	m.scratchBlocks = nil
@@ -10362,6 +10422,7 @@ func (m *Model) closeScratch() {
 	m.scratchLoadedWs = ""
 	m.scratchGlobal = false
 	m.clearScratchInput()
+	m.syncInputPrompt()
 }
 
 // clearScratchInput clears the command input if it starts with "/scratch" or "/Scratch".

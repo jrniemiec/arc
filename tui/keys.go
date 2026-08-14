@@ -30,7 +30,7 @@ type keyMap struct {
 	Delete       key.Binding // D — delete article
 	CorrectInput key.Binding // Ctrl+G — correct spelling/grammar
 	Refresh      key.Binding // Ctrl+R — refresh current view
-	Scratch      key.Binding // Ctrl+L — toggle scratch pane
+	Scratch      key.Binding // Ctrl+L — scratch mode (workspace-aware)
 	AskX         key.Binding // Ctrl+X — toggle askX pane
 	Preview      key.Binding // Ctrl+O — toggle preview pane
 	Attic        key.Binding // a — move to attic
@@ -136,7 +136,7 @@ var keys = keyMap{
 	),
 	Scratch: key.NewBinding(
 		key.WithKeys("ctrl+l"),
-		key.WithHelp("ctrl+l", "toggle scratch"),
+		key.WithHelp("ctrl+l", "scratch mode"),
 	),
 	AskX: key.NewBinding(
 		key.WithKeys("ctrl+x"),

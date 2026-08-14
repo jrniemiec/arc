@@ -9,7 +9,8 @@
   Alt+3          focus tab bar
   Esc            focus command input; press again with input empty to focus nav
   Ctrl+S         toggle selection mode (freeze screen for native text copy)
-  Ctrl+L         toggle scratch pane
+  Ctrl+L         scratch mode: opens workspace scratch (or global outside a
+                 workspace), input pane switches to note entry
   Ctrl+X         toggle askX pane
   Ctrl+O         toggle preview pane
   Ctrl+G         correct spelling/grammar of input via LLM
@@ -141,6 +142,16 @@ Flashcards (cursor on a card, Cards section):
   V              view full conversation in overlay
   [              decrease TTS rate
   ]              increase TTS rate
+
+## Scratch mode (Ctrl+L)
+
+Opens the scratch for the workspace under the nav cursor / active workspace
+chat, or the global scratch if no workspace is in context. The command input
+switches to note entry: typed text + Enter appends a note and stays in
+scratch mode; `/command` still dispatches normally. Pressing Ctrl+L again
+closes it, as does moving the nav cursor to a different workspace or
+switching away from the Workspaces sub-tab (auto-close only applies to a
+workspace-scoped scratch, not the global one).
 
 ## Scratch pane (when focused)
 

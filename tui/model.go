@@ -631,7 +631,8 @@ type Model struct {
 	scratchBlocks      []scratchBlock // parsed blocks for block navigation
 	scratchBlockCursor int            // selected block index
 	scratchLoadedWs    string         // workspace name scratch was last loaded for ("" = global)
-	scratchGlobal      bool           // true when opened via Ctrl+L (always global, cursor won't switch)
+	scratchGlobal      bool           // true when the open scratch targets the global file (no workspace in context)
+	scratchInputMode   bool           // true when opened via Ctrl+L: input pane takes over for note entry, auto-closes on workspace focus loss
 	scratchCollapsed   map[int]bool   // set of collapsed block indices
 	// Preview pane (split at bottom of content pane, mutually exclusive with scratch/askX)
 	previewOpen         bool     // true when preview split is visible
@@ -1731,6 +1732,9 @@ func (m Model) inputPrompt() string {
 	}
 	if m.askxOpen {
 		return m.askxPromptPrefix()
+	}
+	if m.scratchInputMode {
+		return m.scratchPromptPrefix()
 	}
 	if m.chatMode {
 		if m.chatProfileOverride != "" {
