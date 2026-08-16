@@ -4043,6 +4043,67 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 				}
 				return m.sendArticleChatMsg(val)
 			}
+			if m.askxOpen {
+				if strings.HasPrefix(val, "//") {
+					m.cmdAskXAddNote(strings.TrimSpace(val[2:]))
+					return nil
+				}
+				if strings.HasPrefix(val, "!") {
+					shellCmd := strings.TrimSpace(val[1:])
+					if shellCmd != "" {
+						return runShellCmd(shellCmd)
+					}
+				}
+				if strings.HasPrefix(val, "/") {
+					parts := strings.Fields(val)
+					cmd := parts[0]
+					arg := ""
+					if len(parts) > 1 {
+						arg = strings.TrimSpace(val[len(cmd)+1:])
+					}
+					switch cmd {
+					case "/profile", "/model":
+						if arg == "" {
+							name := m.cfg.AskX.Profile
+							if name == "" {
+								name = "(default haiku)"
+							}
+							m.statusMsg = "askx profile: " + name
+							return nil
+						}
+						if _, ok := m.cfg.Profiles[arg]; !ok {
+							m.setStatusError("unknown profile: " + arg)
+							return nil
+						}
+						m.cfg.AskX.Profile = arg
+						m.askxSessionProfile = ""
+						if m.cfgPath != "" {
+							if err := config.PatchNestedStringField(m.cfgPath, "askx", "profile", arg); err != nil {
+								m.setStatusError("✗ askx profile set in memory but could not persist: " + err.Error())
+								return nil
+							}
+						}
+						m.syncInputPrompt()
+						m.statusMsg = "askx profile → " + arg
+						return nil
+					case "/no-history":
+						m.askxNoHistory = !m.askxNoHistory
+						m.syncInputPrompt()
+						if m.askxNoHistory {
+							m.statusMsg = "no-history mode on — queries will not include prior context"
+						} else {
+							m.statusMsg = "no-history mode off"
+						}
+						return nil
+					}
+					return m.dispatchCommand(val)
+				}
+				if m.askxStreaming {
+					m.statusMsg = "waiting for response…"
+					return nil
+				}
+				return m.cmdAskX(val, m.askxGlobal)
+			}
 			if m.scratchInputMode {
 				if m.scratchEditBlockIdx >= 0 {
 					if strings.HasPrefix(val, "/") {
@@ -4147,67 +4208,6 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					return m.startChatCmd(m.chatWorkspace)
 				}
 				return m.sendChatMsg(val)
-			}
-			if m.askxOpen {
-				if strings.HasPrefix(val, "//") {
-					m.cmdAskXAddNote(strings.TrimSpace(val[2:]))
-					return nil
-				}
-				if strings.HasPrefix(val, "!") {
-					shellCmd := strings.TrimSpace(val[1:])
-					if shellCmd != "" {
-						return runShellCmd(shellCmd)
-					}
-				}
-				if strings.HasPrefix(val, "/") {
-					parts := strings.Fields(val)
-					cmd := parts[0]
-					arg := ""
-					if len(parts) > 1 {
-						arg = strings.TrimSpace(val[len(cmd)+1:])
-					}
-					switch cmd {
-					case "/profile", "/model":
-						if arg == "" {
-							name := m.cfg.AskX.Profile
-							if name == "" {
-								name = "(default haiku)"
-							}
-							m.statusMsg = "askx profile: " + name
-							return nil
-						}
-						if _, ok := m.cfg.Profiles[arg]; !ok {
-							m.setStatusError("unknown profile: " + arg)
-							return nil
-						}
-						m.cfg.AskX.Profile = arg
-						m.askxSessionProfile = ""
-						if m.cfgPath != "" {
-							if err := config.PatchNestedStringField(m.cfgPath, "askx", "profile", arg); err != nil {
-								m.setStatusError("✗ askx profile set in memory but could not persist: " + err.Error())
-								return nil
-							}
-						}
-						m.syncInputPrompt()
-						m.statusMsg = "askx profile → " + arg
-						return nil
-					case "/no-history":
-						m.askxNoHistory = !m.askxNoHistory
-						m.syncInputPrompt()
-						if m.askxNoHistory {
-							m.statusMsg = "no-history mode on — queries will not include prior context"
-						} else {
-							m.statusMsg = "no-history mode off"
-						}
-						return nil
-					}
-					return m.dispatchCommand(val)
-				}
-				if m.askxStreaming {
-					m.statusMsg = "waiting for response…"
-					return nil
-				}
-				return m.cmdAskX(val, m.askxGlobal)
 			}
 			// Resolve @<numID> references for non-slash commands.
 			if !strings.HasPrefix(val, "/") && atRefPattern.MatchString(val) {
