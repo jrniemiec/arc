@@ -67,6 +67,7 @@ Parts 2–5 all happen in the nav pane's `Articles` sub-tab — the default on l
 - `h` / `l` (or `←` / `→`) — cycle body / summary / flash
 - `s` — read current section aloud
 - `o` — open original in browser
+- `F` — reveal the article's folder in Finder (its text, summaries and flashcards on disk)
 - `?` — more bindings for this view
 
 ## Part 3 — Build the library
@@ -237,6 +238,7 @@ Attach a non-article resource (notes file) — same context:
 ```
 
 - `/resource-add <path|url> [--into <dir>] [--as <name>] [--comment "..."]` — copies a file/dir, or fetches a URL, into `workspace/resources/`
+- `F` — reveal whatever the cursor is on in Finder: the workspace folder, the resource file, the article's folder. Useful for dropping files in by hand or checking what actually landed on disk
 
 ## Part 8 — Configure the workspace chat
 

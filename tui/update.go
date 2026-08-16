@@ -1871,13 +1871,9 @@ func (m *Model) handleNavKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 		return m.openArticleOverlay(m.selectedNavItem())
+	case m.activeTab == tabLibrary && key.Matches(msg, keys.Reveal):
+		return m.revealSelected()
 	case m.activeTab == tabLibrary && msg.String() == "O":
-		if m.navSubTab == navSubTabWorkspaces {
-			row := m.selectedWsRow()
-			if row != nil && row.kind == wsRowResourceDir {
-				return m.openWsFileExternal()
-			}
-		}
 		return m.openCurrentURLNoTrack()
 	case m.activeTab == tabLibrary && msg.String() == "U":
 		if m.navSubTab == navSubTabWorkspaces {
@@ -5333,6 +5329,12 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 	case "/arc-home":
 		m.statusMsg = m.cfg.DataRoot
 		return nil
+	case "/reveal":
+		if m.activeTab != tabLibrary {
+			m.statusMsg = "✗ /reveal is only available in the Library tab"
+			return nil
+		}
+		return m.revealSelected()
 	case "/config":
 		m.setStatusLines(m.cmdConfigLines())
 		m.focus = paneStatus
@@ -9252,6 +9254,7 @@ var helpGroups = []struct {
 		{"/workspace-profile", "[name]", "show or set global default profile for workspace chats (persisted to config; alias: /workspace-model)"},
 		{"/chat-profile", "[name]", "show or set global article chat profile (persisted to config; alias: /chat-model)"},
 		{"/correction-profile", "[name]", "show or set correction profile for Ctrl+G (persisted to config; alias: /correction-model)"},
+		{"/reveal", "", "reveal the selected article/collection/workspace/resource in Finder (same as F)"},
 		{"/arc-home", "", "show active arc data root"},
 		{"/theme", "[light|dark|auto]", "show or set TUI theme (session-only, not persisted)"},
 		{"/config", "", "show resolved configuration"},
@@ -9302,6 +9305,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"f / *", "", "toggle favorite"},
 		{"o", "", "open source URL in browser"},
 		{"v", "", "view article in overlay"},
+		{"F", "", "reveal article folder in Finder"},
 		{"O", "", "open source URL in browser (window persists after exit)"},
 		{"D", "", "delete article"},
 		{"a", "", "move to attic"},
@@ -9317,6 +9321,7 @@ func (m *Model) contextKeys(all bool) []string {
 
 	collectionKeys := []cmdCompletion{
 		{"c", "", "toggle collection chat"},
+		{"F", "", "reveal collection folder in Finder"},
 		{"U", "", "remove selected article from this collection"},
 		{"D", "", "delete collection"},
 	}
@@ -9327,7 +9332,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"f / *", "", "toggle pin"},
 		{"!", "", "toggle workspace focus"},
 		{"o", "", "open resource or source URL"},
-		{"O", "", "reveal resource folder in Finder"},
+		{"F", "", "reveal selected item in Finder"},
 		{"v", "", "view resource/scratch/article in overlay"},
 		{"e", "", "edit resource/outcome/scratch in $EDITOR"},
 		{"D", "", "delete workspace / selected item"},

@@ -15,6 +15,7 @@ Type / in the command bar to enter a command. Press Tab to autocomplete.
   /reset                     reset askX context (keeps history, clears LLM context)
   /help [group]              show command reference
   /?                         show all key bindings
+  /reveal                    reveal selected item in Finder (same as F)
   /arc-home                  show active arc data root
   /config                    show resolved configuration
   /config-view               view config.jsonc in overlay
@@ -181,6 +182,7 @@ in /help or tab-completion.
   /article <cmd>             article commands
   /collection <cmd>          collection commands
   /workspace <cmd>           workspace commands
+  /reveal                    reveal selected item in Finder (same as F)
   /arc-home                  show active arc data root
   /config                    show resolved configuration
   /config-view               view config.jsonc in overlay

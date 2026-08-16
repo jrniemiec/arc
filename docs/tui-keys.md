@@ -35,9 +35,15 @@
 
 ## Article actions (nav pane)
 
-  o              open original source in native viewer
+  o              open original source in native viewer (or the selected
+                 workspace resource/outcome in its default app)
   O              open URL without tracking
   v              view article in overlay
+  F              reveal the selected item in Finder — works on any Library row:
+                 article, collection, workspace, resource, outcome, scratch.
+                 Folders open showing their contents; files open their folder
+                 with the file selected. Also available as /reveal, which works
+                 from workspace chat where F is typed into the input
   r              mark as read
   u              mark as unread
   f / *          toggle favorite

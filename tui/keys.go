@@ -24,6 +24,7 @@ type keyMap struct {
 	Help       key.Binding // ? — help overlay
 	Open       key.Binding // o — open source URL in browser
 	View       key.Binding // v — view article in external terminal
+	Reveal     key.Binding // F — reveal selected item in Finder
 	MarkRead     key.Binding // r — mark article as read
 	MarkUnread   key.Binding // u — mark article as unread
 	ToggleFav    key.Binding // f — toggle favorite
@@ -109,6 +110,10 @@ var keys = keyMap{
 	View: key.NewBinding(
 		key.WithKeys("v"),
 		key.WithHelp("v", "view article in terminal"),
+	),
+	Reveal: key.NewBinding(
+		key.WithKeys("F"),
+		key.WithHelp("F", "reveal in Finder"),
 	),
 	MarkRead: key.NewBinding(
 		key.WithKeys("r"),

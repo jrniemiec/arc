@@ -762,6 +762,7 @@ Press `Ctrl+G` in any chat input to fix typos and grammar via LLM. Configure in 
 | `c` | Chat (article chat) |
 | `o` | Open original source in native viewer |
 | `v` | View in terminal |
+| `F` | Reveal the selected item in Finder |
 | `Ctrl+G` | Fix input typos via LLM |
 | `?` | Key bindings for the current context |
 | `/?` | Every key binding |
