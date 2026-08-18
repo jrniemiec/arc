@@ -53,9 +53,10 @@ func (m *Model) loadChatHistoryCmd(workspaceName string, focus bool) tea.Cmd {
 			if groundingMode == "" {
 				groundingMode = "corpus-first"
 			}
-			// Write back so the workspace config is always explicit.
-			chatCfg.GroundingMode = groundingMode
-			_ = storefs.WriteChatConfig(cfg.DataRoot, workspaceName, chatCfg)
+			// Deliberately not written back. Opening a chat is a read, and a
+			// read must never write to the tracked tree: it would dirty the
+			// working tree without the xlock, blocking the next pull. The value
+			// is persisted when the user sets it via /mode, which is gated.
 		}
 
 		wsStats, _ := chatengine.LoadWorkspaceStats(cfg.EventsPath, workspaceName)
@@ -748,7 +749,6 @@ func (m *Model) cmdChatDeleteBox(boxIdx int) tea.Cmd {
 	}
 
 	// Collect messages to save.
-	cfg := m.cfg
 	ws := m.chatWorkspace
 	var toSave []chat.Message
 	if m.chatEngine != nil {
@@ -760,10 +760,10 @@ func (m *Model) cmdChatDeleteBox(boxIdx int) tea.Cmd {
 		copy(toSave, m.chatRawMsgs)
 	}
 
+	svc := m.svc
 	return func() tea.Msg {
-		st := chat.NewChatStore(cfg.DataRoot, ws)
 		h := &chat.History{Msgs: toSave}
-		if err := st.SaveHistory(h); err != nil {
+		if err := svc.SaveWorkspaceChat(context.Background(), ws, h); err != nil {
 			return cmdDoneMsg{err: "delete: " + err.Error()}
 		}
 		return cmdDoneMsg{statusMsg: "✓ exchange deleted"}
@@ -795,7 +795,6 @@ func (m *Model) cmdChatCommentBox(boxIdx int) tea.Cmd {
 	m.rebuildChatLines(m.chatBuildWidth())
 
 	// Collect messages to save.
-	cfg := m.cfg
 	ws := m.chatWorkspace
 	var toSave []chat.Message
 	if m.chatEngine != nil {
@@ -812,10 +811,10 @@ func (m *Model) cmdChatCommentBox(boxIdx int) tea.Cmd {
 		status = "✓ exchange uncommented"
 	}
 
+	svc := m.svc
 	return func() tea.Msg {
-		st := chat.NewChatStore(cfg.DataRoot, ws)
 		h := &chat.History{Msgs: toSave}
-		if err := st.SaveHistory(h); err != nil {
+		if err := svc.SaveWorkspaceChat(context.Background(), ws, h); err != nil {
 			return cmdDoneMsg{err: "comment: " + err.Error()}
 		}
 		return cmdDoneMsg{statusMsg: status}
@@ -1308,7 +1307,10 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 		// Persist to workspace chat/chat.json.
 		chatCfg, _ := storefs.ReadChatConfig(m.cfg.DataRoot, m.chatWorkspace)
 		chatCfg.GroundingMode = fullArg
-		_ = storefs.WriteChatConfig(m.cfg.DataRoot, m.chatWorkspace, chatCfg)
+		if err := m.svc.SetChatConfig(context.Background(), m.chatWorkspace, chatCfg); err != nil {
+			m.setStatusError(syncErrorMessage(err))
+			return nil
+		}
 		m.statusMsg = "✓ mode set to " + fullArg
 		return nil
 
@@ -1577,6 +1579,7 @@ func (m *Model) addChatNote(text string) tea.Cmd {
 	// Load current history from disk and append the note, so we don't
 	// overwrite turns that were added by the engine after it was initialised.
 	noteText := text
+	svc := m.svc
 	return func() tea.Msg {
 		st := chat.NewChatStore(cfg.DataRoot, ws)
 		h, err := st.LoadHistory()
@@ -1584,7 +1587,7 @@ func (m *Model) addChatNote(text string) tea.Cmd {
 			return cmdDoneMsg{err: "note: " + err.Error()}
 		}
 		h.Append(chat.RoleNote, noteText)
-		if err := st.SaveHistory(h); err != nil {
+		if err := svc.SaveWorkspaceChat(context.Background(), ws, h); err != nil {
 			return cmdDoneMsg{err: "note: " + err.Error()}
 		}
 		return cmdDoneMsg{}

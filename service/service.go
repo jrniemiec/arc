@@ -15,6 +15,7 @@ import (
 
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/flashcards"
+	"github.com/jrniemiec/arc/gitsync"
 	"github.com/jrniemiec/arc/ingest/embed"
 	"github.com/jrniemiec/arc/ingest/extractor"
 	"github.com/jrniemiec/arc/ingest/pipeline"
@@ -27,19 +28,92 @@ import (
 // Service is the arc business logic layer. All frontends (CLI, TUI, MCP, bot)
 // call Service methods — never library or store directly.
 type Service struct {
-	lib *library.Library
-	cfg config.Config
-	vec *vector.Store // nil if vector index could not be opened
+	lib  *library.Library
+	cfg  config.Config
+	vec  *vector.Store // nil if vector index could not be opened
+	sync gitsync.Coordinator
 }
 
 // New creates a Service from an open Library.
 // It attempts to open the vector index at cfg.VectorPath; failures are non-fatal.
+//
+// The sync coordinator is chosen once, here, from the configured mode. In
+// standalone it is the no-op implementation: no git subprocess, no goroutine,
+// no xlock read. No method below branches on the mode.
 func New(lib *library.Library, cfg config.Config) *Service {
 	svc := &Service{lib: lib, cfg: cfg}
 	if vs, err := vector.Open(cfg.VectorPath); err == nil {
 		svc.vec = vs
 	}
+	svc.sync = newCoordinator(lib, cfg)
 	return svc
+}
+
+// newCoordinator builds the sync coordinator for the configured mode.
+func newCoordinator(lib *library.Library, cfg config.Config) gitsync.Coordinator {
+	if !cfg.Sync.MultiClient() {
+		return gitsync.NewNoop()
+	}
+	remote := cfg.Sync.Remote
+	if remote == "" {
+		remote = "origin"
+	}
+	branch := cfg.Sync.Branch
+	if branch == "" {
+		branch = "main"
+	}
+	return gitsync.New(gitsync.Options{
+		DataRoot:       cfg.DataRoot,
+		ArticlesRoot:   cfg.ArticlesRoot,
+		Machine:        cfg.Sync.Machine,
+		Remote:         remote,
+		Branch:         branch,
+		IdleTimeout:    cfg.Sync.IdleTimeout.D(),
+		TakeoverMargin: cfg.Sync.TakeoverMargin.D(),
+		Indexer:        lib,
+		ValidateNumIDs: func() error {
+			return fs.ValidateNumIDCounter(cfg.DataRoot, cfg.ArticlesRoot)
+		},
+	})
+}
+
+// Sync returns the sync coordinator. Frontends use it for status, the banner,
+// and the explicit sync/xlock commands.
+func (s *Service) Sync() gitsync.Coordinator { return s.sync }
+
+// SyncStartup pulls at startup so the machine shows current content. Any failure
+// is logged and swallowed — being offline must never prevent arc from starting.
+func (s *Service) SyncStartup(ctx context.Context) { s.sync.Startup(ctx) }
+
+// SyncPull fetches, fast-forwards, and indexes only the changed articles.
+func (s *Service) SyncPull(ctx context.Context) error { return s.sync.Pull(ctx) }
+
+// beginWrite is the single gate every mutating operation passes through.
+//
+// Gating happens here rather than at each call site because nearly everything in
+// arc mutates tracked files — read flags, favourites, played state, chat
+// messages, scratch edits, collection membership, ingest, summaries, flashcards.
+// With the check spread across call sites, one would eventually be missed and
+// write unguarded.
+//
+// It returns before any work is done, so an ingest never fetches a URL and spends
+// an LLM call only to discover it cannot write.
+func (s *Service) beginWrite(ctx context.Context) error {
+	return s.sync.BeforeWrite(ctx)
+}
+
+// guarded runs a mutation behind the write gate.
+//
+// Nothing happens after the mutation: changes are not committed per write. They
+// are swept into a commit at the next git boundary — a pull, a push, acquiring
+// or releasing the xlock. Per-write commits bought only finer-grained history,
+// and arc never operates on individual commits, so the consistency that matters
+// is the whole tree at a boundary.
+func (s *Service) guarded(ctx context.Context, msg string, fn func() error) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
+	return fn()
 }
 
 // Library returns the underlying library for callers that need direct access.
@@ -264,6 +338,9 @@ func embedCostUSD(prof config.Profile, tokens int) float64 {
 // It respects the No* flags and optionally cleans or refetches before regenerating.
 // After all articles are processed it rebuilds the SQLite index from the filesystem.
 func (s *Service) Reprocess(ctx context.Context, req ReprocessRequest) (ReprocessResult, error) {
+	if err := s.beginWrite(ctx); err != nil {
+		return ReprocessResult{}, err
+	}
 	var articles []store.Article
 	if req.All {
 		var err error
@@ -925,44 +1002,63 @@ func (s *Service) ReadBody(a store.Article) (string, error) {
 
 // DeleteArticle removes an article from the filesystem, SQLite, collection symlinks, and vector index.
 func (s *Service) DeleteArticle(ctx context.Context, id string) error {
-	a, err := s.lib.Get(ctx, id)
-	if err != nil {
-		return fmt.Errorf("get article: %w", err)
-	}
-	if s.vec != nil {
-		_ = s.vec.Delete(ctx, id)
-	}
-	return s.lib.DeleteArticle(ctx, a)
+	return s.guarded(ctx, "delete: "+id, func() error {
+		a, err := s.lib.Get(ctx, id)
+		if err != nil {
+			return fmt.Errorf("get article: %w", err)
+		}
+		if s.vec != nil {
+			_ = s.vec.Delete(ctx, id)
+		}
+		return s.lib.DeleteArticle(ctx, a)
+	})
 }
 
 // MarkRead records that an article was read.
+//
+// Flag mutations are gated exactly as content is — the xlock is required either
+// way — but coalesced before pushing, so browsing through twenty articles does
+// not become twenty commits.
 func (s *Service) MarkRead(ctx context.Context, id string) error {
-	return s.lib.MarkRead(ctx, id, time.Now())
+	return s.guarded(ctx, "read: "+id, func() error {
+		return s.lib.MarkRead(ctx, id, time.Now())
+	})
 }
 
 // MarkUnread clears the read_at timestamp for an article.
 func (s *Service) MarkUnread(ctx context.Context, id string) error {
-	return s.lib.MarkUnread(ctx, id)
+	return s.guarded(ctx, "unread: "+id, func() error {
+		return s.lib.MarkUnread(ctx, id)
+	})
 }
 
 // MarkFavorite marks an article as a favorite.
 func (s *Service) MarkFavorite(ctx context.Context, id string) error {
-	return s.lib.MarkFavorite(ctx, id, time.Now())
+	return s.guarded(ctx, "favorite: "+id, func() error {
+		return s.lib.MarkFavorite(ctx, id, time.Now())
+	})
 }
 
 // UnmarkFavorite removes the favorite mark from an article.
 func (s *Service) UnmarkFavorite(ctx context.Context, id string) error {
-	return s.lib.UnmarkFavorite(ctx, id)
+	return s.guarded(ctx, "unfavorite: "+id, func() error {
+		return s.lib.UnmarkFavorite(ctx, id)
+	})
 }
 
 // MarkPlayed records that an article was played via TTS.
 func (s *Service) MarkPlayed(ctx context.Context, id string) error {
-	return s.lib.MarkPlayed(ctx, id, time.Now())
+	return s.guarded(ctx, "played: "+id, func() error {
+		return s.lib.MarkPlayed(ctx, id, time.Now())
+	})
 }
 
 // CreateCollection creates a new collection directory and registers it in SQLite.
 func (s *Service) CreateCollection(ctx context.Context, slug, description string) error {
 	if err := ValidateCollectionSlug(slug); err != nil {
+		return err
+	}
+	if err := s.beginWrite(ctx); err != nil {
 		return err
 	}
 	if err := fs.CreateCollection(s.cfg.DataRoot, slug, TrimWrappingQuotes(description)); err != nil {
@@ -1058,18 +1154,22 @@ func (s *Service) AddToCollection(ctx context.Context, articleSlug, collectionSl
 	if _, err := fs.ReadCollectionMeta(s.cfg.DataRoot, collectionSlug); err != nil {
 		return fmt.Errorf("collection %q not found — create it first with: arc collections create %s", collectionSlug, collectionSlug)
 	}
-	if err := fs.AddArticleToCollection(s.cfg.DataRoot, s.cfg.ArticlesRoot, articleSlug, collectionSlug); err != nil {
-		return err // includes ErrAlreadyInCollection
-	}
-	return s.lib.AddArticleToCollection(ctx, articleSlug, collectionSlug)
+	return s.guarded(ctx, "collection add: "+articleSlug+" → "+collectionSlug, func() error {
+		if err := fs.AddArticleToCollection(s.cfg.DataRoot, s.cfg.ArticlesRoot, articleSlug, collectionSlug); err != nil {
+			return err // includes ErrAlreadyInCollection
+		}
+		return s.lib.AddArticleToCollection(ctx, articleSlug, collectionSlug)
+	})
 }
 
 // RemoveFromCollection removes an article's symlink from a collection and updates SQLite.
 func (s *Service) RemoveFromCollection(ctx context.Context, articleSlug, collectionSlug string) error {
-	if err := fs.RemoveArticleFromCollection(s.cfg.DataRoot, collectionSlug, articleSlug); err != nil {
-		return err
-	}
-	return s.lib.RemoveArticleFromCollection(ctx, articleSlug, collectionSlug)
+	return s.guarded(ctx, "collection remove: "+articleSlug+" from "+collectionSlug, func() error {
+		if err := fs.RemoveArticleFromCollection(s.cfg.DataRoot, collectionSlug, articleSlug); err != nil {
+			return err
+		}
+		return s.lib.RemoveArticleFromCollection(ctx, articleSlug, collectionSlug)
+	})
 }
 
 // SetCollectionDescription updates the description in the collection's meta.json.
@@ -1079,7 +1179,9 @@ func (s *Service) SetCollectionDescription(ctx context.Context, slug, text strin
 		return fmt.Errorf("collection %q not found", slug)
 	}
 	m.Description = TrimWrappingQuotes(text)
-	return fs.WriteCollectionMeta(s.cfg.DataRoot, m)
+	return s.guarded(ctx, "collection describe: "+slug, func() error {
+		return fs.WriteCollectionMeta(s.cfg.DataRoot, m)
+	})
 }
 
 // ListCollectionArticles returns article slugs linked in a collection.
@@ -1119,10 +1221,12 @@ func (s *Service) RenameCollection(ctx context.Context, oldSlug, newSlug string)
 	if err := ValidateCollectionSlug(newSlug); err != nil {
 		return err
 	}
-	if err := fs.RenameCollection(s.cfg.DataRoot, oldSlug, newSlug); err != nil {
-		return err
-	}
-	return s.lib.RenameCollection(ctx, oldSlug, newSlug)
+	return s.guarded(ctx, "collection rename: "+oldSlug+" → "+newSlug, func() error {
+		if err := fs.RenameCollection(s.cfg.DataRoot, oldSlug, newSlug); err != nil {
+			return err
+		}
+		return s.lib.RenameCollection(ctx, oldSlug, newSlug)
+	})
 }
 
 // DeleteCollection removes a collection and optionally purges exclusively-owned articles.
@@ -1130,6 +1234,9 @@ func (s *Service) RenameCollection(ctx context.Context, oldSlug, newSlug string)
 func (s *Service) DeleteCollection(ctx context.Context, slug string, purge bool) (purged []string, err error) {
 	if _, err := fs.ReadCollectionMeta(s.cfg.DataRoot, slug); err != nil {
 		return nil, fmt.Errorf("collection %q not found", slug)
+	}
+	if err := s.beginWrite(ctx); err != nil {
+		return nil, err
 	}
 
 	if purge {
@@ -1590,6 +1697,13 @@ func (s *Service) ResolveSlug(ctx context.Context, query string) (string, error)
 // If req.Write is true and a slug is provided, the summary is written as a new
 // variant file alongside existing files in the article directory.
 func (s *Service) Summarize(ctx context.Context, req SummarizeRequest) (SummarizeResult, error) {
+	// Gate before the LLM call, not after: refusing here costs nothing, whereas
+	// refusing after would have spent an API call on work that cannot be saved.
+	if req.Write && req.Slug != "" {
+		if err := s.beginWrite(ctx); err != nil {
+			return SummarizeResult{}, err
+		}
+	}
 	text := req.Text
 	var articleDir string
 
@@ -1695,6 +1809,13 @@ func (s *Service) Flash(ctx context.Context, req FlashRequest) (FlashResult, err
 
 // Flashcards runs the flashcard generation step on an existing article or raw text.
 func (s *Service) Flashcards(ctx context.Context, req FlashcardsRequest) (FlashcardsResult, error) {
+	// Gated before the LLM call: refusing after would have spent an API call on
+	// cards that cannot be written.
+	if req.Write && req.Slug != "" {
+		if err := s.beginWrite(ctx); err != nil {
+			return FlashcardsResult{}, err
+		}
+	}
 	text := req.Text
 	var articleDir string
 	// sourceWords sizes the deck. Prefer the body: summaries are compressed and
@@ -1785,6 +1906,9 @@ func (s *Service) DeleteFlashcards(ctx context.Context, req DeleteFlashcardsRequ
 	if req.Slug == "" {
 		return DeleteFlashcardsResult{}, fmt.Errorf("no article specified")
 	}
+	if err := s.beginWrite(ctx); err != nil {
+		return DeleteFlashcardsResult{}, err
+	}
 
 	a, err := s.lib.Get(ctx, req.Slug)
 	if err != nil {
@@ -1874,6 +1998,9 @@ func countCardsIn(paths []string) int {
 // Blank lines and lines starting with '#' are ignored.
 // Errors are logged via Progress and counted; they do not abort the batch.
 func (s *Service) BatchIngest(ctx context.Context, req BatchIngestRequest) (BatchIngestResult, error) {
+	if err := s.beginWrite(ctx); err != nil {
+		return BatchIngestResult{}, err
+	}
 	var data []byte
 	var err error
 	if req.File == "-" {
@@ -1963,6 +2090,14 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 	if req.URL == "" && req.File == "" {
 		return IngestResult{}, fmt.Errorf("ingest: URL or File must be specified")
 	}
+	// Gate before fetching and summarising. An ingest must never spend a network
+	// fetch and an LLM call and only then discover it cannot write. A dry run
+	// writes nothing, so it is not gated.
+	if !req.DryRun {
+		if err := s.beginWrite(ctx); err != nil {
+			return IngestResult{}, err
+		}
+	}
 
 	// URL deduplication: check if this URL was already ingested.
 	if req.URL != "" && !req.Force && !req.DryRun {
@@ -2024,13 +2159,13 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResult, 
 // eventAggregates holds all aggregated stats from events.jsonl.
 type eventAggregates struct {
 	CostToday, CostThisWeek, CostThisMonth, CostTotal float64
-	CostByModel                                        map[string]float64
-	CostByType                                         map[string]float64
-	TotalInputTokens, TotalOutputTokens                int
-	TokensByModel                                      map[string][2]int // [input, output]
-	TotalRequests                                      int
-	RequestsByModel                                    map[string]int
-	RequestsByType                                     map[string]int
+	CostByModel                                       map[string]float64
+	CostByType                                        map[string]float64
+	TotalInputTokens, TotalOutputTokens               int
+	TokensByModel                                     map[string][2]int // [input, output]
+	TotalRequests                                     int
+	RequestsByModel                                   map[string]int
+	RequestsByType                                    map[string]int
 }
 
 // aggregateEventStats reads events.jsonl and computes cost, token, and request aggregates.

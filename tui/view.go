@@ -268,10 +268,10 @@ func truncate(s string, maxWidth int) string {
 // ── Layout constants ──────────────────────────────────────────────────────────
 
 // topBarHeight is used by update.go for navPaneHeight calculation.
-const topBarHeight = 2   // tab bar + separator
-const hintBarHeight = 1  // status bar (bottom line)
+const topBarHeight = 2    // tab bar + separator
+const hintBarHeight = 1   // status bar (bottom line)
 const statusSepHeight = 1 // separator between command input and status bar
-const cmdBarHeight = 1   // command input line
+const cmdBarHeight = 1    // command input line
 
 // navWidth returns the left nav pane width.
 // Uses user-set override when dragged; otherwise ~28% of terminal, clamped to [20, 60].
@@ -402,6 +402,16 @@ func (m Model) renderTabBar() string {
 	}
 	left := strings.Join(parts, "")
 	leftW := lipgloss.Width(left)
+
+	// The xlock banner is anchored immediately after the tab strip rather than
+	// placed in the centre. The tab strip is a constant width, so the banner
+	// lands on the same column on every tab; centring it made it slide as the
+	// sub-tab stats changed length between Articles, Collections, and
+	// Workspaces. Empty in standalone mode.
+	if banner, bannerW := m.renderXLockBanner(); banner != "" {
+		left += fg(t.Dimmed, "   ") + banner
+		leftW += bannerW + 3
+	}
 
 	// Center: library sub-tab stats — only when Library tab is active.
 	var center string
@@ -2112,7 +2122,7 @@ func (m Model) renderContentAgentFeeds(height, width int) []string {
 	header := []string{
 		fgBold(t.ContentTitle, name),
 		"",
-		fg(t.ContentDimmed, "URL")+"    "+fg(t.NavText, f.URL),
+		fg(t.ContentDimmed, "URL") + "    " + fg(t.NavText, f.URL),
 	}
 	if f.Filter != "" {
 		header = append(header, "")
@@ -2477,7 +2487,6 @@ func (m Model) renderAgentRunContent(height, width int) []string {
 	return lines[:height]
 }
 
-
 func (m Model) renderContentStats(height, width int) []string {
 	t := ActiveTheme
 	if !m.statsLoaded {
@@ -2784,7 +2793,7 @@ func sortedModelCosts(m map[string]float64) []modelCostEntry {
 }
 
 type modelTokenEntry struct {
-	model  string
+	model   string
 	in, out int
 }
 
@@ -2894,7 +2903,6 @@ func wordWrap(text string, maxWidth int) []string {
 	}
 	return lines
 }
-
 
 // shellBorderColor is bright bold red ANSI, used to tint input and separators in shell mode.
 const shellBorderColor = "\033[1;91m"

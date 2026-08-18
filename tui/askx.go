@@ -225,12 +225,23 @@ func (m *Model) cmdAskXAddNote(text string) {
 }
 
 // saveAskXHistory persists the current askxMsgs to JSON.
+// saveAskXHistory persists askX history without blocking the event loop.
+//
+// In multi-client mode the write can take seconds — the first one of a session
+// pulls and acquires the xlock over the network. Doing it inline froze the whole
+// TUI for that long, which is also why no progress indicator could appear: the
+// render loop was not running. Errors come back through programSend so they are
+// still surfaced.
 func (m *Model) saveAskXHistory() {
 	ws := m.askxWorkspace()
 	h := msgsToAskXHistory(m.askxMsgs)
-	if err := storefs.SaveAskXHistory(m.cfg.DataRoot, ws, h); err != nil {
-		m.setStatusError("askX save: " + err.Error())
-	}
+	svc := m.svc
+	send := m.programSend
+	go func() {
+		if err := svc.SaveAskXHistory(context.Background(), ws, h); err != nil && send != nil {
+			(*send)(cmdDoneMsg{err: "askX save: " + syncErrorMessage(err)})
+		}
+	}()
 }
 
 // ── @token parsing ──────────────────────────────────────────────────────────

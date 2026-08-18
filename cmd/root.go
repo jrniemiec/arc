@@ -133,6 +133,14 @@ func openLibrary(cmd *cobra.Command, args []string) error {
 
 	svc := service.New(lib, cfg)
 
+	// Pull at startup so this machine shows current content. No-op in
+	// standalone; failure is logged and swallowed, since being offline must
+	// never prevent arc from starting. Skipped for sync's own subcommands,
+	// which manage the repository themselves.
+	if !isSyncCommand(cmd) {
+		svc.SyncStartup(cmd.Context())
+	}
+
 	// Store in context for subcommands
 	ctx := context.WithValue(cmd.Context(), keyService, svc)
 	ctx = context.WithValue(ctx, keyConfig, cfg)
@@ -142,8 +150,11 @@ func openLibrary(cmd *cobra.Command, args []string) error {
 }
 
 func closeLibrary(cmd *cobra.Command, _ []string) error {
-	// Library cleanup is handled by the service's underlying library.
-	// Nothing to do here for now — connection pool closes on process exit.
+	// Library cleanup is handled by the service's underlying library — the
+	// connection pool closes on process exit.
+	//
+	// Nothing to drain: sync pushes are synchronous, so a command has already
+	// pushed by the time it returns.
 	return nil
 }
 
@@ -202,6 +213,20 @@ func arcHomeDir() string {
 		return ".arc"
 	}
 	return filepath.Join(home, ".arc")
+}
+
+// isSyncCommand reports whether cmd belongs to the sync or xlock groups.
+//
+// Those commands drive the repository themselves — an implicit startup pull
+// would run before init has created a repo, or fight the pull the command is
+// about to perform.
+func isSyncCommand(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if c.Name() == "sync" || c.Name() == "xlock" {
+			return true
+		}
+	}
+	return false
 }
 
 // svcFrom extracts the Service from a command's context.

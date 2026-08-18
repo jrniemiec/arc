@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jrniemiec/arc/internal/jsonc"
 )
@@ -86,7 +87,90 @@ type Config struct {
 	// background), "light", or "dark". The --theme flag overrides this
 	// when passed explicitly.
 	Theme string `json:"theme"`
+
+	// Sync controls multi-client operation. Default mode is "standalone",
+	// in which arc performs no git operations at all.
+	Sync SyncConfig `json:"sync"`
 }
+
+// Duration is a time.Duration that marshals to and from a Go duration string
+// ("15m", "2m", "60s") so config.jsonc stays readable. A bare number is
+// accepted and read as seconds.
+type Duration time.Duration
+
+// D returns the value as a time.Duration.
+func (d Duration) D() time.Duration { return time.Duration(d) }
+
+func (d Duration) String() string { return time.Duration(d).String() }
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(d).String())
+}
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		parsed, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("parse duration %q: %w", s, err)
+		}
+		*d = Duration(parsed)
+		return nil
+	}
+	var n float64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return fmt.Errorf("duration must be a string like \"15m\" or a number of seconds")
+	}
+	*d = Duration(time.Duration(n * float64(time.Second)))
+	return nil
+}
+
+// Sync modes. Standalone is the default: arc performs no git operations.
+// Standalone does not mean git is forbidden — a user may version the tree
+// themselves; arc simply does not touch it.
+const (
+	SyncModeStandalone  = "standalone"
+	SyncModeMultiClient = "multi-client"
+)
+
+// SyncConfig holds multi-client sync settings. It is per-machine: config.jsonc
+// is never tracked, so each machine sets its own idle_timeout — a desktop left
+// open all day wants a different value from a laptop.
+//
+// No credentials live here. Git resolves those via ssh-agent or the keychain.
+type SyncConfig struct {
+	// Mode is "standalone" (default) or "multi-client". It is explicit
+	// configuration and is never inferred from repository state: an incidental
+	// "git remote add" must not switch the app into a mode with a banner, a
+	// background fetch, and a divergence state that blocks startup.
+	// "arc sync init" and "arc sync enable" write it.
+	Mode string `json:"mode"`
+
+	// Remote and Branch are always named explicitly on every git invocation
+	// rather than relying on the configured upstream.
+	Remote string `json:"remote"`
+	Branch string `json:"branch"`
+
+	// Machine identifies this client in xlock.json. Defaults to the hostname.
+	Machine string `json:"machine"`
+
+	// IdleTimeout is how long this machine keeps the xlock without activity
+	// before releasing it. Activity is any keypress, not only mutations, so a
+	// long read session does not drop the xlock mid-work.
+	IdleTimeout Duration `json:"idle_timeout"`
+
+	// TakeoverMargin is added to the holder's idle timeout before another
+	// machine may seize. It covers the lag between a holder's local clock and
+	// its last published last_activity, plus clock skew between machines.
+	TakeoverMargin Duration `json:"takeover_margin"`
+
+	// BannerRefresh is how often the TUI fetches (never merges) to refresh the
+	// xlock banner. Display only — it does not affect correctness.
+	BannerRefresh Duration `json:"banner_refresh"`
+}
+
+// MultiClient reports whether multi-client mode is active.
+func (s SyncConfig) MultiClient() bool { return s.Mode == SyncModeMultiClient }
 
 // ChatConfig holds the configuration for a workspace chat session.
 // It maps 1:1 to workspaces/<name>/chat/chat.json.
@@ -935,17 +1019,17 @@ func Default() Config {
 			MinSimilarity: DefaultMinSimilarity,
 		},
 		Ingest: IngestConfig{
-			SummaryProfile:     "oai-mini",
-			FlashProfile:       "oai-mini",
-			FlashcardProfile:   "oai-mini",
-			SummaryStyle:       "study-notes",
-			FlashcardStyle:     "socratic",
-			EmbedProfile:       "oai-embed",
-			ChunkTokens:        900,
-			SummaryMaxTokens:   2048,
-			SummaryStyles:      builtinSummaryStyles,
-			FlashSystemPrompt:  DefaultFlashSystemPrompt,
-			FlashMaxTokens:     256,
+			SummaryProfile:    "oai-mini",
+			FlashProfile:      "oai-mini",
+			FlashcardProfile:  "oai-mini",
+			SummaryStyle:      "study-notes",
+			FlashcardStyle:    "socratic",
+			EmbedProfile:      "oai-embed",
+			ChunkTokens:       900,
+			SummaryMaxTokens:  2048,
+			SummaryStyles:     builtinSummaryStyles,
+			FlashSystemPrompt: DefaultFlashSystemPrompt,
+			FlashMaxTokens:    256,
 			// 2048 truncated the 15-card bucket mid-deck, which surfaced as an
 			// unparseable-JSON error rather than a size problem.
 			FlashcardMaxTokens: 4096,
@@ -992,7 +1076,28 @@ func Default() Config {
 		AgentPath: filepath.Join(dataRoot, "agent"),
 		LogPath:   filepath.Join(dataRoot, "arc.log"),
 		LogLevel:  "info",
+		Sync: SyncConfig{
+			Mode:           SyncModeStandalone,
+			Branch:         "main",
+			Machine:        defaultMachineName(),
+			IdleTimeout:    Duration(15 * time.Minute),
+			TakeoverMargin: Duration(2 * time.Minute),
+			BannerRefresh:  Duration(60 * time.Second),
+		},
 	}
+}
+
+// defaultMachineName returns the hostname, used to identify this client in
+// xlock.json. Falls back to "unknown-machine" so the xlock is still writable
+// on a host with no resolvable name.
+func defaultMachineName() string {
+	name, err := os.Hostname()
+	if err != nil || strings.TrimSpace(name) == "" {
+		return "unknown-machine"
+	}
+	// Trim the mDNS suffix macOS reports, so the name matches what the user
+	// would call the machine.
+	return strings.TrimSuffix(name, ".local")
 }
 
 // Load reads a config file, falling back to defaults for missing fields.
@@ -1040,6 +1145,7 @@ func Load(path string) (Config, error) {
 		CorrectionProfile string                  `json:"correction_profile"`
 		CorrectionPrompt  string                  `json:"correction_prompt"`
 		Theme             string                  `json:"theme"`
+		Sync              *SyncConfig             `json:"sync"`
 	}
 	if err := jsonc.Unmarshal(data, &overlay); err != nil {
 		return cfg, fmt.Errorf("decode config: %w", err)
@@ -1235,6 +1341,33 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.Theme != "" {
 		cfg.Theme = overlay.Theme
+	}
+
+	// Sync is merged field by field so an omitted key keeps its default rather
+	// than becoming a zero value — a missing idle_timeout must not mean "0",
+	// which would release the xlock instantly.
+	if o := overlay.Sync; o != nil {
+		if o.Mode != "" {
+			cfg.Sync.Mode = o.Mode
+		}
+		if o.Remote != "" {
+			cfg.Sync.Remote = o.Remote
+		}
+		if o.Branch != "" {
+			cfg.Sync.Branch = o.Branch
+		}
+		if o.Machine != "" {
+			cfg.Sync.Machine = o.Machine
+		}
+		if o.IdleTimeout != 0 {
+			cfg.Sync.IdleTimeout = o.IdleTimeout
+		}
+		if o.TakeoverMargin != 0 {
+			cfg.Sync.TakeoverMargin = o.TakeoverMargin
+		}
+		if o.BannerRefresh != 0 {
+			cfg.Sync.BannerRefresh = o.BannerRefresh
+		}
 	}
 
 	return cfg, nil

@@ -58,7 +58,83 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputPrompt()
 		m.syncInputHeight()
 
+	case xlockTickMsg:
+		// Fetch-only refresh, then schedule the next tick. The countdown itself
+		// recomputes on every render from the last fetched timestamp, so it
+		// ticks down smoothly rather than jumping once a minute.
+		//
+		// The same tick drives idle self-release: the machine gives the xlock up
+		// while still running, so correctness never depends on a clean shutdown.
+		return m, tea.Batch(
+			refreshXLock(m.svc, m.cfg.Sync.Machine, m.cfg.Sync.TakeoverMargin.D()),
+			xlockTick(m.cfg.Sync.BannerRefresh.D()),
+		)
+
+	case xlockStatusMsg:
+		// Preserve the live activity: it is sampled on the spinner tick, while
+		// this snapshot was built before the refresh ran. Overwriting it blanks
+		// the in-flight label for a frame and makes the banner flicker between
+		// the operation and the resting state.
+		activity := m.xlock.activity
+		m.xlock = msg.state
+		m.xlock.activity = activity
+		return m, nil
+
+	case scratchAppendedMsg:
+		if msg.err != nil {
+			m.setStatusError("scratch: " + syncErrorMessage(msg.err))
+		} else {
+			m.reloadScratchLines()
+			m.scratchScrollToBottom()
+			m.statusMsg = "✓ added to scratch"
+		}
+		if m.svc != nil && m.svc.Sync().Enabled() {
+			return m, refreshXLockLocal(m.svc, m.cfg.Sync.Machine, m.cfg.Sync.TakeoverMargin.D())
+		}
+		return m, nil
+
+	case mutationDoneMsg:
+		slog.Debug("mutation done", "err", msg.err)
+		// A refused write must replace the optimistic status message: the UI
+		// updated in memory before the write was attempted, so leaving "✓ marked
+		// as read" on screen would report something that never happened.
+		if msg.err != nil {
+			m.setStatusError(syncErrorMessage(msg.err))
+		}
+		if m.svc != nil && m.svc.Sync().Enabled() {
+			return m, refreshXLockLocal(m.svc, m.cfg.Sync.Machine, m.cfg.Sync.TakeoverMargin.D())
+		}
+		return m, nil
+
+	case xlockConfirmMsg:
+		// Early takeover: state the consequence rather than asking a bare
+		// yes/no. arc cannot reach the other machine to check what it holds.
+		prompt := fmt.Sprintf(
+			"%s holds the xlock (free in %s). Taking it strands any unpushed work on %s. Take it?",
+			msg.holder, shortDuration(msg.seizableIn), msg.holder)
+		svc := m.svc
+		m.askConfirm(prompt, func() tea.Cmd { return forceTakeXLock(svc) })
+		return m, nil
+
 	case spinnerTickMsg:
+		// Catch an xlock acquire or release the moment it happens, whichever
+		// code path caused it. Comparing an in-memory counter costs nothing;
+		// the refresh it triggers is local-only, so no network is involved.
+		if m.svc != nil && m.svc.Sync().Enabled() {
+			// Activity is read every tick rather than via a refresh: it changes
+			// while a git subprocess is running, and the refresh itself would
+			// have to wait behind that same subprocess to report it.
+			if act := m.svc.Sync().Activity(); act != m.xlock.activity {
+				slog.Debug("tui: xlock activity changed", "from", m.xlock.activity, "to", act, "enabled", m.xlock.enabled)
+				m.xlock.activity = act
+			}
+
+			if v := m.svc.Sync().StateVersion(); v != m.xlockVersion {
+				m.xlockVersion = v
+				cmds = append(cmds, refreshXLockLocal(m.svc, m.cfg.Sync.Machine, m.cfg.Sync.TakeoverMargin.D()))
+			}
+		}
+
 		m.spinnerFrame++
 		// Blink cursor at ~400ms (every 4 ticks of 100ms), only when command pane focused.
 		if m.spinnerFrame%4 == 0 {
@@ -788,6 +864,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case cmdDoneMsg:
+		// Refresh the banner now rather than waiting for the next tick: a
+		// mutating command may have acquired the xlock silently via the write
+		// gate, and /xlock-take and /xlock-release change it outright. Local
+		// only — no network, so this is cheap enough to run every time.
+		if m.svc != nil && m.svc.Sync().Enabled() {
+			cmds = append(cmds, refreshXLockLocal(m.svc, m.cfg.Sync.Machine, m.cfg.Sync.TakeoverMargin.D()))
+		}
+
 		m.populateRunning = false
 		m.populateLabel = ""
 		m.cardsRunning = false
@@ -1260,6 +1344,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Any keypress counts as activity, not only mutations: a long read
+		// session must not drop the xlock mid-work. Local only — it reaches
+		// other machines when a push carries it. No-op in standalone.
+		m.svcTouch()
 		cmds = append(cmds, m.handleKey(msg))
 
 	case tea.MouseMsg:
@@ -4160,17 +4248,17 @@ func (m *Model) handleCommandKey(msg tea.KeyMsg) tea.Cmd {
 					return nil
 				}
 				ws := m.scratchWorkspace()
-				if err := storefs.AppendScratch(m.cfg.DataRoot, ws, val); err != nil {
-					m.setStatusError("scratch: " + err.Error())
-					return nil
-				}
-				m.reloadScratchLines()
-				m.scratchScrollToBottom()
+				// Clear the input immediately so typing feels instant, then do
+				// the write off the event loop: it may acquire the xlock, which
+				// costs a network round trip and would otherwise freeze the UI.
+				// scratchAppendedMsg reloads the pane and reports any refusal.
 				m.input.SetValue("")
 				m.input.CursorEnd()
 				m.syncInputHeight()
-				m.statusMsg = "✓ added to scratch"
-				return nil
+				svc := m.svc
+				return func() tea.Msg {
+					return scratchAppendedMsg{err: svc.AppendScratch(context.Background(), ws, val)}
+				}
 			}
 			if m.chatMode {
 				// "//" prefix → note: stored in history, never sent to LLM.
@@ -5324,6 +5412,12 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		}
 	}
 
+	// Multi-client sync. Handled before the global switch so the same commands
+	// work from every context, including chat.
+	if syncCmd, handled := m.dispatchSyncCommand(cmd, arg); handled {
+		return syncCmd
+	}
+
 	// ── Global commands (available in any context) ──────────────────────────
 	switch cmd {
 	case "/arc-home":
@@ -5862,7 +5956,7 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		// Persist to workspace chat/chat.json.
 		chatCfg, _ := storefs.ReadChatConfig(m.cfg.DataRoot, m.chatWorkspace)
 		chatCfg.Profile = arg
-		if err := storefs.WriteChatConfig(m.cfg.DataRoot, m.chatWorkspace, chatCfg); err != nil {
+		if err := m.svc.SetChatConfig(context.Background(), m.chatWorkspace, chatCfg); err != nil {
 			m.statusMsg = "✗ save profile: " + err.Error()
 			return nil
 		}
@@ -6196,8 +6290,7 @@ func (m *Model) cmdMarkRead() tea.Cmd {
 	}
 	svc := m.svc
 	return func() tea.Msg {
-		_ = svc.MarkRead(context.Background(), id)
-		return nil
+		return mutationDone(svc.MarkRead(context.Background(), id))
 	}
 }
 
@@ -6222,8 +6315,7 @@ func (m *Model) cmdMarkUnread() tea.Cmd {
 	}
 	svc := m.svc
 	return func() tea.Msg {
-		_ = svc.MarkUnread(context.Background(), id)
-		return nil
+		return mutationDone(svc.MarkUnread(context.Background(), id))
 	}
 }
 
@@ -6682,11 +6774,9 @@ func (m *Model) cmdToggleFavorite() tea.Cmd {
 	svc := m.svc
 	return func() tea.Msg {
 		if nowFav {
-			_ = svc.MarkFavorite(context.Background(), id)
-		} else {
-			_ = svc.UnmarkFavorite(context.Background(), id)
+			return mutationDone(svc.MarkFavorite(context.Background(), id))
 		}
-		return nil
+		return mutationDone(svc.UnmarkFavorite(context.Background(), id))
 	}
 }
 
@@ -6721,10 +6811,14 @@ func (m *Model) cmdTogglePin() tea.Cmd {
 	}
 	svc := m.svc
 	return func() tea.Msg {
+		var err error
 		if nowPinned {
-			_ = svc.PinWorkspace(context.Background(), name)
+			err = svc.PinWorkspace(context.Background(), name)
 		} else {
-			_ = svc.UnpinWorkspace(context.Background(), name)
+			err = svc.UnpinWorkspace(context.Background(), name)
+		}
+		if err != nil {
+			return cmdDoneMsg{err: syncErrorMessage(err), reloadWorkspaces: true}
 		}
 		return cmdDoneMsg{reloadWorkspaces: true}
 	}
@@ -6757,7 +6851,9 @@ func (m *Model) cmdDeleteArticle() tea.Cmd {
 			return contentCmd
 		}
 		return tea.Batch(contentCmd, func() tea.Msg {
-			_ = svc.DeleteArticle(context.Background(), id)
+			if err := svc.DeleteArticle(context.Background(), id); err != nil {
+				return cmdDoneMsg{err: syncErrorMessage(err), reloadNav: true}
+			}
 			return nil
 		})
 	})
@@ -8323,7 +8419,9 @@ func (m *Model) cmdDeleteArticleBySlug(slug string) tea.Cmd {
 		m.clampNavScroll()
 		contentCmd := m.triggerContentLoad()
 		return tea.Batch(contentCmd, func() tea.Msg {
-			_ = svc.DeleteArticle(context.Background(), slug)
+			if err := svc.DeleteArticle(context.Background(), slug); err != nil {
+				return cmdDoneMsg{err: syncErrorMessage(err), reloadNav: true}
+			}
 			return nil
 		})
 	})
@@ -8624,7 +8722,6 @@ func (m *Model) cmdPopulateWorkspace(arg string) tea.Cmd {
 	}
 
 	svc := m.svc
-	cfg := m.cfg
 	m.populateRunning = true
 	m.populateLabel = "populating " + wsName + "…"
 	m.statusMsg = ""
@@ -8743,7 +8840,7 @@ func (m *Model) cmdPopulateWorkspace(arg string) tea.Cmd {
 
 		// Save full output to scratch as a single entry.
 		output := strings.Join(lines, "\n") + "\n"
-		_ = storefs.AppendScratch(cfg.DataRoot, wsName, output)
+		_ = svc.AppendScratch(context.Background(), wsName, output)
 
 		return cmdDoneMsg{
 			statusLines:      lines,
@@ -8781,7 +8878,6 @@ func (m *Model) finishPopulateEdit() tea.Cmd {
 	m.populateEditing = false
 	wsName := m.populateEditWs
 	svc := m.svc
-	cfg := m.cfg
 
 	// Collect accepted items.
 	var colSlugs, artSlugs []string
@@ -8873,7 +8969,7 @@ func (m *Model) finishPopulateEdit() tea.Cmd {
 
 	// Save to scratch.
 	output := strings.Join(lines, "\n") + "\n"
-	_ = storefs.AppendScratch(cfg.DataRoot, wsName, output)
+	_ = svc.AppendScratch(context.Background(), wsName, output)
 
 	m.setStatusLines(lines)
 	m.input.SetValue("")
@@ -8933,6 +9029,7 @@ func (m *Model) cmdRemoveWorkspace(arg string) tea.Cmd {
 		}
 	}
 
+	svc := m.svc
 	cfg := m.cfg
 
 	// --all-articles / --all-collections → interactive review in input pane.
@@ -9013,7 +9110,7 @@ func (m *Model) cmdRemoveWorkspace(arg string) tea.Cmd {
 		statusMsg := fmt.Sprintf("✓ removed %d items from %s", removed, wsName)
 
 		// Save to scratch.
-		_ = storefs.AppendScratch(cfg.DataRoot, wsName, statusMsg+"\n")
+		_ = svc.AppendScratch(context.Background(), wsName, statusMsg+"\n")
 
 		return cmdDoneMsg{
 			statusMsg:          statusMsg,
@@ -9140,7 +9237,7 @@ func (m *Model) finishRemoveReview() tea.Cmd {
 
 	// Save to scratch.
 	output := strings.Join(lines, "\n") + "\n"
-	_ = storefs.AppendScratch(cfg.DataRoot, wsName, output)
+	_ = svc.AppendScratch(context.Background(), wsName, output)
 
 	m.setStatusLines(lines)
 	m.input.SetValue("")
@@ -9242,6 +9339,16 @@ var helpGroups = []struct {
 		{"/chats-archive", "", "archive pending AskX + article chat messages into chat_archive.jsonl"},
 		{"/chats-history", "", "browse all archived chat sessions in a read-only overlay"},
 		{"/chats-export", "[--md|--text]", "export chat archive to file (default: config chat_export_format) and open in $EDITOR"},
+	}},
+	{"sync", []cmdCompletion{
+		{"/sync", "", "sync status: mode, xlock holder, unpushed work"},
+		{"/sync-pull", "", "fetch, fast-forward, index changed articles"},
+		{"/sync-push", "", "commit and push anything outstanding"},
+		{"/sync-enable", "", "re-enter multi-client mode"},
+		{"/sync-disable", "", "leave multi-client mode (push, release xlock, go standalone)"},
+		{"/xlock-take", "", "seize write authority from another machine (confirms)"},
+		{"/xlock-release", "", "hand write authority over now"},
+		{"arc sync init", "<repo-url>", "one-time setup, run on every machine  (CLI only)"},
 	}},
 	{"system", []cmdCompletion{
 		{"/scratch", "[msg]", "workspace-local scratch (append / toggle)"},
@@ -10145,11 +10252,13 @@ func (m *Model) cmdScratch(msg string, global bool) tea.Cmd {
 		m.scratchGlobal = global
 	}
 	ws := m.scratchWorkspace()
-	if err := storefs.AppendScratch(m.cfg.DataRoot, ws, msg); err != nil {
-		m.setStatusError("scratch: " + err.Error())
-		return nil
-	}
-	m.reloadScratchLines()
+
+	// Open the pane immediately, then write off the event loop.
+	//
+	// The write can take seconds in multi-client mode — the first one of a
+	// session pulls and acquires the xlock over the network. Doing it inline
+	// froze the whole TUI for that long: no spinner, no repaint, no keystrokes,
+	// and no way to show what was happening.
 	if !m.scratchOpen {
 		if m.askxOpen {
 			m.closeAskX()
@@ -10159,11 +10268,14 @@ func (m *Model) cmdScratch(msg string, global bool) tea.Cmd {
 		}
 		m.scratchOpen = true
 	}
-	// Auto-scroll to bottom.
-	m.scratchScrollToBottom()
-	m.statusMsg = "✓ added to scratch"
-	return nil
+	svc := m.svc
+	return func() tea.Msg {
+		return scratchAppendedMsg{err: svc.AppendScratch(context.Background(), ws, msg)}
+	}
 }
+
+// scratchAppendedMsg reports the outcome of an asynchronous scratch append.
+type scratchAppendedMsg struct{ err error }
 
 // reloadScratchLines reads the scratch file and caches lines + blocks for rendering.
 // Uses scratchWorkspace() unless scratchGlobal is set (always "").

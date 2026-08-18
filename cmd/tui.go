@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	"github.com/jrniemiec/arc/service"
 	arctui "github.com/jrniemiec/arc/tui"
 )
 
@@ -72,6 +73,18 @@ func runTUI(cmd *cobra.Command) error {
 	}()
 	defer signal.Stop(sig)
 
+	// Divergence is detected by the startup pull, which now runs in the
+	// background — blocking every launch on a network round trip to catch a rare
+	// condition made the app unusable. When the pull does find a fork, the banner
+	// shows "xlock: diverged" and every write is refused, so the tree cannot be
+	// made worse while the user repairs it.
+	//
+	// A pre-existing divergence is still caught before any damage: the first
+	// write pulls before acquiring the xlock and refuses on a fork.
+	if st, err := svc.Sync().Status(cmd.Context()); err == nil && st.Diverged {
+		return reportDiverged(cmd, svc)
+	}
+
 	m := arctui.New(svc, cfg, cfgPath, themeMode)
 	cleanup := arctui.SetupTerminal()
 	defer cleanup()
@@ -89,4 +102,29 @@ func runTUI(cmd *cobra.Command) error {
 		return fmt.Errorf("tui: %w", err)
 	}
 	return nil
+}
+
+// reportDiverged prints the repair screen for a forked clone.
+//
+// Divergence means another machine almost certainly took the xlock while this
+// one was working. It is the one case the protocol cannot resolve on its own, so
+// it is surfaced rather than automated: only a human can judge which side of the
+// fork to keep, and replaying can collide on num_id.
+func reportDiverged(cmd *cobra.Command, svc *service.Service) error {
+	out := cmd.ErrOrStderr()
+	fmt.Fprint(out, "\n  arc cannot start: this tree has diverged.\n\n")
+	fmt.Fprintln(out, "  Another machine wrote while this one had unpushed work.")
+	fmt.Fprintln(out, "  Reads are blocked too — these files are a fork that is about to be")
+	fmt.Fprint(out, "  replayed or dropped, so anything you found here might not survive.\n\n")
+
+	if st, err := svc.Sync().Status(cmd.Context()); err == nil && st.Unpushed > 0 {
+		fmt.Fprintf(out, "  %d local commit(s) are not on the remote.\n\n", st.Unpushed)
+	}
+
+	fmt.Fprintln(out, "  To repair, in the arc data directory:")
+	fmt.Fprintln(out, "    git log --oneline origin/main..HEAD    # see what is stranded")
+	fmt.Fprintln(out, "    git rebase origin/main                 # replay it, then check num_id")
+	fmt.Fprintln(out, "    git reset --hard origin/main           # or drop it")
+	fmt.Fprint(out, "\n  After replaying, run 'arc reindex' and check for duplicate num_id values.\n")
+	return errors.New("diverged clone: manual repair required")
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -9,21 +10,32 @@ import (
 	storefs "github.com/jrniemiec/arc/store/fs"
 )
 
-// cmdChatsArchive syncs pending AskX + article chat messages into chat_archive.jsonl.
+// cmdChatsArchive syncs pending AskX + article chat messages into
+// chat_archive.jsonl, off the event loop.
+//
+// The archive write is a tracked mutation, so it may acquire the xlock and cross
+// the network. Running it inline froze the TUI for the duration.
 func (m *Model) cmdChatsArchive() {
-	res, err := m.svc.SyncChats()
-	if err != nil {
-		m.setStatusError("chats-archive: " + err.Error())
-		return
-	}
-	if res.Messages == 0 {
-		m.setStatusLines([]string{"chats-archive: nothing new to archive"})
-		return
-	}
-	m.setStatusLines([]string{fmt.Sprintf(
-		"chats-archive: archived %d message(s) from %d source(s)",
-		res.Messages, res.Sources,
-	)})
+	m.statusMsg = "archiving chats…"
+	svc := m.svc
+	send := m.programSend
+	go func() {
+		res, err := svc.SyncChats(context.Background())
+		if send == nil {
+			return
+		}
+		switch {
+		case err != nil:
+			(*send)(cmdDoneMsg{err: "chats-archive: " + syncErrorMessage(err)})
+		case res.Messages == 0:
+			(*send)(cmdDoneMsg{statusLines: []string{"chats-archive: nothing new to archive"}})
+		default:
+			(*send)(cmdDoneMsg{statusLines: []string{fmt.Sprintf(
+				"chats-archive: archived %d message(s) from %d source(s)",
+				res.Messages, res.Sources,
+			)}})
+		}
+	}()
 }
 
 // cmdChatsHistory opens the full-screen archive viewer overlay, scrolled to the bottom.

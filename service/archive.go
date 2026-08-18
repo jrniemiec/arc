@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,7 +20,14 @@ type SyncChatsResult struct {
 
 // SyncChats archives new messages from AskX and all article chats into
 // ~/.arc/chat_archive.jsonl, using a watermark per source to copy only new messages.
-func (s *Service) SyncChats() (SyncChatsResult, error) {
+func (s *Service) SyncChats(ctx context.Context) (SyncChatsResult, error) {
+	// chat_archive.jsonl and archive_state.json are both tracked: the watermark
+	// must travel with the archive, or another machine re-archives chats it
+	// already has.
+	if err := s.beginWrite(ctx); err != nil {
+		return SyncChatsResult{}, err
+	}
+
 	dataRoot := s.cfg.DataRoot
 	articlesRoot := s.cfg.ArticlesRoot
 

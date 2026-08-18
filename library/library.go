@@ -220,9 +220,20 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 }
 
 // IndexSlugs reads each article by ID from the filesystem and upserts it into
-// SQLite. Used after agent runs to index only the newly ingested articles
-// without a full Reindex walk of the entire library.
+// SQLite. Used after agent runs and after a sync pull to index only the changed
+// articles without a full Reindex walk of the entire library.
+//
+// Collection membership comes from the symlinks, which are authoritative, not
+// from meta.json — matching Reindex. Taking it from meta.json here would regress
+// membership on every article this touches.
 func (l *Library) IndexSlugs(ctx context.Context, slugs []string) error {
+	if len(slugs) == 0 {
+		return nil
+	}
+	membership, err := fs.ScanCollectionMembership(l.cfg.DataRoot)
+	if err != nil {
+		return fmt.Errorf("scan collections: %w", err)
+	}
 	for _, id := range slugs {
 		dir := filepath.Join(l.cfg.ArticlesRoot, id)
 		files := fs.ProbeFiles(dir)
@@ -231,6 +242,7 @@ func (l *Library) IndexSlugs(ctx context.Context, slugs []string) error {
 			return fmt.Errorf("read meta %s: %w", id, err)
 		}
 		a := meta.ToArticle(id, files)
+		a.Collections = membership[id]
 		l.resolveFiles(&a)
 		summaryText := ""
 		if a.Files.Summary != "" {
@@ -240,6 +252,59 @@ func (l *Library) IndexSlugs(ctx context.Context, slugs []string) error {
 		}
 		if err := l.db.Upsert(ctx, a, summaryText, l.cardQuestions(a)); err != nil {
 			return fmt.Errorf("upsert %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// DeindexSlugs removes articles from SQLite without touching the filesystem.
+//
+// Used on the sync pull path, where git has already removed the article
+// directories. DeleteArticle is wrong there: it also removes the directory and
+// rewrites collection symlinks, both of which the incoming commit already did.
+func (l *Library) DeindexSlugs(ctx context.Context, slugs []string) error {
+	for _, id := range slugs {
+		if err := l.db.Delete(ctx, id); err != nil {
+			return fmt.Errorf("delete %s from db: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// SyncCollections rebuilds collection rows and membership from the filesystem.
+//
+// Called on the pull path when anything under collections/ changed. Collection
+// membership lives in symlinks, so a changed symlink touches no article file and
+// would otherwise be missed by article-slug indexing alone.
+func (l *Library) SyncCollections(ctx context.Context) error {
+	metas, err := fs.ListCollections(l.cfg.DataRoot)
+	if err != nil {
+		return fmt.Errorf("list collections: %w", err)
+	}
+	seen := make(map[string]bool, len(metas))
+	for _, m := range metas {
+		seen[m.Slug] = true
+		if err := l.db.UpsertCollection(ctx, store.Collection{
+			ID:          m.Slug,
+			NumID:       m.NumID,
+			Name:        m.Name,
+			Description: m.Description,
+			CreatedAt:   m.CreatedAt,
+		}); err != nil {
+			return fmt.Errorf("upsert collection %s: %w", m.Slug, err)
+		}
+	}
+
+	// Drop rows for collections deleted on another machine.
+	existing, err := l.db.ListCollectionIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list collections from db: %w", err)
+	}
+	for _, id := range existing {
+		if !seen[id] {
+			if err := l.db.DeleteCollection(ctx, id); err != nil {
+				return fmt.Errorf("delete collection %s: %w", id, err)
+			}
 		}
 	}
 	return nil

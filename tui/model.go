@@ -511,6 +511,13 @@ type Model struct {
 	stats       service.Stats
 	statsLoaded bool
 
+	// Multi-client sync. Zero value means standalone: no banner, no fetch tick.
+	xlock xlockState
+	// xlockVersion is the coordinator state version the banner was last built
+	// from. Comparing it on each spinner tick catches an acquire or release
+	// regardless of which code path caused it.
+	xlockVersion uint64
+
 	// Help
 	helpSubTab    helpSubTab
 	helpDocLines  []string           // content lines for current section
@@ -746,6 +753,13 @@ var globalCommands = []cmdCompletion{
 	{"/askX", "<prompt>", "workspace-local LLM query"},
 	{"/AskX", "<prompt>", "global LLM query (same as Ctrl+X)"},
 	{"/reset", "", "reset askX context (keeps history visible, removes from LLM context)"},
+	{"/sync", "", "sync status: mode, xlock holder, unpushed work"},
+	{"/sync-pull", "", "fetch, fast-forward, index changed articles"},
+	{"/sync-push", "", "commit and push anything outstanding"},
+	{"/sync-enable", "", "re-enter multi-client mode"},
+	{"/sync-disable", "", "leave multi-client mode"},
+	{"/xlock-take", "", "seize write authority from another machine"},
+	{"/xlock-release", "", "hand write authority over now"},
 	{"/help", "[group]", "show command reference"},
 	{"/?", "", "show all key bindings"},
 	{"/reveal", "", "reveal the selected item in Finder (same as F)"},
@@ -870,6 +884,13 @@ var achatCommands = []cmdCompletion{
 
 // chatCommands are available when workspace chat mode is active.
 var chatCommands = []cmdCompletion{
+	{"/sync", "", "sync status: mode, xlock holder, unpushed work"},
+	{"/sync-pull", "", "fetch, fast-forward, index changed articles"},
+	{"/sync-push", "", "commit and push anything outstanding"},
+	{"/sync-enable", "", "re-enter multi-client mode"},
+	{"/sync-disable", "", "leave multi-client mode"},
+	{"/xlock-take", "", "seize write authority from another machine"},
+	{"/xlock-release", "", "hand write authority over now"},
 	{"/clear", "", "clear conversation history"},
 	{"/mode", "[corpus-only|corpus-first|open]", "show or switch grounding mode"},
 	{"/profile", "[name]", "show or switch LLM profile for this session"},
@@ -2162,6 +2183,16 @@ func (m Model) SaveState() {
 // Call after p.Run() exits.
 func (m Model) Cleanup() {
 	m.ttsPlayer.Stop()
+
+	// Best effort only: flush pending flag pushes and release the xlock. Nothing
+	// depends on this running — that is what the other machine's takeover timer
+	// is for, and why push-on-exit was rejected in favour of pushing after every
+	// mutating command.
+	if m.svc != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = m.svc.Sync().Close(ctx)
+	}
 }
 
 // buildWsRows rebuilds the flat workspace tree from workspaceItems expand state.
@@ -2305,6 +2336,15 @@ func (m Model) Init() tea.Cmd {
 		// otherwise never have been loaded.
 		cmds = append(cmds, loadNav(m.svc), loadStats(m.svc), loadWorkspaces(m.svc),
 			loadCollectionsTree(m.svc))
+
+		// Multi-client only: start the banner refresh. In standalone the
+		// coordinator is the no-op implementation, so no goroutine, no fetch,
+		// and no banner are created at all.
+		if m.svc.Sync().Enabled() {
+			cmds = append(cmds,
+				refreshXLock(m.svc, m.cfg.Sync.Machine, m.cfg.Sync.TakeoverMargin.D()),
+				xlockTick(m.cfg.Sync.BannerRefresh.D()))
+		}
 	}
 	cmds = append(cmds, loadAgentRuns(m.cfg.AgentPath))
 	cmds = append(cmds, loadAgentFeeds(m.cfg.AgentPath))

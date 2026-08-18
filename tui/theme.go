@@ -17,10 +17,10 @@ type Theme struct {
 	TabInactive lipgloss.Color
 
 	// Left navigator
-	NavText    lipgloss.Color // article/item text
-	NavGroup   lipgloss.Color // group headers (Collections, Workspaces)
-	NavDimmed  lipgloss.Color // counts, secondary info
-	NavMark    lipgloss.Color // ✓ read / • unread indicators
+	NavText   lipgloss.Color // article/item text
+	NavGroup  lipgloss.Color // group headers (Collections, Workspaces)
+	NavDimmed lipgloss.Color // counts, secondary info
+	NavMark   lipgloss.Color // ✓ read / • unread indicators
 
 	// Right content pane
 	ContentTitle  lipgloss.Color
@@ -56,6 +56,14 @@ type Theme struct {
 
 	// Status
 	StatusError lipgloss.Color // error messages in status bar
+
+	// Multi-client xlock banner.
+	// Held is deliberately distinct from StatusError: an unpushed commit is not
+	// an error — the work is safe, it just has not left the machine — while a
+	// diverged clone stops the app entirely. Sharing one colour would train the
+	// eye to ignore both.
+	XLockHeld    lipgloss.Color // this machine may write
+	XLockBlocked lipgloss.Color // another machine holds it, or work is unpushed
 
 	// Streaming / chat activity
 	StreamingText lipgloss.Color
@@ -106,6 +114,9 @@ var Nord = Theme{
 
 	StatusError: "#BF616A", // nord11 — red
 
+	XLockHeld:    "#A3BE8C", // nord14 — green
+	XLockBlocked: "#EBCB8B", // nord13 — amber
+
 	StreamingText: "#88C0D0", // nord8 — light cyan
 	ChatUser:      "#A3BE8C", // nord14 — green
 	ChatAssistant: "#D8DEE9", // nord4 — soft white
@@ -149,6 +160,9 @@ var ClaudeCode = Theme{
 
 	StatusError: "#E06C75", // red
 
+	XLockHeld:    "#98C379", // green
+	XLockBlocked: "#E5C07B", // amber
+
 	StreamingText: "#6598FF",
 	ChatUser:      "#88C0D0",
 	ChatAssistant: "#D7D7D7",
@@ -187,6 +201,9 @@ var Light = Theme{
 	Pinned:     "#5A2D9A", // purple for light bg
 
 	StatusError: "#CC0000", // red for light bg
+
+	XLockHeld:    "#2D7A2D", // green for light bg
+	XLockBlocked: "#9A6700", // dark amber for light bg
 
 	StreamingText: "#1A7AB0",
 	ChatUser:      "#2D7A2D",

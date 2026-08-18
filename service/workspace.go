@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	chatpkg "github.com/jrniemiec/arc/chat"
 	"github.com/jrniemiec/arc/config"
 	"github.com/jrniemiec/arc/ingest/pipeline"
 	"github.com/jrniemiec/arc/internal/clog"
@@ -20,10 +21,12 @@ import (
 // CreateWorkspace creates a new workspace, writing chat/chat.json from the global template.
 func (s *Service) CreateWorkspace(ctx context.Context, name, description string) error {
 	description = TrimWrappingQuotes(description)
-	if err := fs.CreateWorkspace(s.cfg.DataRoot, name, description, s.cfg.Chat); err != nil {
-		return fmt.Errorf("create workspace: %w", err)
-	}
-	return nil
+	return s.guarded(ctx, "workspace new: "+name, func() error {
+		if err := fs.CreateWorkspace(s.cfg.DataRoot, name, description, s.cfg.Chat); err != nil {
+			return fmt.Errorf("create workspace: %w", err)
+		}
+		return nil
+	})
 }
 
 // ListWorkspaces returns all workspaces with counts, pinned workspaces first.
@@ -58,13 +61,21 @@ func (s *Service) ListWorkspaces(ctx context.Context, includeArchived bool) ([]W
 }
 
 // PinWorkspace marks a workspace as pinned.
+//
+// Gated like any other mutation: the pin lives in the workspace meta.json, which
+// is tracked, so an ungated write would dirty the tree without the xlock and
+// block the next pull.
 func (s *Service) PinWorkspace(ctx context.Context, name string) error {
-	return fs.PinWorkspace(s.cfg.DataRoot, name, time.Now().UTC())
+	return s.guarded(ctx, "workspace pin: "+name, func() error {
+		return fs.PinWorkspace(s.cfg.DataRoot, name, time.Now().UTC())
+	})
 }
 
 // UnpinWorkspace removes the pin from a workspace.
 func (s *Service) UnpinWorkspace(ctx context.Context, name string) error {
-	return fs.UnpinWorkspace(s.cfg.DataRoot, name)
+	return s.guarded(ctx, "workspace unpin: "+name, func() error {
+		return fs.UnpinWorkspace(s.cfg.DataRoot, name)
+	})
 }
 
 // GetWorkspace returns info for a single workspace.
@@ -176,7 +187,9 @@ func (s *Service) ResolveWorkspaceName(ctx context.Context, query string) (strin
 
 // RenameWorkspace renames a workspace.
 func (s *Service) RenameWorkspace(ctx context.Context, oldName, newName string) error {
-	return fs.RenameWorkspace(s.cfg.DataRoot, oldName, newName)
+	return s.guarded(ctx, "workspace rename: "+oldName+" → "+newName, func() error {
+		return fs.RenameWorkspace(s.cfg.DataRoot, oldName, newName)
+	})
 }
 
 // ArchiveWorkspace sets workspace status to "archived".
@@ -186,12 +199,16 @@ func (s *Service) ArchiveWorkspace(ctx context.Context, name string) error {
 		return err
 	}
 	m.Status = "archived"
-	return fs.WriteWorkspaceMeta(s.cfg.DataRoot, m)
+	return s.guarded(ctx, "workspace archive: "+name, func() error {
+		return fs.WriteWorkspaceMeta(s.cfg.DataRoot, m)
+	})
 }
 
 // DeleteWorkspace removes a workspace directory entirely.
 func (s *Service) DeleteWorkspace(ctx context.Context, name string) error {
-	return fs.DeleteWorkspace(s.cfg.DataRoot, name)
+	return s.guarded(ctx, "workspace delete: "+name, func() error {
+		return fs.DeleteWorkspace(s.cfg.DataRoot, name)
+	})
 }
 
 // SetWorkspaceDescription updates the description in meta.json.
@@ -201,7 +218,9 @@ func (s *Service) SetWorkspaceDescription(ctx context.Context, name, text string
 		return err
 	}
 	m.Description = TrimWrappingQuotes(text)
-	return fs.WriteWorkspaceMeta(s.cfg.DataRoot, m)
+	return s.guarded(ctx, "workspace describe: "+name, func() error {
+		return fs.WriteWorkspaceMeta(s.cfg.DataRoot, m)
+	})
 }
 
 // SetWorkspaceSystemPrompt writes system.txt for a workspace.
@@ -210,7 +229,9 @@ func (s *Service) SetWorkspaceSystemPrompt(ctx context.Context, name, text strin
 		return err
 	}
 	wsDir := fs.WorkspaceDir(s.cfg.DataRoot, name)
-	return os.WriteFile(filepath.Join(wsDir, "system.txt"), []byte(TrimWrappingQuotes(text)+"\n"), 0644)
+	return s.guarded(ctx, "workspace system: "+name, func() error {
+		return os.WriteFile(filepath.Join(wsDir, "system.txt"), []byte(TrimWrappingQuotes(text)+"\n"), 0644)
+	})
 }
 
 // GetWorkspaceSystemPrompt reads system.txt for a workspace.
@@ -236,13 +257,18 @@ func (s *Service) GetChatConfig(ctx context.Context, name string) (config.ChatCo
 
 // SetChatConfig writes chat/chat.json for a workspace.
 func (s *Service) SetChatConfig(ctx context.Context, name string, cfg config.ChatConfig) error {
-	return fs.WriteChatConfig(s.cfg.DataRoot, name, cfg)
+	return s.guarded(ctx, "workspace chat-config: "+name, func() error {
+		return fs.WriteChatConfig(s.cfg.DataRoot, name, cfg)
+	})
 }
 
 // ── Articles ──────────────────────────────────────────────────────────────────
 
 // AddArticlesToWorkspace links one or more articles into a workspace.
 func (s *Service) AddArticlesToWorkspace(ctx context.Context, workspaceName string, slugs []string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -274,6 +300,9 @@ func (s *Service) AddArticlesToWorkspace(ctx context.Context, workspaceName stri
 
 // RemoveArticlesFromWorkspace removes one or more article links from a workspace.
 func (s *Service) RemoveArticlesFromWorkspace(ctx context.Context, workspaceName string, slugs []string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -293,6 +322,9 @@ func (s *Service) RemoveArticlesFromWorkspace(ctx context.Context, workspaceName
 
 // AddCollectionsToWorkspace links one or more collections into a workspace.
 func (s *Service) AddCollectionsToWorkspace(ctx context.Context, workspaceName string, cols []string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -323,6 +355,9 @@ func (s *Service) AddCollectionsToWorkspace(ctx context.Context, workspaceName s
 
 // RemoveCollectionsFromWorkspace removes one or more collection links from a workspace.
 func (s *Service) RemoveCollectionsFromWorkspace(ctx context.Context, workspaceName string, cols []string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -345,6 +380,9 @@ func (s *Service) RemoveCollectionsFromWorkspace(ctx context.Context, workspaceN
 // everything else is hard-copied as a file. If into is non-empty, resources are placed
 // inside that subdirectory of resources/.
 func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName string, paths []string, into, comment string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -380,6 +418,9 @@ func (s *Service) AddResourcesToWorkspace(ctx context.Context, workspaceName str
 
 // RemoveResourcesFromWorkspace removes one or more files from workspace/resources/.
 func (s *Service) RemoveResourcesFromWorkspace(ctx context.Context, workspaceName string, basenames []string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -411,6 +452,9 @@ func (s *Service) ListWorkspaceOutcomes(ctx context.Context, workspaceName strin
 // Outcomes are flat — directories and URLs are rejected. If asName is non-empty
 // it renames the stored file (only meaningful for a single path).
 func (s *Service) AddOutcomesToWorkspace(ctx context.Context, workspaceName string, paths []string, asName string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -435,6 +479,9 @@ func (s *Service) AddOutcomesToWorkspace(ctx context.Context, workspaceName stri
 
 // RemoveOutcomesFromWorkspace removes one or more files from workspace/outcomes/.
 func (s *Service) RemoveOutcomesFromWorkspace(ctx context.Context, workspaceName string, basenames []string) error {
+	if err := s.beginWrite(ctx); err != nil {
+		return err
+	}
 	if _, err := fs.ReadWorkspaceMeta(s.cfg.DataRoot, workspaceName); err != nil {
 		return err
 	}
@@ -459,9 +506,54 @@ func (s *Service) ReadWorkspaceOutcome(ctx context.Context, workspaceName, filen
 	return string(data), nil
 }
 
+// SaveWorkspaceChat persists workspace chat history.
+//
+// Chat files are tracked — continuing a conversation on another machine is the
+// point of multi-client mode — so saving one is a gated mutation like any other.
+func (s *Service) SaveWorkspaceChat(ctx context.Context, workspace string, h *chatpkg.History) error {
+	return s.guarded(ctx, "chat: "+workspace, func() error {
+		return chatpkg.NewChatStore(s.cfg.DataRoot, workspace).SaveHistory(h)
+	})
+}
+
+// SaveArticleChat persists per-article chat history.
+func (s *Service) SaveArticleChat(ctx context.Context, slug string, h *chatpkg.History) error {
+	return s.guarded(ctx, "chat: "+slug, func() error {
+		return chatpkg.NewArticleChatStore(s.cfg.ArticlesRoot, slug).SaveHistory(h)
+	})
+}
+
+// AppendScratch appends to a workspace scratch file, or the global scratch.md
+// when workspace is empty.
+//
+// Exposed on the Service so the TUI does not write to the tracked tree directly:
+// a gate that call sites can bypass is not a gate.
+func (s *Service) AppendScratch(ctx context.Context, workspace, text string) error {
+	return s.guarded(ctx, "scratch: "+scratchLabel(workspace), func() error {
+		return fs.AppendScratch(s.cfg.DataRoot, workspace, text)
+	})
+}
+
+// SaveAskXHistory persists askX message history for a workspace, or the global
+// history when workspace is empty.
+func (s *Service) SaveAskXHistory(ctx context.Context, workspace string, h *fs.AskXHistory) error {
+	return s.guarded(ctx, "askx: "+scratchLabel(workspace), func() error {
+		return fs.SaveAskXHistory(s.cfg.DataRoot, workspace, h)
+	})
+}
+
+func scratchLabel(workspace string) string {
+	if workspace == "" {
+		return "global"
+	}
+	return workspace
+}
+
 // SaveWorkspaceOutcome writes a file to workspace/outcomes/.
 func (s *Service) SaveWorkspaceOutcome(ctx context.Context, workspaceName, filename string, data []byte) error {
-	return fs.WriteWorkspaceOutcome(s.cfg.DataRoot, workspaceName, filename, data)
+	return s.guarded(ctx, "workspace outcome: "+workspaceName+"/"+filename, func() error {
+		return fs.WriteWorkspaceOutcome(s.cfg.DataRoot, workspaceName, filename, data)
+	})
 }
 
 // ── Populate ─────────────────────────────────────────────────────────────────

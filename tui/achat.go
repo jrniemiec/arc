@@ -54,7 +54,7 @@ type achatReadyMsg struct {
 }
 
 type achatStreamDoneMsg struct {
-	usage chat.Usage
+	usage   chat.Usage
 	elapsed time.Duration
 	err     string
 }
@@ -591,7 +591,6 @@ func (m *Model) cmdArticleChatCommentBox(boxIdx int) tea.Cmd {
 	m.rebuildArticleChatLines(m.achatBuildWidth())
 
 	// Save in background.
-	articlesRoot := m.cfg.ArticlesRoot
 	slug := m.achatSlug
 	var toSave []chat.Message
 	if m.achatEngine != nil {
@@ -606,9 +605,9 @@ func (m *Model) cmdArticleChatCommentBox(boxIdx int) tea.Cmd {
 	if !newState {
 		status = "✓ exchange uncommented"
 	}
+	svc := m.svc
 	return func() tea.Msg {
-		st := chat.NewArticleChatStore(articlesRoot, slug)
-		if err := st.SaveHistory(&chat.History{Msgs: toSave}); err != nil {
+		if err := svc.SaveArticleChat(context.Background(), slug, &chat.History{Msgs: toSave}); err != nil {
 			return cmdDoneMsg{err: "comment: " + err.Error()}
 		}
 		return cmdDoneMsg{statusMsg: status}
@@ -660,7 +659,6 @@ func (m *Model) cmdArticleChatDeleteBox(boxIdx int) tea.Cmd {
 		m.achatBoxCursor = numBoxes - 1
 	}
 
-	articlesRoot := m.cfg.ArticlesRoot
 	slug := m.achatSlug
 	var toSave []chat.Message
 	if m.achatEngine != nil {
@@ -671,9 +669,9 @@ func (m *Model) cmdArticleChatDeleteBox(boxIdx int) tea.Cmd {
 		toSave = make([]chat.Message, len(m.achatRawMsgs))
 		copy(toSave, m.achatRawMsgs)
 	}
+	svc := m.svc
 	return func() tea.Msg {
-		st := chat.NewArticleChatStore(articlesRoot, slug)
-		if err := st.SaveHistory(&chat.History{Msgs: toSave}); err != nil {
+		if err := svc.SaveArticleChat(context.Background(), slug, &chat.History{Msgs: toSave}); err != nil {
 			return cmdDoneMsg{err: "delete: " + err.Error()}
 		}
 		return cmdDoneMsg{statusMsg: "✓ exchange deleted"}
@@ -1333,7 +1331,6 @@ func (m *Model) cmdArticleChatAddNote(text string) tea.Cmd {
 	viewH := m.achatViewHeight()
 	m.achatAutoScrollToBottom(viewH)
 
-	articlesRoot := m.cfg.ArticlesRoot
 	slug := m.achatSlug
 	var src []chat.Message
 	if m.achatEngine != nil {
@@ -1343,9 +1340,8 @@ func (m *Model) cmdArticleChatAddNote(text string) tea.Cmd {
 	}
 	toSave := make([]chat.Message, len(src))
 	copy(toSave, src)
+	svc := m.svc
 	return func() tea.Msg {
-		st := chat.NewArticleChatStore(articlesRoot, slug)
-		_ = st.SaveHistory(&chat.History{Msgs: toSave})
-		return nil
+		return mutationDone(svc.SaveArticleChat(context.Background(), slug, &chat.History{Msgs: toSave}))
 	}
 }

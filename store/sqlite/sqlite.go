@@ -455,6 +455,33 @@ func (s *Store) UpsertCollection(ctx context.Context, c store.Collection) error 
 		&sqlitex.ExecOptions{Args: []any{c.ID, c.Name, c.Description}})
 }
 
+// ListCollectionIDs returns every collection id in the database, including
+// collections with no members.
+//
+// Used by the sync pull path to find rows for collections deleted on another
+// machine. CollectionCounts cannot serve this: it groups over
+// article_collections, so an empty collection never appears.
+func (s *Store) ListCollectionIDs(ctx context.Context) ([]string, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	var ids []string
+	err = sqlitex.Execute(conn, `SELECT id FROM collections ORDER BY id`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				ids = append(ids, stmt.ColumnText(0))
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("list collection ids: %w", err)
+	}
+	return ids, nil
+}
+
 // SearchCollections searches collections by name or description using FTS5.
 func (s *Store) SearchCollections(ctx context.Context, query string) ([]store.Collection, error) {
 	conn, err := s.pool.Take(ctx)
@@ -867,4 +894,3 @@ func (s *Store) UpsertRelation(ctx context.Context, fromID, toID string, t store
 		Args: []any{fromID, toID, string(t), time.Now().UTC().Format(time.RFC3339)},
 	})
 }
-
