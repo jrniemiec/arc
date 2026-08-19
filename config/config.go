@@ -1121,14 +1121,90 @@ func Load(path string) (Config, error) {
 		}
 	}
 
+	var seen pathKeys
+	if err := applyFile(&cfg, path, &seen); err != nil {
+		return cfg, err
+	}
+
+	// Then the per-machine overlay, which wins. It holds what cannot be shared:
+	// this machine's identity and paths. See LocalPath.
+	if err := applyFile(&cfg, LocalPath(path), &seen); err != nil {
+		return cfg, err
+	}
+
+	deriveUnsetPaths(&cfg, seen)
+	return cfg, nil
+}
+
+// pathKeys records which data-root-derived paths a config file set explicitly.
+type pathKeys struct {
+	articlesRoot bool
+	dbPath       bool
+	vectorPath   bool
+	eventsPath   bool
+	agentPath    bool
+	logPath      bool
+}
+
+// deriveUnsetPaths recomputes every path the config did not set explicitly from
+// the final data_root.
+//
+// Without this, setting only data_root in a config file moved the data root but
+// left articles_root, db_path, and the rest pointing at the default ~/.arc —
+// so arc read one tree and wrote another, silently. The --data-root flag and
+// ARC_HOME already re-derived all of them (see applyDataRoot in cmd/root.go);
+// the config file was the one path that did not, which is the worst place for
+// the inconsistency to live because nothing about it is visible at the call.
+func deriveUnsetPaths(cfg *Config, seen pathKeys) {
+	if !seen.articlesRoot {
+		cfg.ArticlesRoot = filepath.Join(cfg.DataRoot, "articles")
+	}
+	if !seen.dbPath {
+		cfg.DBPath = filepath.Join(cfg.DataRoot, "arc.db")
+	}
+	if !seen.vectorPath {
+		cfg.VectorPath = filepath.Join(cfg.DataRoot, "index")
+	}
+	if !seen.eventsPath {
+		cfg.EventsPath = filepath.Join(cfg.DataRoot, "events.jsonl")
+	}
+	if !seen.agentPath {
+		cfg.AgentPath = filepath.Join(cfg.DataRoot, "agent")
+	}
+	if !seen.logPath {
+		cfg.LogPath = filepath.Join(cfg.DataRoot, "arc.log")
+	}
+}
+
+// LocalPath returns the per-machine overlay beside the given config file:
+// config.jsonc → config.local.jsonc.
+//
+// The overlay exists so config.jsonc can be tracked and shared. Everything in it
+// is either machine-specific by nature (absolute paths) or actively dangerous to
+// share — see SyncConfig.Machine.
+func LocalPath(configPath string) string {
+	ext := filepath.Ext(configPath)
+	return strings.TrimSuffix(configPath, ext) + ".local" + ext
+}
+
+// applyFile merges one config file over cfg. A missing file is not an error:
+// the overlay is optional, and so is the main file.
+func applyFile(cfg *Config, path string, seen *pathKeys) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return nil
 		}
-		return cfg, fmt.Errorf("open config: %w", err)
+		return fmt.Errorf("open config %s: %w", path, err)
 	}
+	return applyOverlay(cfg, data, seen)
+}
 
+// applyOverlay merges JSONC content over cfg, field by field.
+//
+// Only keys actually present take effect, so the overlay can be a three-line
+// file. Maps such as profiles are merged rather than replaced.
+func applyOverlay(cfg *Config, data []byte, seen *pathKeys) error {
 	// Decode into a temporary struct so we can merge profiles rather than replace.
 	var overlay struct {
 		DataRoot          string                  `json:"data_root"`
@@ -1154,7 +1230,7 @@ func Load(path string) (Config, error) {
 		Sync              *SyncConfig             `json:"sync"`
 	}
 	if err := jsonc.Unmarshal(data, &overlay); err != nil {
-		return cfg, fmt.Errorf("decode config: %w", err)
+		return fmt.Errorf("decode config: %w", err)
 	}
 
 	if overlay.DataRoot != "" {
@@ -1162,18 +1238,23 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.ArticlesRoot != "" {
 		cfg.ArticlesRoot = overlay.ArticlesRoot
+		seen.articlesRoot = true
 	}
 	if overlay.DBPath != "" {
 		cfg.DBPath = overlay.DBPath
+		seen.dbPath = true
 	}
 	if overlay.VectorPath != "" {
 		cfg.VectorPath = overlay.VectorPath
+		seen.vectorPath = true
 	}
 	if overlay.EventsPath != "" {
 		cfg.EventsPath = overlay.EventsPath
+		seen.eventsPath = true
 	}
 	if overlay.AgentPath != "" {
 		cfg.AgentPath = overlay.AgentPath
+		seen.agentPath = true
 	}
 	// Merge user profiles on top of builtins
 	for k, v := range overlay.Profiles {
@@ -1335,6 +1416,7 @@ func Load(path string) (Config, error) {
 	}
 	if overlay.LogPath != "" {
 		cfg.LogPath = overlay.LogPath
+		seen.logPath = true
 	}
 	if overlay.LogLevel != "" {
 		cfg.LogLevel = overlay.LogLevel
@@ -1376,7 +1458,7 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	return cfg, nil
+	return nil
 }
 
 // PatchStringField updates a single top-level string field in a .json/.jsonc

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,31 +175,31 @@ func WriteMeta(dir string, m Meta) error {
 // Meta is the on-disk representation of meta.json.
 // It is intentionally separate from store.Article to allow forward compatibility.
 type Meta struct {
-	ID             string     `json:"id"`
-	NumID          int        `json:"num_id,omitempty"`
-	Title          string     `json:"title"`
-	URL            string     `json:"url"`
-	SourceType     string     `json:"source_type"`
-	Feed           string     `json:"feed,omitempty"`
-	Author         string     `json:"author,omitempty"`
-	PublishedAt    string     `json:"published_at,omitempty"`
-	Language       string     `json:"language,omitempty"`
-	IngestedAt     string     `json:"ingested_at"`
-	ReadAt         *string    `json:"read_at,omitempty"`
-	PlayedAt       *string    `json:"played_at,omitempty"`
-	Collections    []string   `json:"collections,omitempty"`
-	Tags           []MetaTag  `json:"tags,omitempty"`
-	SummaryModel   string     `json:"summary_model,omitempty"`
-	SummaryStyle   string     `json:"summary_style,omitempty"`
-	FlashModel     string     `json:"flash_model,omitempty"`
-	FlashcardModel string     `json:"flashcard_model,omitempty"`
-	FlashcardStyle string     `json:"flashcard_style,omitempty"`
-	EmbedModel     string     `json:"embed_model,omitempty"`
-	QualityScore   float64    `json:"quality_score,omitempty"`
+	ID             string         `json:"id"`
+	NumID          int            `json:"num_id,omitempty"`
+	Title          string         `json:"title"`
+	URL            string         `json:"url"`
+	SourceType     string         `json:"source_type"`
+	Feed           string         `json:"feed,omitempty"`
+	Author         string         `json:"author,omitempty"`
+	PublishedAt    string         `json:"published_at,omitempty"`
+	Language       string         `json:"language,omitempty"`
+	IngestedAt     string         `json:"ingested_at"`
+	ReadAt         *string        `json:"read_at,omitempty"`
+	PlayedAt       *string        `json:"played_at,omitempty"`
+	Collections    []string       `json:"collections,omitempty"`
+	Tags           []MetaTag      `json:"tags,omitempty"`
+	SummaryModel   string         `json:"summary_model,omitempty"`
+	SummaryStyle   string         `json:"summary_style,omitempty"`
+	FlashModel     string         `json:"flash_model,omitempty"`
+	FlashcardModel string         `json:"flashcard_model,omitempty"`
+	FlashcardStyle string         `json:"flashcard_style,omitempty"`
+	EmbedModel     string         `json:"embed_model,omitempty"`
+	QualityScore   float64        `json:"quality_score,omitempty"`
 	Relations      []MetaRelation `json:"relations,omitempty"`
 
 	// Agent provenance — set only when ingested by the feed agent.
-	AgentRunID  string `json:"agent_run_id,omitempty"`
+	AgentRunID   string `json:"agent_run_id,omitempty"`
 	AgentVerdict string `json:"agent_verdict,omitempty"`
 	AgentReason  string `json:"agent_reason,omitempty"`
 }
@@ -209,10 +210,10 @@ type MetaTag struct {
 }
 
 type MetaRelation struct {
-	Slug        string `json:"slug"`
-	Type        string `json:"type"`
-	DetectedBy  string `json:"detected_by"`
-	DetectedAt  string `json:"detected_at"`
+	Slug       string `json:"slug"`
+	Type       string `json:"type"`
+	DetectedBy string `json:"detected_by"`
+	DetectedAt string `json:"detected_at"`
 }
 
 // ToArticle converts a Meta + Files into a store.Article.
@@ -642,7 +643,73 @@ func ValidateNumIDCounter(dataRoot, articlesRoot string) error {
 	if nextID != maxID+1 {
 		return fmt.Errorf("numeric ID counter mismatch: next_id file says %d, but max ID on disk is %d (expected next_id = %d)", nextID, maxID, maxID+1)
 	}
-	return nil
+
+	// A consistent counter does not imply unique IDs. A batch that allocated the
+	// same number twice leaves next_id perfectly in step with the maximum, so the
+	// check above passes and the problem only surfaces later as a UNIQUE
+	// constraint failure part-way through a reindex — with the index already
+	// half torn down. Catching it here means it is reported before anything is
+	// rebuilt.
+	return validateNumIDsUnique(dataRoot, articlesRoot)
+}
+
+// validateNumIDsUnique reports numeric IDs held by more than one article or
+// collection.
+//
+// Repair is manual: only a human can decide which item keeps the ID, and
+// renumbering changes what @<id> references resolve to.
+func validateNumIDsUnique(dataRoot, articlesRoot string) error {
+	owners := map[int][]string{}
+
+	entries, err := os.ReadDir(articlesRoot)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read articles dir: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		m, err := ReadMeta(filepath.Join(articlesRoot, e.Name(), "meta.json"))
+		if err != nil || m.NumID == 0 {
+			continue
+		}
+		owners[m.NumID] = append(owners[m.NumID], e.Name())
+	}
+
+	colMetas, _ := ListCollections(dataRoot)
+	for _, m := range colMetas {
+		if m.NumID == 0 {
+			continue
+		}
+		owners[m.NumID] = append(owners[m.NumID], "collection "+m.Slug)
+	}
+
+	var dupIDs []int
+	for id, holders := range owners {
+		if len(holders) > 1 {
+			dupIDs = append(dupIDs, id)
+		}
+	}
+	if len(dupIDs) == 0 {
+		return nil
+	}
+	sort.Ints(dupIDs)
+
+	// Name a few offenders; listing fifty is noise.
+	var b strings.Builder
+	fmt.Fprintf(&b, "duplicate numeric IDs: %d ID(s) are held by more than one item", len(dupIDs))
+	for i, id := range dupIDs {
+		if i == 3 {
+			fmt.Fprintf(&b, "\n  … and %d more", len(dupIDs)-3)
+			break
+		}
+		holders := owners[id]
+		sort.Strings(holders)
+		fmt.Fprintf(&b, "\n  %d: %s", id, strings.Join(holders, ", "))
+	}
+	b.WriteString("\n\nRenumber the duplicates before reindexing — @<id> references resolve by " +
+		"numeric ID, so a duplicate makes them ambiguous.")
+	return errors.New(b.String())
 }
 
 // backfillItem is used to sort unassigned articles/collections by date for ID assignment.
@@ -653,7 +720,7 @@ type backfillItem struct {
 	articleDir string
 	meta       *Meta
 	// collection fields
-	colMeta *CollectionMeta
+	colMeta  *CollectionMeta
 	dataRoot string
 }
 

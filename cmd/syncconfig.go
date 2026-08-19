@@ -10,16 +10,35 @@ import (
 	"github.com/jrniemiec/arc/config"
 )
 
-// updateConfigSync rewrites only the "sync" block in config.jsonc.
+// updateConfigSync rewrites the "sync" block in the per-machine overlay,
+// config.local.jsonc.
 //
-// The whole Config struct is deliberately not re-marshalled: config.jsonc is
-// JSONC and users keep comments in it, which a round trip through the struct
+// The whole sync block lives there rather than in config.jsonc, so the shared
+// config can be tracked. Two of its keys make this necessary:
+//
+//   - machine: sharing it is not merely redundant, it breaks the xlock. Two
+//     machines reading the same value each compare the holder to their own name,
+//     both match, and both conclude they already hold it — so both write without
+//     acquiring.
+//   - mode: a third machine may legitimately stay standalone, and init/enable/
+//     disable rewrite it at runtime, which shared would mean a commit that flips
+//     the mode everywhere.
+//
+// remote and branch could be shared, but splitting one block across two files is
+// harder to reason about than keeping it whole, and sync init writes them on each
+// machine anyway.
+//
+// The whole Config struct is deliberately not re-marshalled: these files are
+// JSONC and users keep comments in them, which a round trip through the struct
 // would silently delete. This locates the existing block by brace matching and
 // swaps just that span, leaving every other byte — comments included — intact.
 func updateConfigSync(mutate func(*config.SyncConfig)) error {
-	path := configPath()
+	path := config.LocalPath(configPath())
 
-	cfg, err := config.Load(path)
+	// Load through the normal path so the merged value is the starting point:
+	// Load reads the shared config and then the overlay. Loading the overlay
+	// directly would lose anything set only in the shared file.
+	cfg, err := config.Load(configPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -34,7 +53,11 @@ func updateConfigSync(mutate func(*config.SyncConfig)) error {
 
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read config: %w", err)
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read config: %w", err)
+		}
+		// First write to the overlay — create it.
+		raw = []byte("{\n}\n")
 	}
 	updated, err := spliceJSONBlock(string(raw), "sync", replacement)
 	if err != nil {

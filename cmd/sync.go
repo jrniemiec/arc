@@ -226,16 +226,25 @@ func cloneInto(ctx context.Context, url string, cfg config.Config, branch string
 // deliberately absent — it is committed, because its files are immutable and
 // embedding is the only step that costs API money.
 var gitignorePatterns = []string{
-	"arc.db",
-	"arc.db-shm",
-	"arc.db-wal",
-	"arc.log",
-	"arc.log.*",
-	"tui_state.json",
-	"command_history",
-	"cookies/",
-	"config.jsonc",
-	"config.json",
+	"/arc.db",
+	"/arc.db-shm",
+	"/arc.db-wal",
+	"/arc.log",
+	"/arc.log.*",
+	"/tui_state.json",
+	"/command_history",
+	"/cookies/",
+	// Anchored to the root. An unanchored "config.jsonc" matches at every depth,
+	// which silently excluded agent/config.jsonc and every
+	// workspaces/*/chat/config.jsonc — the per-workspace chat profile and
+	// grounding mode, which are content and must sync. Only the root config is
+	// per-machine, because it holds absolute paths and this machine's identity.
+	"/config.jsonc",
+	"/config.json",
+	// The per-machine overlay: this machine's identity, mode, and paths. Never
+	// tracked, so it survives a clone overwriting the shared config.
+	"/config.local.jsonc",
+	"/config.local.json",
 }
 
 func writeGitignore(dataRoot string) error {
