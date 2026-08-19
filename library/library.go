@@ -162,6 +162,32 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 	// Migrate old meta.json collections to symlinks (one-time, idempotent)
 	_ = fs.MigrateMetaCollections(l.cfg.DataRoot, l.cfg.ArticlesRoot)
 
+	// Rescue any reader marks that exist only in the database before clearing it.
+	//
+	// Marks are written to meta.json as they happen, so on a current tree this
+	// does nothing. It matters for a database written before that change: without
+	// it, the clear below would destroy every read and favourite permanently.
+	// Losing them is not recoverable, so the rescue runs unconditionally rather
+	// than being left to a migration the user has to remember.
+	rescued, err := l.rescueMarksToDisk(ctx)
+	if err != nil {
+		return result, fmt.Errorf("rescue marks: %w", err)
+	}
+	if rescued > 0 {
+		slog.Info("reindex: wrote database-only marks to meta.json", "count", rescued)
+	}
+
+	// Clear what is about to be rebuilt.
+	//
+	// Reindex used to upsert over whatever was already there, despite documenting
+	// itself as a full rebuild. Rows for articles deleted outside arc were never
+	// removed, and a changed num_id collided with the row still holding the old
+	// one — which turned one bad article into a failure that left the index half
+	// written.
+	if err := l.db.ClearDerived(ctx); err != nil {
+		return result, fmt.Errorf("clear index: %w", err)
+	}
+
 	// Sync collections from symlinks to SQLite
 	membership, err := fs.ScanCollectionMembership(l.cfg.DataRoot)
 	if err != nil {
@@ -217,6 +243,45 @@ func (l *Library) Reindex(ctx context.Context, progress func(indexed, total int)
 	})
 	result.Articles = indexed
 	return result, err
+}
+
+// rescueMarksToDisk copies reader marks held only in the database into each
+// article's meta.json, and reports how many it wrote.
+//
+// A mark already on disk is never overwritten: disk is the source of truth, and
+// the database copy may be the older of the two.
+func (l *Library) rescueMarksToDisk(ctx context.Context) (int, error) {
+	marks, err := l.db.ArticleMarks(ctx)
+	if err != nil {
+		return 0, err
+	}
+	written := 0
+	for id, m := range marks {
+		for _, item := range []struct {
+			kind fs.Mark
+			at   *time.Time
+		}{
+			{fs.MarkRead, m.ReadAt},
+			{fs.MarkPlayed, m.PlayedAt},
+			{fs.MarkFavorite, m.FavoritedAt},
+		} {
+			if item.at == nil {
+				continue
+			}
+			onDisk, err := fs.GetMark(l.cfg.ArticlesRoot, id, item.kind)
+			if err != nil {
+				continue // article gone from disk; nothing to rescue it into
+			}
+			if onDisk != nil {
+				continue
+			}
+			if err := fs.SetMark(l.cfg.ArticlesRoot, id, item.kind, item.at); err != nil {
+				return written, fmt.Errorf("write %s for %s: %w", item.kind, id, err)
+			}
+			written++
+		}
+	}
+	return written, nil
 }
 
 // IndexSlugs reads each article by ID from the filesystem and upserts it into
@@ -332,27 +397,40 @@ func (l *Library) cardQuestions(a store.Article) string {
 
 // MarkRead records that an article was read at time t.
 func (l *Library) MarkRead(ctx context.Context, id string, t time.Time) error {
-	return l.db.MarkRead(ctx, id, t)
+	return l.setMark(ctx, id, fs.MarkRead, &t, func() error { return l.db.MarkRead(ctx, id, t) })
+}
+
+// setMark writes a mark to meta.json and to SQLite.
+//
+// Disk first: it is the source of truth, and a mark that reached only the
+// database is lost the next time arc.db is rebuilt and never reaches another
+// machine. The database write follows so queries and filters stay correct
+// without waiting for a reindex.
+func (l *Library) setMark(ctx context.Context, id string, mark fs.Mark, t *time.Time, dbWrite func() error) error {
+	if err := fs.SetMark(l.cfg.ArticlesRoot, id, mark, t); err != nil {
+		return err
+	}
+	return dbWrite()
 }
 
 // MarkUnread clears the read_at timestamp for an article.
 func (l *Library) MarkUnread(ctx context.Context, id string) error {
-	return l.db.MarkUnread(ctx, id)
+	return l.setMark(ctx, id, fs.MarkRead, nil, func() error { return l.db.MarkUnread(ctx, id) })
 }
 
 // MarkFavorite marks an article as a favorite.
 func (l *Library) MarkFavorite(ctx context.Context, id string, t time.Time) error {
-	return l.db.MarkFavorite(ctx, id, t)
+	return l.setMark(ctx, id, fs.MarkFavorite, &t, func() error { return l.db.MarkFavorite(ctx, id, t) })
 }
 
 // UnmarkFavorite removes the favorite mark from an article.
 func (l *Library) UnmarkFavorite(ctx context.Context, id string) error {
-	return l.db.UnmarkFavorite(ctx, id)
+	return l.setMark(ctx, id, fs.MarkFavorite, nil, func() error { return l.db.UnmarkFavorite(ctx, id) })
 }
 
 // MarkPlayed records that an article was played at time t.
 func (l *Library) MarkPlayed(ctx context.Context, id string, t time.Time) error {
-	return l.db.MarkPlayed(ctx, id, t)
+	return l.setMark(ctx, id, fs.MarkPlayed, &t, func() error { return l.db.MarkPlayed(ctx, id, t) })
 }
 
 // Relate creates a directed relation between two articles.

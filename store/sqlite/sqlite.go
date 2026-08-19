@@ -158,6 +158,14 @@ func (s *Store) upsertTx(conn *sqlite.Conn, a store.Article, summaryText, cardsT
 			?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
+			-- Reader marks come from disk, but COALESCE keeps whatever the row
+			-- already has when disk is silent. A plain assignment would wipe every
+			-- mark on the first reindex after upgrading, before the backfill has
+			-- had a chance to write them to meta.json. Losing them is permanent;
+			-- a stale one is fixed by unmarking.
+			read_at         = COALESCE(excluded.read_at, read_at),
+			played_at       = COALESCE(excluded.played_at, played_at),
+			favorited_at    = COALESCE(excluded.favorited_at, favorited_at),
 			num_id          = excluded.num_id,
 			title           = excluded.title,
 			url             = excluded.url,
@@ -453,6 +461,88 @@ func (s *Store) UpsertCollection(ctx context.Context, c store.Collection) error 
 	return sqlitex.Execute(conn,
 		`INSERT INTO collections_fts (collection_id, name, description) VALUES (?, ?, ?)`,
 		&sqlitex.ExecOptions{Args: []any{c.ID, c.Name, c.Description}})
+}
+
+// ClearDerived removes every row that Reindex rebuilds from the filesystem.
+//
+// It deliberately leaves the relations table alone. Reindex does not write
+// relations — Upsert never touches them — so clearing them would destroy state
+// that nothing puts back. Only tables that get rebuilt may be cleared; that is
+// the whole rule, and forgetting it is how reader marks were lost.
+func (s *Store) ClearDerived(ctx context.Context) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+
+	endFn := sqlitex.Transaction(conn)
+	err = func() error {
+		// article_collections and tags cascade from articles, but deleting them
+		// explicitly keeps this independent of the foreign-key pragma being on.
+		for _, stmt := range []string{
+			`DELETE FROM articles_fts`,
+			`DELETE FROM collections_fts`,
+			`DELETE FROM article_collections`,
+			`DELETE FROM tags`,
+			`DELETE FROM articles`,
+			`DELETE FROM collections`,
+		} {
+			if err := sqlitex.Execute(conn, stmt, nil); err != nil {
+				return fmt.Errorf("%s: %w", stmt, err)
+			}
+		}
+		return nil
+	}()
+	endFn(&err)
+	return err
+}
+
+// ArticleMarks returns the reader marks currently held in the database, keyed by
+// article ID. Used to rescue marks to disk before a rebuild.
+func (s *Store) ArticleMarks(ctx context.Context) (map[string]Marks, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	out := map[string]Marks{}
+	err = sqlitex.Execute(conn, `
+		SELECT id, read_at, played_at, favorited_at FROM articles
+		WHERE read_at IS NOT NULL OR played_at IS NOT NULL OR favorited_at IS NOT NULL
+	`, &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			out[stmt.ColumnText(0)] = Marks{
+				ReadAt:      parseTimePtr(stmt.ColumnText(1)),
+				PlayedAt:    parseTimePtr(stmt.ColumnText(2)),
+				FavoritedAt: parseTimePtr(stmt.ColumnText(3)),
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read article marks: %w", err)
+	}
+	return out, nil
+}
+
+// Marks holds the reader-state timestamps for one article.
+type Marks struct {
+	ReadAt      *time.Time
+	PlayedAt    *time.Time
+	FavoritedAt *time.Time
+}
+
+func parseTimePtr(s string) *time.Time {
+	if s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 // ListCollectionIDs returns every collection id in the database, including

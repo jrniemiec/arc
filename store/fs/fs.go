@@ -144,6 +144,79 @@ func (s *Store) walkDir(dir, prefix string, fn func(id string, files store.Files
 
 // ReadMeta parses meta.json from an article directory.
 // Returns a zero-value Meta and no error if meta.json doesn't exist.
+// Mark identifies a per-article timestamp that records what the reader did with
+// an article, as opposed to what the article is.
+type Mark string
+
+const (
+	MarkRead     Mark = "read_at"
+	MarkPlayed   Mark = "played_at"
+	MarkFavorite Mark = "favorited_at"
+)
+
+// SetMark sets or clears a mark in the article's meta.json. A nil time clears it.
+//
+// These used to live only in SQLite, which made three claims false at once: that
+// the filesystem is the source of truth, that arc.db can be rebuilt from disk,
+// and that a machine's state travels with the tree. Rebuilding the database
+// destroyed them, and they never reached a second machine.
+func SetMark(articlesRoot, slug string, mark Mark, t *time.Time) error {
+	dir := filepath.Join(articlesRoot, slug)
+	m, err := ReadMeta(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		return fmt.Errorf("read meta %s: %w", slug, err)
+	}
+
+	var val *string
+	if t != nil {
+		s := t.UTC().Format(time.RFC3339)
+		val = &s
+	}
+	switch mark {
+	case MarkRead:
+		m.ReadAt = val
+	case MarkPlayed:
+		m.PlayedAt = val
+	case MarkFavorite:
+		m.FavoritedAt = val
+	default:
+		return fmt.Errorf("unknown mark %q", mark)
+	}
+	return WriteMeta(dir, m)
+}
+
+// GetMark returns the mark currently stored in the article's meta.json, or nil
+// when it is not set.
+func GetMark(articlesRoot, slug string, mark Mark) (*time.Time, error) {
+	m, err := ReadMeta(filepath.Join(articlesRoot, slug, "meta.json"))
+	if err != nil {
+		return nil, err
+	}
+	switch mark {
+	case MarkRead:
+		return parseMarkTime(m.ReadAt), nil
+	case MarkPlayed:
+		return parseMarkTime(m.PlayedAt), nil
+	case MarkFavorite:
+		return parseMarkTime(m.FavoritedAt), nil
+	}
+	return nil, fmt.Errorf("unknown mark %q", mark)
+}
+
+// parseMarkTime converts a stored RFC3339 mark to a time, or nil when absent or
+// unparseable. A malformed timestamp is treated as "not marked" rather than an
+// error: a bad read_at must not make an article unreadable.
+func parseMarkTime(s *string) *time.Time {
+	if s == nil || *s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, *s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
 func ReadMeta(metaPath string) (Meta, error) {
 	if metaPath == "" {
 		return Meta{}, nil
@@ -187,6 +260,7 @@ type Meta struct {
 	IngestedAt     string         `json:"ingested_at"`
 	ReadAt         *string        `json:"read_at,omitempty"`
 	PlayedAt       *string        `json:"played_at,omitempty"`
+	FavoritedAt    *string        `json:"favorited_at,omitempty"`
 	Collections    []string       `json:"collections,omitempty"`
 	Tags           []MetaTag      `json:"tags,omitempty"`
 	SummaryModel   string         `json:"summary_model,omitempty"`
@@ -242,6 +316,10 @@ func (m Meta) ToArticle(id string, files store.Files) store.Article {
 		AgentVerdict:   m.AgentVerdict,
 		AgentReason:    m.AgentReason,
 	}
+
+	a.ReadAt = parseMarkTime(m.ReadAt)
+	a.PlayedAt = parseMarkTime(m.PlayedAt)
+	a.FavoritedAt = parseMarkTime(m.FavoritedAt)
 
 	if t, err := time.Parse(time.RFC3339, m.IngestedAt); err == nil {
 		a.IngestedAt = t
