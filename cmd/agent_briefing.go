@@ -113,6 +113,22 @@ func runAgentBriefing(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("list articles: %w", err)
 	}
 
+	// A failed run must not be silent. Emitting nothing is how the mailer decides
+	// to skip sending, which is right for "no new articles today" and wrong for
+	// "the run could not work at all" — an invalid API key made every filter call
+	// fail for nine days and no mail was sent, so nothing indicated it.
+	if rec.Error != "" {
+		out := cmd.OutOrStdout()
+		fmt.Fprintf(out, "arc agent run FAILED — %s\n\n", rec.RunID)
+		fmt.Fprintf(out, "  %s\n\n", rec.Error)
+		fmt.Fprintf(out, "  items seen:     %d\n", rec.TotalNew)
+		fmt.Fprintf(out, "  filter errors:  %d\n", rec.TotalErrors)
+		fmt.Fprintf(out, "  ingested:       %d\n\n", rec.TotalIngest)
+		fmt.Fprintln(out, "Nothing was ingested, so there is no digest. The run stopped at the")
+		fmt.Fprintln(out, "first error rather than recording the same failure against every item.")
+		return nil
+	}
+
 	// Nothing ingested — emit no output so the caller can detect and skip sending.
 	if len(articles) == 0 {
 		return nil

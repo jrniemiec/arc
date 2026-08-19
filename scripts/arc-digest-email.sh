@@ -108,7 +108,13 @@ main() {
 
   # Default to last daily run if no run IDs given.
   if [[ ${#RUN_IDS[@]} -eq 0 ]]; then
-    LAST_DAILY=$("$ARC" agent log | grep -v '\[decisions\]' | tail -1 | awk '{print $NF}')
+    # Match the run-ID pattern rather than taking the last field of the last
+    # line: a failed run prints its error on a continuation line, so $NF there
+    # is the tail of the error message, not a run ID.
+    LAST_DAILY=$("$ARC" agent log \
+      | grep -v '\[decisions\]' \
+      | grep -oE 'agent-[0-9]{8}-[0-9]{6}' \
+      | tail -1)
     [[ -n "$LAST_DAILY" ]] || die "could not determine last daily run ID"
     RUN_IDS=("$LAST_DAILY")
     log "using last daily run: $LAST_DAILY"
@@ -130,6 +136,17 @@ main() {
   if [[ -z "$BODY" ]]; then
     log "nothing ingested across all runs — skipping email."
     exit 0
+  fi
+
+  # A failed run produces a FAILED report rather than a digest. Say so in the
+  # subject: an "arc digest (0 articles)" subject reads like a quiet day, which
+  # is exactly how a dead API key went unnoticed for nine days.
+  if printf '%s' "$BODY" | grep -q '^arc agent run FAILED'; then
+    SUBJECT="arc agent FAILED — $(date '+%a %b %e' | tr -s ' ')"
+    log "run failed — sending failure notice"
+    send_email "$ARC_RECIPIENT" "$ARC_FROM" "$SUBJECT" "$BODY"
+    log "failure notice sent."
+    return 0
   fi
 
   COUNT=$(printf '%s\n' "$BODY_TTS" | grep -c '^[0-9]\+\.' || true)

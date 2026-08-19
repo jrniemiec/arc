@@ -151,8 +151,18 @@ func RunFeeds(ctx context.Context, opts RunOptions) (RunRecord, error) {
 		rec.TotalIngest += fr.Ingest
 		rec.TotalMaybe += fr.Maybe
 		rec.TotalSkip += fr.Skip
+		rec.TotalErrors += fr.Errors
 		rec.TotalCostUSD += fr.CostUSD
 		rec.IngestedSlugs = append(rec.IngestedSlugs, fr.Slugs...)
+
+		// A feed that could not filter at all stops the run. Continuing would
+		// repeat the same failure against every remaining feed and bury it in
+		// hundreds of per-item "maybe" verdicts.
+		if fr.Error != "" {
+			rec.Error = fr.Error
+			slog.Error("agent run aborted", "run_id", runID, "err", fr.Error)
+			break
+		}
 	}
 
 	rec.FinishedAt = time.Now().UTC()
@@ -201,6 +211,30 @@ func ResetFeedState(stateDir, feedURL string) error {
 }
 
 // runFeed handles one feed within a run cycle.
+// fatalFilterErr reports whether an error means the run cannot work at all,
+// rather than saying something about one item.
+//
+// An invalid API key is the case that motivated this: every item failed with the
+// same 401, each was recorded as a "maybe" with the error in its reason field,
+// and the run reported success. It ran that way for nine days before anyone
+// noticed the summaries had stopped.
+func fatalFilterErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "401"),
+		strings.Contains(msg, "api key is invalid"),
+		strings.Contains(msg, "authentication_error"),
+		strings.Contains(msg, "invalid_api_key"),
+		strings.Contains(msg, "403"),
+		strings.Contains(msg, "permission_error"):
+		return true
+	}
+	return false
+}
+
 func runFeed(
 	ctx context.Context,
 	opts RunOptions,
@@ -285,9 +319,12 @@ func runFeed(
 	total := len(dedupedItems)
 	results := make([]feed.FilterResult, total)
 	var (
-		sem  = make(chan struct{}, FilterConcurrency)
-		wg   sync.WaitGroup
-		done atomic.Int32 // completed filter calls
+		sem      = make(chan struct{}, FilterConcurrency)
+		wg       sync.WaitGroup
+		done     atomic.Int32 // completed filter calls
+		failed   atomic.Int32 // filter calls that returned an error
+		fatalMu  sync.Mutex
+		fatalErr error // first error that means the run cannot work at all
 	)
 	for i, item := range dedupedItems {
 		wg.Add(1)
@@ -298,6 +335,14 @@ func runFeed(
 
 			r, err := feed.Filter(ctx, filterChat, filterCfg, it)
 			if err != nil {
+				failed.Add(1)
+				if fatalFilterErr(err) {
+					fatalMu.Lock()
+					if fatalErr == nil {
+						fatalErr = err
+					}
+					fatalMu.Unlock()
+				}
 				r = feed.FilterResult{Verdict: feed.VerdictMaybe, Reason: fmt.Sprintf("filter error: %v", err)}
 			}
 			results[idx] = r
@@ -312,6 +357,16 @@ func runFeed(
 		}(i, item)
 	}
 	wg.Wait()
+
+	fr.Errors = int(failed.Load())
+	if fatalErr != nil {
+		// Nothing here is worth ingesting: every verdict is a fallback, not a
+		// judgement. Returning the error stops the run rather than filling the
+		// tree with "maybe" entries that only record the same failure.
+		fr.Error = fatalErr.Error()
+		slog.Error("agent: filter cannot proceed", "feed", fr.Name, "err", fatalErr)
+		return fr
+	}
 
 	// ── Phase 2: parallel ingest ─────────────────────────────────────────────
 	// Each pipeline.Run writes to its own slug directory (no filesystem races).

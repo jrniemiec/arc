@@ -11,20 +11,21 @@ import (
 // RunRecord is one entry appended to agent/runs.jsonl after each agent run.
 // It provides a structured audit trail of every agent invocation.
 type RunRecord struct {
-	RunID       string       `json:"run_id"`                 // agent-YYYYMMDD-HHMMSS
-	RunType     string       `json:"run_type"`               // "daily" | "decisions"
+	RunID       string       `json:"run_id"`                  // agent-YYYYMMDD-HHMMSS
+	RunType     string       `json:"run_type"`                // "daily" | "decisions"
 	SourceRunID string       `json:"source_run_id,omitempty"` // for decisions runs: the originating daily run ID
-	StartedAt  time.Time    `json:"started_at"`
-	FinishedAt time.Time    `json:"finished_at"`
-	Feeds      []FeedRecord `json:"feeds"`
+	StartedAt   time.Time    `json:"started_at"`
+	FinishedAt  time.Time    `json:"finished_at"`
+	Feeds       []FeedRecord `json:"feeds"`
 
 	// Totals across all feeds.
-	TotalNew      int     `json:"total_new"`      // items seen for the first time
-	TotalFilter   int     `json:"total_filter"`   // items sent to LLM filter
-	TotalIngest   int     `json:"total_ingest"`   // items ingested
-	TotalMaybe    int     `json:"total_maybe"`    // items marked maybe
-	TotalSkip     int     `json:"total_skip"`     // items skipped
-	TotalCostUSD  float64 `json:"total_cost_usd"` // cumulative LLM cost across all ingested articles
+	TotalNew     int     `json:"total_new"`      // items seen for the first time
+	TotalFilter  int     `json:"total_filter"`   // items sent to LLM filter
+	TotalIngest  int     `json:"total_ingest"`   // items ingested
+	TotalMaybe   int     `json:"total_maybe"`    // items marked maybe
+	TotalSkip    int     `json:"total_skip"`     // items skipped
+	TotalErrors  int     `json:"total_errors"`   // items whose filter call failed
+	TotalCostUSD float64 `json:"total_cost_usd"` // cumulative LLM cost across all ingested articles
 
 	// IngestedSlugs holds the article IDs ingested in this run.
 	// Omitted from JSON; used by callers to index only new articles into SQLite.
@@ -35,14 +36,15 @@ type RunRecord struct {
 
 // FeedRecord summarises one feed's outcome within a run.
 type FeedRecord struct {
-	URL    string `json:"url"`
-	Name   string `json:"name,omitempty"`
-	New     int     `json:"new"`      // new GUIDs seen
-	Filter  int     `json:"filter"`   // sent to LLM
-	Ingest  int     `json:"ingest"`   // ingested
-	Maybe   int     `json:"maybe"`    // maybe
-	Skip    int     `json:"skip"`     // skipped
-	CostUSD float64 `json:"cost_usd"` // cumulative LLM cost for this feed's ingested articles
+	URL     string  `json:"url"`
+	Name    string  `json:"name,omitempty"`
+	New     int     `json:"new"`              // new GUIDs seen
+	Filter  int     `json:"filter"`           // sent to LLM
+	Ingest  int     `json:"ingest"`           // ingested
+	Maybe   int     `json:"maybe"`            // maybe
+	Skip    int     `json:"skip"`             // skipped
+	Errors  int     `json:"errors,omitempty"` // filter calls that failed
+	CostUSD float64 `json:"cost_usd"`         // cumulative LLM cost for this feed's ingested articles
 	Error   string  `json:"error,omitempty"`
 
 	// Items holds per-article decisions, populated during the run.
