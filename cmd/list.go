@@ -13,15 +13,16 @@ import (
 )
 
 var (
-	listCollection string
-	listTag        string
-	listUnread     bool
-	listUnplayed   bool
+	listCollection       string
+	listTag              string
+	listUnread           bool
+	listUnplayed         bool
+	listFavorites        bool
 	listUncollected      bool
 	listUncollectedFresh bool
 	listAgent            bool
-	listAgentRun    string
-	listSlugs       bool
+	listAgentRun         string
+	listSlugs            bool
 )
 
 func init() {
@@ -29,6 +30,7 @@ func init() {
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().BoolVar(&listUnread, "unread", false, "show only unread articles")
 	listCmd.Flags().BoolVar(&listUnplayed, "unplayed", false, "show only unplayed articles")
+	listCmd.Flags().BoolVar(&listFavorites, "favorites", false, "show only favorited articles")
 	listCmd.Flags().BoolVar(&listUncollected, "uncollected", false, "show only articles not in any collection")
 	listCmd.Flags().BoolVar(&listUncollectedFresh, "uncollected-fresh", false, "show only articles not in any collection at all (excludes uncollected collection)")
 	listCmd.Flags().BoolVar(&listSlugs, "slugs", false, "print one slug per line (for scripting)")
@@ -78,6 +80,7 @@ Examples:
 			Tags:             tags,
 			Unread:           listUnread,
 			Unplayed:         listUnplayed,
+			Favorites:        listFavorites,
 			AgentOnly:        listAgent,
 			AgentRunID:       listAgentRun,
 		}

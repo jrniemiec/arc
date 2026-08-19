@@ -187,12 +187,17 @@ type coordinator struct {
 	lastPush     time.Time
 	stateVersion uint64
 
-	// pushMu serialises git push. Pushes are synchronous — they run on whichever
-	// goroutine owns the operation, which is already off the UI event loop — so
-	// this only has to stop two concurrent operations from pushing at once.
-	// Without it they race on the remote ref and one is rejected as
-	// non-fast-forward, which is indistinguishable from a genuine remote move.
-	pushMu sync.Mutex
+	// gitMu serialises every git operation that writes, not just pushes.
+	//
+	// The startup pull runs on its own goroutine so launching arc is not delayed
+	// by a network round trip. In a CLI invocation the command then runs straight
+	// away, so its commit collides with the pull still in flight and git fails
+	// with "Unable to create .git/index.lock: File exists" — which surfaced as a
+	// mark that silently failed to save.
+	//
+	// git already serialises through that lock file; this only avoids losing the
+	// race rather than reporting it to the user as an error.
+	gitMu sync.Mutex
 
 	// activity is a human-readable description of the in-flight operation.
 	activity string
@@ -232,8 +237,8 @@ func (c *coordinator) Enabled() bool { return true }
 // process. Callers are already off the UI event loop, so blocking here costs
 // nothing the user can feel.
 func (c *coordinator) push(ctx context.Context) error {
-	c.pushMu.Lock()
-	defer c.pushMu.Unlock()
+	c.gitMu.Lock()
+	defer c.gitMu.Unlock()
 	defer c.setActivity("pushing")()
 
 	if err := c.git.Push(ctx); err != nil {
@@ -360,6 +365,8 @@ func (c *coordinator) Pull(ctx context.Context) error { return c.pull(ctx) }
 // pull runs the full sequence: dirty check, fetch, fast-forward, then index only
 // what changed.
 func (c *coordinator) pull(ctx context.Context) error {
+	c.gitMu.Lock()
+	defer c.gitMu.Unlock()
 	defer c.setActivity("syncing")()
 	if err := c.sweep(ctx); err != nil {
 		return err
@@ -455,7 +462,10 @@ func (c *coordinator) claim(ctx context.Context, now time.Time) error {
 	if err := WriteXLock(c.dataRoot, x); err != nil {
 		return err
 	}
-	if _, err := c.git.CommitAll(ctx, "xlock: "+c.machine); err != nil {
+	c.gitMu.Lock()
+	_, commitErr := c.git.CommitAll(ctx, "xlock: "+c.machine)
+	c.gitMu.Unlock()
+	if err := commitErr; err != nil {
 		return err
 	}
 	if err := c.push(ctx); err != nil {
@@ -481,6 +491,8 @@ func (c *coordinator) claim(ctx context.Context, now time.Time) error {
 // $EDITOR (/config-edit, /outcome-edit) cannot be intercepted at all. Sweeping
 // at the boundary catches every one of them without each writer having to
 // remember anything.
+// Callers must hold gitMu: sweep runs inside pull, which takes it. Locking here
+// too would deadlock.
 func (c *coordinator) sweep(ctx context.Context) error {
 	clean, err := c.git.IsClean(ctx)
 	if err != nil {
@@ -506,7 +518,9 @@ func (c *coordinator) sweep(ctx context.Context) error {
 // where the preceding push had just emptied the queue — which showed up as a
 // two-second delay on quit and a spurious warning when offline.
 func (c *coordinator) Push(ctx context.Context) error {
+	c.gitMu.Lock()
 	committed, err := c.git.CommitAll(ctx, "arc: sync")
+	c.gitMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -545,8 +559,11 @@ func (c *coordinator) Release(ctx context.Context) error {
 	// The xlock file is the authority, not this process's memory. Each CLI
 	// invocation is a fresh process, so an in-memory "held" flag is always false
 	// there and would make release a silent no-op.
-	if err := c.git.Fetch(ctx); err != nil {
-		slog.Debug("gitsync: fetch before release failed", "err", err)
+	c.gitMu.Lock()
+	fetchErr := c.git.Fetch(ctx)
+	c.gitMu.Unlock()
+	if fetchErr != nil {
+		slog.Debug("gitsync: fetch before release failed", "err", fetchErr)
 	}
 	x, err := c.remoteOrLocalXLock(ctx)
 	if err != nil {
@@ -570,7 +587,10 @@ func (c *coordinator) Release(ctx context.Context) error {
 	if err := WriteXLock(c.dataRoot, XLock{}.Released()); err != nil {
 		return err
 	}
-	if _, err := c.git.CommitAll(ctx, "xlock: released by "+c.machine); err != nil {
+	c.gitMu.Lock()
+	_, relCommitErr := c.git.CommitAll(ctx, "xlock: released by "+c.machine)
+	c.gitMu.Unlock()
+	if err := relCommitErr; err != nil {
 		return err
 	}
 	if err := c.push(ctx); err != nil {
@@ -649,6 +669,8 @@ func (c *coordinator) RemoteXLock(ctx context.Context) (XLock, error) {
 // FetchOnly refreshes the remote-tracking ref without merging, so the banner can
 // see who holds the xlock without swapping files under the user mid-read.
 func (c *coordinator) FetchOnly(ctx context.Context) error {
+	c.gitMu.Lock()
+	defer c.gitMu.Unlock()
 	return c.git.Fetch(ctx)
 }
 

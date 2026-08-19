@@ -900,6 +900,9 @@ func buildListQuery(f store.Filter) (string, []any) {
 	if f.Unplayed {
 		where = append(where, `played_at IS NULL`)
 	}
+	if f.Favorites {
+		where = append(where, `favorited_at IS NOT NULL`)
+	}
 	if f.AgentRunID != "" {
 		where = append(where, `agent_run_id = ?`)
 		args = append(args, f.AgentRunID)

@@ -4,8 +4,8 @@ import "time"
 
 // Article is the core domain type — one entry in the knowledge base.
 type Article struct {
-	ID             string     // "20260521-sparse-attention-survey"
-	NumID          int        // unique numeric ID for quick referencing
+	ID             string // "20260521-sparse-attention-survey"
+	NumID          int    // unique numeric ID for quick referencing
 	Title          string
 	URL            string
 	SourceType     string // url | pdf | text | rss | gmail
@@ -38,15 +38,15 @@ type Article struct {
 // Files resolves which physical files back this article.
 // All paths are absolute. Empty string means the file does not exist.
 type Files struct {
-	Root             string // absolute path to article dir
-	Body             string // body.txt
-	Summary          string // best summary variant per config preferences
-	Flash            string // best flash variant per config preferences
-	Flashcards       string // best flashcards variant per config preferences
-	SourceURL        string // source.url
-	SourcePDF        string // source.pdf
-	SourceHTML       string // source.html
-	Meta             string // meta.json
+	Root       string // absolute path to article dir
+	Body       string // body.txt
+	Summary    string // best summary variant per config preferences
+	Flash      string // best flash variant per config preferences
+	Flashcards string // best flashcards variant per config preferences
+	SourceURL  string // source.url
+	SourcePDF  string // source.pdf
+	SourceHTML string // source.html
+	Meta       string // meta.json
 }
 
 // Tag is a keyword attached to an article with its origin.
@@ -64,10 +64,10 @@ const (
 
 // Relation is a directed link from this article to another.
 type Relation struct {
-	ToID        string
-	Type        RelationType
-	DetectedBy  string // "user" | "agent"
-	DetectedAt  time.Time
+	ToID       string
+	Type       RelationType
+	DetectedBy string // "user" | "agent"
+	DetectedAt time.Time
 }
 
 type RelationType string
@@ -91,20 +91,21 @@ type Collection struct {
 
 // Filter constrains List results.
 type Filter struct {
-	Collection string
-	Tags       []string
-	SourceType string
-	After      *time.Time
-	Before     *time.Time
-	Unread     bool
-	Unplayed   bool
-	Uncollected      bool // only articles not in any real collection (uncollected collection doesn't count)
-	UncollectedFresh bool // only articles not in any collection at all (including uncollected)
-	AgentOnly   bool   // only articles ingested by the feed agent (agent_run_id IS NOT NULL)
-	AgentRunID  string // only articles from this specific agent run
-	Slugs      []string // restrict to these article slugs (empty = no restriction)
-	Limit      int
-	Offset     int
+	Collection       string
+	Tags             []string
+	SourceType       string
+	After            *time.Time
+	Before           *time.Time
+	Unread           bool
+	Unplayed         bool
+	Favorites        bool     // only articles marked favorite
+	Uncollected      bool     // only articles not in any real collection (uncollected collection doesn't count)
+	UncollectedFresh bool     // only articles not in any collection at all (including uncollected)
+	AgentOnly        bool     // only articles ingested by the feed agent (agent_run_id IS NOT NULL)
+	AgentRunID       string   // only articles from this specific agent run
+	Slugs            []string // restrict to these article slugs (empty = no restriction)
+	Limit            int
+	Offset           int
 }
 
 // Query drives Search.
