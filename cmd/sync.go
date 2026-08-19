@@ -66,7 +66,7 @@ initial commit makes the remote non-empty and the first push non-fast-forward.
 What init does depends on both ends:
 
   local has content, remote empty   git init, .gitignore, commit, push
-  local empty, remote has content   clone, reindex
+  local empty, remote has content   clone, then index this machine's database
   both empty                        git init, commit, push
   both have content                 refused — only you can decide which survives
 
@@ -122,6 +122,18 @@ It finishes by writing "mode": "multi-client" to config.jsonc.`,
 
 		case !localHasContent && remoteHasContent:
 			if err := cloneInto(ctx, url, cfg, branch, out); err != nil {
+				return err
+			}
+			// Build this machine's database from the cloned files.
+			//
+			// arc.db is per-machine and never tracked, so a clone arrives with
+			// none: list and search would return nothing until the user noticed
+			// an instruction telling them to run reindex. Setup should leave a
+			// machine that works.
+			//
+			// Runs before the mode is written, so a machine that failed to index
+			// is not also declared ready.
+			if err := reindexAfterClone(cmd); err != nil {
 				return err
 			}
 
@@ -215,7 +227,31 @@ func cloneInto(ctx context.Context, url string, cfg config.Config, branch string
 	if err := g.CheckoutAll(ctx); err != nil {
 		return fmt.Errorf("check out cloned tree: %w", err)
 	}
-	fmt.Fprintln(out, "run 'arc reindex' to build this machine's database")
+	return nil
+}
+
+// reindexAfterClone builds the local database from the freshly cloned tree.
+//
+// The library was opened before the clone, which is fine: it holds the articles
+// root as a path and walks it live, so it sees the new files without reopening.
+func reindexAfterClone(cmd *cobra.Command) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "indexing ...")
+
+	var last int
+	res, err := svcFrom(cmd).Reindex(cmd.Context(), func(indexed, total int) {
+		last = indexed
+		fmt.Fprintf(cmd.ErrOrStderr(), "\r  indexing %d/%d", indexed, total)
+	})
+	if last > 0 {
+		fmt.Fprintln(cmd.ErrOrStderr())
+	}
+	if err != nil {
+		// Name what worked, so the failure does not read as "setup is broken".
+		return fmt.Errorf("the clone succeeded but indexing failed: %w\n"+
+			"resolve the above, then run 'arc reindex'", err)
+	}
+	fmt.Fprintf(out, "indexed %d articles, %d collections\n", res.Articles, res.Collections)
 	return nil
 }
 
