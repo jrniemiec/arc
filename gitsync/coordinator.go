@@ -688,13 +688,24 @@ func (c *coordinator) Close(ctx context.Context) error {
 	if err := c.Push(ctx); err != nil {
 		slog.Warn("gitsync: push on close failed", "err", err)
 	}
-	c.mu.Lock()
-	held := c.held
-	c.mu.Unlock()
-	if held {
-		if err := c.Release(ctx); err != nil {
-			slog.Warn("gitsync: release on close failed", "err", err)
-		}
+
+	// Release if the xlock file says this machine holds it — not if this process
+	// happens to have acquired it.
+	//
+	// The in-memory flag is only true when this process did the acquiring, so a
+	// session that opened the xlock in an earlier run, or took it from the CLI,
+	// left it held from every other machine's point of view. Ownership comes
+	// from the file, as it does everywhere else.
+	x, err := c.remoteOrLocalXLock(ctx)
+	if err != nil {
+		slog.Warn("gitsync: could not read xlock on close", "err", err)
+		return nil
+	}
+	if x.Holder != c.machine {
+		return nil // free, or someone else's to release
+	}
+	if err := c.Release(ctx); err != nil {
+		slog.Warn("gitsync: release on close failed", "err", err)
 	}
 	return nil
 }
