@@ -59,13 +59,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 
 	case xlockTickMsg:
+		// The idle watchdog rides this tick rather than the 100ms spinner: a
+		// 30-minute timeout does not need checking ten times a second, and the
+		// check takes a mutex. Firing up to one interval late is immaterial at
+		// that scale.
+		//
+		// A running job counts as activity, not merely a reason to defer the
+		// release. Without the Touch, the idle clock keeps running through a long
+		// ingest and the xlock is released the instant the job finishes — the
+		// opposite of "idle for 30 minutes". A job shorter than one interval can
+		// be missed entirely, which is harmless: it cannot have run the clock past
+		// the timeout on its own.
+		var idleCmd tea.Cmd
+		if m.svc != nil && m.svc.Sync().Enabled() {
+			if m.busy() {
+				m.svc.Sync().Touch()
+			} else if m.svc.Sync().IdleFor() > m.idleTimeout() {
+				idleCmd = selfReleaseXLock(m.svc)
+			}
+		}
+
 		// Fetch-only refresh, then schedule the next tick. The countdown itself
 		// recomputes on every render from the last fetched timestamp, so it
 		// ticks down smoothly rather than jumping once a minute.
 		//
-		// The same tick drives idle self-release: the machine gives the xlock up
-		// while still running, so correctness never depends on a clean shutdown.
+		// idleCmd is batched here rather than appended to cmds: this case returns
+		// directly, so anything left in cmds would be dropped.
 		return m, tea.Batch(
+			idleCmd,
 			refreshXLock(m.svc, m.cfg.Sync.Machine, m.cfg.Sync.TakeoverMargin.D()),
 			xlockTick(m.cfg.Sync.BannerRefresh.D()),
 		)

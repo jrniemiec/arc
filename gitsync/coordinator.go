@@ -35,6 +35,15 @@ type Coordinator interface {
 	// Push sends everything committed so far. Used by /sync-push and on exit.
 	Push(ctx context.Context) error
 
+	// IdleFor reports how long since the last Touch. A UI compares this against
+	// its own threshold to decide whether to self-release.
+	IdleFor() time.Duration
+
+	// SelfRelease releases the xlock because this machine has gone idle. It is
+	// Release with a different log line — the machine is alive, so it commits and
+	// pushes first and nothing is stranded.
+	SelfRelease(ctx context.Context) error
+
 	// Touch refreshes last_activity locally. Called on any keypress; a long
 	// read session must not drop the xlock mid-work.
 	Touch()
@@ -143,6 +152,8 @@ func (noop) Close(context.Context) error                { return nil }
 func (noop) RemoteXLock(context.Context) (XLock, error) { return XLock{}, nil }
 func (noop) StateVersion() uint64                       { return 0 }
 func (noop) Activity() string                           { return "" }
+func (noop) IdleFor() time.Duration                     { return 0 }
+func (noop) SelfRelease(context.Context) error          { return nil }
 func (noop) Status(context.Context) (Status, error) {
 	return Status{Mode: "standalone"}, nil
 }
@@ -270,6 +281,43 @@ func (c *coordinator) StateVersion() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.stateVersion
+}
+
+// IdleFor reports how long since the last Touch.
+func (c *coordinator) IdleFor() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Since(c.lastActivity)
+}
+
+// SelfRelease gives up the xlock after this machine has gone idle.
+//
+// Safe in a way that automatic *takeover* is not: this machine is running, so it
+// commits and pushes before clearing the holder. Nothing is stranded, and the
+// other machine simply finds the xlock free rather than having to force it.
+//
+// It does nothing about a crashed machine — a dead process cannot release
+// anything. That case still needs /xlock-take (§7).
+func (c *coordinator) SelfRelease(ctx context.Context) error {
+	// Reset the clock first, whatever the outcome. The caller's tick fires every
+	// 100ms once the idle period has elapsed; without this it would retry
+	// continuously — including against an xlock this machine does not hold.
+	idle := c.IdleFor()
+	c.Touch()
+
+	// The xlock file is the authority, not this process's memory. A TUI started
+	// while the xlock was already held by this machine — acquired by an earlier
+	// process, or by the CLI — has held=false and would never release it.
+	x, err := c.remoteOrLocalXLock(ctx)
+	if err != nil {
+		return err
+	}
+	if x.Holder != c.machine {
+		return nil // free, or someone else's to release
+	}
+
+	slog.Info("gitsync: idle, releasing xlock", "idle", idle.Round(time.Second))
+	return c.Release(ctx)
 }
 
 func (c *coordinator) Touch() {
@@ -452,9 +500,23 @@ func (c *coordinator) sweep(ctx context.Context) error {
 }
 
 // Push commits anything outstanding and sends it to the remote.
+//
+// Skips the push when there is provably nothing to send. Pushing regardless cost
+// a network round trip on every exit — including immediately after a release,
+// where the preceding push had just emptied the queue — which showed up as a
+// two-second delay on quit and a spurious warning when offline.
 func (c *coordinator) Push(ctx context.Context) error {
-	if _, err := c.git.CommitAll(ctx, "arc: sync"); err != nil {
+	committed, err := c.git.CommitAll(ctx, "arc: sync")
+	if err != nil {
 		return err
+	}
+	if !committed {
+		// Nothing new locally; check whether earlier commits are still behind.
+		n, err := c.git.UnpushedCount(ctx)
+		if err == nil && n == 0 {
+			slog.Debug("gitsync: nothing to push")
+			return nil
+		}
 	}
 	return c.push(ctx)
 }

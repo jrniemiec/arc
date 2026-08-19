@@ -154,9 +154,15 @@ type SyncConfig struct {
 	// Machine identifies this client in xlock.json. Defaults to the hostname.
 	Machine string `json:"machine"`
 
-	// IdleTimeout is how long this machine keeps the xlock without activity
-	// before releasing it. Activity is any keypress, not only mutations, so a
-	// long read session does not drop the xlock mid-work.
+	// IdleTimeout is how long this machine keeps the xlock with nothing
+	// happening before releasing it.
+	//
+	// Activity is any keypress *and* any long-running job — an ingest or an LLM
+	// response counts, so the timer does not run through a job and then fire the
+	// moment it finishes.
+	//
+	// This drives self-release only. There is no automatic takeover: a machine
+	// that crashes holding the xlock keeps it until /xlock-take elsewhere.
 	IdleTimeout Duration `json:"idle_timeout"`
 
 	// TakeoverMargin is added to the holder's idle timeout before another
@@ -1080,7 +1086,7 @@ func Default() Config {
 			Mode:           SyncModeStandalone,
 			Branch:         "main",
 			Machine:        defaultMachineName(),
-			IdleTimeout:    Duration(15 * time.Minute),
+			IdleTimeout:    Duration(30 * time.Minute),
 			TakeoverMargin: Duration(2 * time.Minute),
 			BannerRefresh:  Duration(60 * time.Second),
 		},

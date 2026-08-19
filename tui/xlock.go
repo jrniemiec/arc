@@ -218,3 +218,53 @@ type mutationDoneMsg struct{ err error }
 
 // mutationDone wraps a mutation result for delivery to Update.
 func mutationDone(err error) tea.Msg { return mutationDoneMsg{err: err} }
+
+// DefaultIdleTimeout applies when sync.idle_timeout is unset.
+//
+// Long enough that it never fires while you are working, short enough that
+// walking away frees the other machine. There is no automatic *takeover* to go
+// with it — a crashed machine keeps the xlock until someone runs /xlock-take
+// (§7). This only covers the machine that is still alive.
+const DefaultIdleTimeout = 30 * time.Minute
+
+// idleTimeout is the configured self-release period for this machine.
+//
+// Per-machine by design: config.jsonc is never tracked, so a desktop left open
+// all day can use a different value from a laptop.
+func (m Model) idleTimeout() time.Duration {
+	if d := m.cfg.Sync.IdleTimeout.D(); d > 0 {
+		return d
+	}
+	return DefaultIdleTimeout
+}
+
+// busy reports whether any long-running operation is in flight.
+//
+// These count as activity, they do not merely defer the release. A 40-minute
+// ingest with no keystrokes would otherwise leave the idle clock running the
+// whole time, and the xlock would be released the instant the job finished —
+// the opposite of "30 minutes of inactivity".
+func (m Model) busy() bool {
+	if m.ingestRunning || m.cardsRunning || m.populateRunning {
+		return true
+	}
+	if m.chatStreaming || m.achatStreaming || m.askxStreaming {
+		return true
+	}
+	if m.svc != nil && m.svc.Sync().Activity() != "" {
+		return true
+	}
+	return m.ttsPlayer != nil && m.ttsPlayer.Playing()
+}
+
+// selfReleaseXLock gives up the xlock after the idle period.
+func selfReleaseXLock(svc *service.Service) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := svc.Sync().SelfRelease(ctx); err != nil {
+			return cmdDoneMsg{err: syncErrorMessage(err)}
+		}
+		return nil
+	}
+}
