@@ -199,8 +199,30 @@ type coordinator struct {
 	// race rather than reporting it to the user as an error.
 	gitMu sync.Mutex
 
-	// activity is a human-readable description of the in-flight operation.
-	activity string
+	// writeMu serialises the check-and-claim in BeforeWrite.
+	//
+	// Without it, writes issued close together all read held==false before any of
+	// them finishes claiming, and each one pulls, writes xlock.json, commits and
+	// pushes — three network round trips to acquire the same xlock.
+	writeMu sync.Mutex
+
+	// activities holds every operation currently in flight, oldest first.
+	//
+	// A stack rather than a single string because operations overlap: the startup
+	// pull runs on its own goroutine and writes arrive from the UI's. Restoring
+	// the label observed on entry only works for LIFO nesting, and when two
+	// overlap the one finishing last restores the other's label, which nothing
+	// ever clears — leaving the banner spinning forever over an operation that
+	// finished.
+	activities  []activity
+	activitySeq uint64
+}
+
+// activity is one in-flight operation. The id identifies the entry to remove on
+// completion, since the same label can be in flight more than once.
+type activity struct {
+	id   uint64
+	what string
 }
 
 // Options configures a multi-client coordinator.
@@ -255,27 +277,41 @@ func (c *coordinator) push(ctx context.Context) error {
 	return nil
 }
 
+// Activity reports the most recently started operation still in flight.
+//
+// The newest rather than the oldest: operations nest — claiming the xlock pushes,
+// so "pushing" starts inside "acquiring xlock" — and the innermost one is the
+// specific thing currently happening.
 func (c *coordinator) Activity() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.activity
+	if len(c.activities) == 0 {
+		return ""
+	}
+	return c.activities[len(c.activities)-1].what
 }
 
 // setActivity records what is in flight and returns a function that clears it.
+//
+// The entry is removed by id, so overlapping operations finishing out of order
+// each clear their own label and the last one out leaves the stack empty.
 func (c *coordinator) setActivity(what string) func() {
 	started := time.Now()
 	c.mu.Lock()
-	// Restore the previous label rather than blanking it: these nest — claiming
-	// the xlock pushes, so "pushing" sits inside "acquiring xlock". Clearing
-	// unconditionally would drop the outer label the moment the inner one ends.
-	prev := c.activity
-	c.activity = what
+	c.activitySeq++
+	id := c.activitySeq
+	c.activities = append(c.activities, activity{id: id, what: what})
 	c.stateVersion++ // wake the UI immediately rather than at the next tick
 	c.mu.Unlock()
 	slog.Debug("gitsync activity start", "what", what)
 	return func() {
 		c.mu.Lock()
-		c.activity = prev
+		for i, a := range c.activities {
+			if a.id == id {
+				c.activities = append(c.activities[:i], c.activities[i+1:]...)
+				break
+			}
+		}
 		c.stateVersion++
 		c.mu.Unlock()
 		slog.Debug("gitsync activity end", "what", what, "took", time.Since(started).Round(time.Millisecond))
@@ -411,6 +447,13 @@ func (c *coordinator) pull(ctx context.Context) error {
 // BeforeWrite implements the four cases from the design: hold, take, seize
 // silently, or refuse.
 func (c *coordinator) BeforeWrite(ctx context.Context) error {
+	// Serialise the whole check-and-claim. Writes issued close together — the
+	// TUI runs each one on its own goroutine — otherwise all read held==false
+	// before any of them finishes, and each pulls, commits and pushes to acquire
+	// the same xlock.
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
 	c.mu.Lock()
 	if c.diverged {
 		c.mu.Unlock()
@@ -419,7 +462,8 @@ func (c *coordinator) BeforeWrite(ctx context.Context) error {
 	held := c.held
 	c.mu.Unlock()
 
-	// Already holding: proceed with no network round trip.
+	// Already holding: proceed with no network round trip. Callers queued behind
+	// writeMu take this path once the first has claimed.
 	if held {
 		c.Touch()
 		return nil
