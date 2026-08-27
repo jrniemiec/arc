@@ -6,6 +6,7 @@ PROG="${0##*/}"
 
 ARC="${ARC:-arc}"
 ARC_AGENT_DIR="${ARC_AGENT_DIR:-$HOME/.arc/agent}"
+SECRETS_ENV="${SECRETS_ENV:-$HOME/.config/secrets.env}"
 
 RUN_ID=""
 DEBUG=false
@@ -37,7 +38,8 @@ Arguments:
                          Omit to use the last run.
 
 Environment variables:
-  ARC_ANTHROPIC_API_KEY  Anthropic API key (falls back to macOS Keychain)
+  ARC_ANTHROPIC_API_KEY  Anthropic API key (loaded from ~/.config/secrets.env
+                         when not already set in the environment)
   ARC                    Path to arc binary (default: arc)
   ARC_AGENT_DIR          Arc agent directory (default: ~/.arc/agent)
 
@@ -95,11 +97,17 @@ main() {
   DECISIONS_FILE="$ARC_AGENT_DIR/decisions-${RUN_ID}.json"
   [[ -f "$DECISIONS_FILE" ]] || die "decisions file not found: $DECISIONS_FILE"
 
-  # Load API key from Keychain if not set in environment.
+  # launchd invokes this via `bash -c` — a non-interactive shell, which never
+  # reads .bashrc, so secrets.env is not loaded the way it is in a terminal.
+  # It is the single source for API keys; there is deliberately no fallback.
+  if [[ -r "$SECRETS_ENV" ]]; then
+    # shellcheck source=/dev/null
+    . "$SECRETS_ENV"
+  fi
+  export ARC_ANTHROPIC_API_KEY
+
   if [[ -z "${ARC_ANTHROPIC_API_KEY:-}" ]]; then
-    ARC_ANTHROPIC_API_KEY=$(security find-generic-password -a anthropic -s arc -w 2>/dev/null) \
-      || die "API key not found. Set ARC_ANTHROPIC_API_KEY or run: security add-generic-password -a anthropic -s arc -w <key>"
-    export ARC_ANTHROPIC_API_KEY
+    die "ARC_ANTHROPIC_API_KEY not set and not found in $SECRETS_ENV"
   fi
 
   log "processing decisions for run $RUN_ID..."
