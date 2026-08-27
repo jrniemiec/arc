@@ -91,6 +91,7 @@ const (
 	paneStatus                     // status/output area (shell results, etc.)
 	paneResource                   // full-screen resource file overlay
 	paneNavSubTab                  // nav sub-tab bar (Workspaces/Collections/Articles or Runs/Decisions/Feeds)
+	paneNotice                     // dismissible warning box
 )
 
 // contentTab identifies the active sub-tab in the content pane.
@@ -718,6 +719,12 @@ type Model struct {
 	resourceCursor   int       // highlighted line index
 	resourceScroll   int       // scroll offset
 	resourcePreFocus focusPane // focus to restore on close
+
+	// Notice box (active when focus == paneNotice)
+	noticeTitle    string    // heading shown in the box
+	noticeLines    []string  // body, already wrapped by the caller
+	noticePreFocus focusPane // focus to restore on dismiss
+	noticeShown    map[string]bool
 
 	// TTS (macOS say(1))
 	ttsPlayer         *tts.Player
@@ -1738,6 +1745,38 @@ func (m *Model) askConfirm(msg string, fn func() tea.Cmd) {
 	m.cursorVisible = true
 	m.input.SetValue("")
 	m.input.CursorEnd()
+}
+
+// showNotice raises a dismissible warning box over the current view.
+//
+// key makes it once-per-session: conditions like a diverged clone are re-read on
+// every status refresh, and a box that reappeared each time would be noise the
+// user learns to dismiss without reading. Passing an empty key always shows.
+//
+// This is deliberately not the resource overlay. That handler binds 'e' to open
+// an editor and 'x' to delete a line, both of which act on a real file path — a
+// synthetic document there would offer to edit something that does not exist.
+func (m *Model) showNotice(key, title string, lines []string) {
+	if key != "" {
+		if m.noticeShown[key] {
+			return
+		}
+		if m.noticeShown == nil {
+			m.noticeShown = map[string]bool{}
+		}
+		m.noticeShown[key] = true
+	}
+	m.noticeTitle = title
+	m.noticeLines = lines
+	m.noticePreFocus = m.focus
+	m.focus = paneNotice
+}
+
+// dismissNotice closes the box and restores focus.
+func (m *Model) dismissNotice() {
+	m.focus = m.noticePreFocus
+	m.noticeTitle = ""
+	m.noticeLines = nil
 }
 
 // inputPrompt returns the prompt prefix for the command input pane.

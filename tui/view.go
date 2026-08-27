@@ -307,6 +307,13 @@ func (m Model) View() string {
 		return m.renderResourceOverlay()
 	}
 
+	// A notice takes over too. It is raised for conditions the user must not be
+	// able to scroll past — the whole reason it exists is that a status-bar
+	// segment went unread for six days.
+	if m.focus == paneNotice {
+		return m.renderNotice()
+	}
+
 	// Build each section into a []string of exactly the right line count.
 	botLines := m.renderBottomLines()
 	mainHeight := m.height - topBarHeight - len(botLines)
@@ -3282,6 +3289,93 @@ func padRight(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-visible)
+}
+
+// ── Notice box ────────────────────────────────────────────────────────────────
+
+// renderNotice draws the warning box centred on an otherwise blank screen.
+//
+// It blanks the view rather than compositing over it. The condition behind a
+// notice is one the user has to act on, and leaving the familiar layout visible
+// underneath invites dismissing it as decoration — which is what the red status
+// segment it replaces already proved.
+func (m Model) renderNotice() string {
+	t := ActiveTheme
+
+	// Box width: comfortable for prose, widened if a command needs it, never
+	// wider than the terminal.
+	boxW := 72
+	for _, line := range m.noticeLines {
+		if strings.HasPrefix(line, " ") && lipgloss.Width(line)+4 > boxW {
+			boxW = lipgloss.Width(line) + 4
+		}
+	}
+	if boxW > m.width-4 {
+		boxW = m.width - 4
+	}
+	if boxW < 20 {
+		boxW = 20
+	}
+	inner := boxW - 4 // two border columns plus a space of padding each side
+
+	// An indented line is preformatted — a command to type. wrapIndent splits on
+	// fields, which would strip the indent that sets it apart from the prose.
+	//
+	// When the terminal is too narrow for one even after widening, it is wrapped
+	// with a hanging indent rather than left to padRight. Truncation would print
+	// a command that looks complete and is not, which is worse than no command.
+	var body []string
+	for _, line := range m.noticeLines {
+		if strings.HasPrefix(line, " ") {
+			if lipgloss.Width(line) <= inner {
+				body = append(body, line)
+			} else {
+				body = append(body, wrapIndent(strings.TrimSpace(line), inner, "    ", "      ")...)
+			}
+			continue
+		}
+		body = append(body, wrapIndent(line, inner, "", "")...)
+	}
+
+	top := fg(t.BoxBorder, "╭"+strings.Repeat("─", boxW-2)+"╮")
+	bot := fg(t.BoxBorder, "╰"+strings.Repeat("─", boxW-2)+"╯")
+	bL := fg(t.BoxBorder, "│ ")
+	bR := fg(t.BoxBorder, " │")
+
+	// padRight truncates anything still too wide, so a narrow terminal degrades
+	// instead of tearing the border.
+	row := func(s string, style func(lipgloss.Color, string) string, col lipgloss.Color) string {
+		return bL + style(col, padRight(s, inner)) + bR
+	}
+
+	box := []string{top}
+	box = append(box, row(m.noticeTitle, fgBold, t.StatusError))
+	box = append(box, row("", fg, t.ContentText))
+	for _, line := range body {
+		box = append(box, row(line, fg, t.ContentText))
+	}
+	box = append(box, row("", fg, t.ContentText))
+	box = append(box, row("press any key to continue", fgFaint, t.Dimmed))
+	box = append(box, bot)
+
+	// Centre vertically, then horizontally.
+	padTop := (m.height - len(box)) / 2
+	if padTop < 0 {
+		padTop = 0
+	}
+	padLeft := strings.Repeat(" ", max(0, (m.width-boxW)/2))
+
+	out := make([]string, 0, m.height)
+	for i := 0; i < padTop; i++ {
+		out = append(out, "")
+	}
+	for _, line := range box {
+		out = append(out, padLeft+line)
+	}
+	for len(out) < m.height {
+		out = append(out, "")
+	}
+	return strings.Join(out[:m.height], "\n")
 }
 
 // ── Resource overlay ──────────────────────────────────────────────────────────

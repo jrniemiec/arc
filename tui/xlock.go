@@ -108,6 +108,28 @@ func refreshXLockWith(svc *service.Service, machine string, margin time.Duration
 	}
 }
 
+// divergedNoticeLines is the body of the warning box raised when the tree forks
+// mid-session.
+//
+// It says what stopped and what to run, and nothing else. The full explanation
+// lives in the repair screen (cmd/tui.go), which is what the user meets on the
+// next launch — arc refuses to open on a fork it already knows about.
+func divergedNoticeLines() []string {
+	return []string{
+		"Another machine wrote while this one had unpushed work, so the two " +
+			"histories have forked.",
+		"",
+		"Nothing is lost — both sides are in git. Until it is repaired, arc " +
+			"will not save anything new, and it will not open again on this tree.",
+		"",
+		"To repair, in the arc data directory:",
+		"    git fetch origin && git merge origin/main && git push",
+		"",
+		"Fetch first — origin/main is only as current as the last fetch. Check what " +
+			"each side has with 'git log --oneline HEAD..origin/main' before merging.",
+	}
+}
+
 // renderXLockBanner returns the status-bar segment and its display width, or
 // ("", 0) in standalone mode.
 //

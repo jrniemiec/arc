@@ -99,6 +99,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		activity := m.xlock.activity
 		m.xlock = msg.state
 		m.xlock.activity = activity
+		// The startup guard catches a fork that was already on disk and refuses to
+		// open at all. This is the other case: the fork appeared while the session
+		// was running, so the background pull is the first to see it. Saying so
+		// once beats the red banner segment that went unread for six days.
+		if m.xlock.diverged {
+			m.showNotice("sync-diverged", "Sync stopped — this tree has diverged", divergedNoticeLines())
+		}
 		return m, nil
 
 	case scratchAppendedMsg:
@@ -1636,6 +1643,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleStatusKey(msg)
 	case paneResource:
 		return m.handleResourceKey(msg)
+	case paneNotice:
+		return m.handleNoticeKey(msg)
 	case paneNavSubTab:
 		return m.handleNavSubTabKey(msg)
 	}
@@ -3889,6 +3898,14 @@ func (m *Model) handleResourceKey(msg tea.KeyMsg) tea.Cmd {
 	case "]":
 		return m.cmdResourceTTSAdjustRate(+20, viewH)
 	}
+	return nil
+}
+
+// handleNoticeKey dismisses the warning box. Any key closes it: the box states a
+// condition and offers no choice, so trapping the user until they find the one
+// accepted key would only teach them to distrust it.
+func (m *Model) handleNoticeKey(msg tea.KeyMsg) tea.Cmd {
+	m.dismissNotice()
 	return nil
 }
 

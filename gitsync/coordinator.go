@@ -21,9 +21,14 @@ type Coordinator interface {
 	// code should ask — logic must not branch on it.
 	Enabled() bool
 
-	// Startup pulls so the machine shows current content. It is non-blocking
-	// in effect: any failure is logged and swallowed, because being offline
+	// Startup pulls so the machine shows current content. The pull itself is
+	// asynchronous: any failure is logged and swallowed, because being offline
 	// must never prevent the app from starting.
+	//
+	// It does settle divergence before returning, from refs already on disk, so
+	// a caller may read Status() immediately after and trust the answer. That
+	// costs milliseconds on a healthy tree; only a suspected fork pays for a
+	// confirming fetch.
 	Startup(ctx context.Context)
 
 	// BeforeWrite gates a mutating operation. It returns *Blocked when another
@@ -101,8 +106,12 @@ func (b *Blocked) Error() string {
 		b.Holder, roundDur(b.SeizableIn))
 }
 
-// Diverged reports that this clone holds commits the remote does not. The app
-// must not operate in this state — reads included — until the fork is resolved.
+// Diverged reports that this clone holds commits the remote does not.
+//
+// Writes are refused until the fork is resolved, and the user is warned once per
+// session rather than only in the log. Reads continue: what makes them unsafe is
+// that this content may not survive the repair, which is a reason to say so
+// loudly, not to end a session in progress and lose unsaved work with it.
 type Diverged struct {
 	Commits []string
 }
@@ -110,7 +119,8 @@ type Diverged struct {
 func (d *Diverged) Error() string {
 	return fmt.Sprintf(
 		"this machine has %d unpushed commit(s) the remote does not have — "+
-			"another machine wrote while this one was away; run 'arc sync enable' to repair",
+			"another machine wrote while this one was away; repair in the arc data "+
+			"directory with: git fetch origin && git merge origin/main && git push",
 		len(d.Commits))
 }
 
@@ -375,8 +385,52 @@ func (c *coordinator) Touch() {
 // the round-trip time. Nothing depends on it having finished: the first write
 // pulls again before acquiring the xlock, and until then reads simply show
 // content that is at most one launch stale.
+// divergenceConfirmTimeout bounds the fetch that confirms a fork suspected from
+// stale refs. Only spent when something already looks wrong, so it trades a
+// pause the user will never normally see for not locking them out of a healthy
+// tree on the strength of an out-of-date ref.
+const divergenceConfirmTimeout = 2 * time.Second
+
 func (c *coordinator) Startup(ctx context.Context) {
+	// Settle divergence before returning, so callers reading Status() right after
+	// this get a real answer. The pull below cannot do that job: it is
+	// deliberately asynchronous, so a Status() call racing it reads false, which
+	// is how a six-day-old fork kept opening the app as if nothing were wrong.
+	c.detectDivergenceOffline(ctx)
 	go c.startupPull(context.WithoutCancel(ctx))
+}
+
+// detectDivergenceOffline settles c.diverged from refs already on disk, then
+// confirms over the network only if they say the tree has forked.
+//
+// The offline read costs milliseconds and catches every fork a previous session
+// already fetched — which, after the launch where the fork appears, is all of
+// them. That launch is covered by the startup pull instead.
+func (c *coordinator) detectDivergenceOffline(ctx context.Context) {
+	ahead, behind, err := c.git.Divergence(ctx)
+	if err != nil || ahead == 0 || behind == 0 {
+		return
+	}
+
+	// Stale refs can describe a fork that no longer exists — another machine may
+	// have merged this one's work and pushed. Confirm before refusing to open.
+	fetchCtx, cancel := context.WithTimeout(ctx, divergenceConfirmTimeout)
+	defer cancel()
+	if err := c.FetchOnly(fetchCtx); err == nil {
+		ahead, behind, err = c.git.Divergence(ctx)
+		if err != nil || ahead == 0 || behind == 0 {
+			slog.Info("gitsync: suspected divergence cleared by fetch",
+				"ahead", ahead, "behind", behind)
+			return
+		}
+	}
+	// A failed fetch leaves the offline verdict standing: as far as this machine
+	// can know the tree has forked, and the repair screen says to fetch.
+
+	c.mu.Lock()
+	c.diverged = true
+	c.mu.Unlock()
+	slog.Error("gitsync: clone diverged", "ahead", ahead, "behind", behind)
 }
 
 func (c *coordinator) startupPull(ctx context.Context) {

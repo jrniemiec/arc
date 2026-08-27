@@ -130,7 +130,7 @@ func (m *Model) cmdSyncPush() tea.Cmd {
 }
 
 func (m *Model) cmdSyncEnable() tea.Cmd {
-	m.statusMsg = "✗ run 'arc sync enable' in the terminal — it may need to resolve a diverged tree"
+	m.statusMsg = "✗ run 'arc sync enable' in the terminal — if it reports a diverged tree, repair with git merge"
 	return nil
 }
 
@@ -219,7 +219,7 @@ func syncErrorMessage(err error) string {
 	var diverged *gitsync.Diverged
 	if errors.As(err, &diverged) {
 		return "diverged: this machine has unpushed commits the remote does not have — " +
-			"run 'arc sync enable' in the terminal to repair"
+			"repair in the terminal with: git fetch origin && git merge origin/main && git push"
 	}
 	switch {
 	case errors.Is(err, gitsync.ErrDirtyTree):

@@ -352,13 +352,23 @@ lets --ff-only reveal whether the tree diverged while this machine was away.`,
 		if err := g.MergeFFOnly(ctx); err != nil {
 			if errors.Is(err, gitsync.ErrDiverged) {
 				commits, _ := g.UnpushedCommits(ctx)
-				fmt.Fprintf(cmd.ErrOrStderr(),
+				errOut := cmd.ErrOrStderr()
+				fmt.Fprintf(errOut,
 					"\nDIVERGED: this machine has %d commit(s) the remote does not.\n"+
 						"Another machine wrote while this one was standalone.\n"+
 						"Resolve before continuing — arc will not operate until you do.\n", len(commits))
 				for _, c := range commits {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  %s\n", c)
+					fmt.Fprintf(errOut, "  %s\n", c)
 				}
+				// This command diagnoses only. Saying so is the point: the message
+				// it replaces pointed the user back at 'arc sync enable' itself.
+				fmt.Fprintf(errOut,
+					"\nThis command does not repair. In %s run:\n"+
+						"  git fetch origin && git merge origin/main && git push\n"+
+						"to keep both sides, after checking what each has with\n"+
+						"  git log --oneline HEAD..origin/main\n"+
+						"Fetch first: origin/main is only as current as the last fetch.\n",
+					cfg.DataRoot)
 				return errors.New("diverged clone: manual repair required")
 			}
 			return err

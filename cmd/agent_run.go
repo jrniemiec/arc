@@ -98,6 +98,7 @@ func runAgentRun(cmd *cobra.Command, _ []string) error {
 		RunsPath:  runsPath,
 		DryRun:    agentDryRun,
 		Status:    spinnerStatus,
+		Sync:      svc.Sync(),
 	}
 
 	tag := ""

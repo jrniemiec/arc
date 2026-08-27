@@ -277,6 +277,34 @@ func (g *Git) UnpushedCount(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// Divergence compares HEAD against the last-fetched remote-tracking ref and
+// reports how many commits each side has that the other does not. A fork is
+// both counts being non-zero.
+//
+// No network. refs/remotes/<remote>/<branch> is on disk from the previous fetch,
+// so this answers in milliseconds — which is the point: it makes a divergence
+// check cheap enough to run before the UI opens, instead of only learning about
+// a fork when MergeFFOnly fails after a fetch.
+//
+// The answer is therefore only as current as the last fetch. It cannot see a
+// fork that appeared since, and it still reports one that another machine has
+// already merged. Callers that act on it confirm with a fetch first.
+//
+// Returns 0, 0 when the remote-tracking ref does not exist yet, matching
+// UnpushedCount: a clone that has never fetched has not diverged.
+func (g *Git) Divergence(ctx context.Context) (ahead, behind int, err error) {
+	out, err := g.run(ctx, "rev-list", "--left-right", "--count",
+		g.Remote+"/"+g.Branch+"..."+"HEAD")
+	if err != nil {
+		return 0, 0, nil
+	}
+	// Output is "<behind>\t<ahead>": left is the remote side, right is HEAD.
+	if _, scanErr := fmt.Sscanf(strings.TrimSpace(out), "%d %d", &behind, &ahead); scanErr != nil {
+		return 0, 0, nil
+	}
+	return ahead, behind, nil
+}
+
 // UnpushedCommits returns one-line summaries of commits not yet on the remote,
 // newest first. Used by the repair screen to show what would be replayed.
 func (g *Git) UnpushedCommits(ctx context.Context) ([]string, error) {

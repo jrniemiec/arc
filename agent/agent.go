@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	llmlib "github.com/jrniemiec/llm"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/gitsync"
 	"github.com/jrniemiec/arc/ingest/feed"
 	"github.com/jrniemiec/arc/ingest/pipeline"
 	"github.com/jrniemiec/arc/store/sqlite"
@@ -66,6 +68,60 @@ type RunOptions struct {
 	// slots 1..IngestConcurrency are per-ingest sub-lines (one per parallel ingest).
 	// Setting a slot to "" clears it. Safe to leave nil.
 	Status func(slot int, msg string)
+
+	// Sync, if non-nil, is the git coordinator. A run refuses to start on a
+	// diverged clone. Leave nil in standalone mode or in tests.
+	Sync gitsync.Coordinator
+}
+
+// syncPreflight pulls before the run so a diverged clone stops it.
+//
+// The pull is synchronous, unlike the one cmd/root.go starts at launch. That one
+// is deliberately fire-and-forget so being offline cannot delay startup, but it
+// means Status() reports diverged=false until it finishes — a race the TUI guard
+// at cmd/tui.go loses on nearly every launch. An agent run is a batch job with
+// no one watching, so it can afford the round trip and needs the certain answer.
+//
+// Only divergence is fatal. An unreachable remote returns nil: the run works
+// offline, and refusing to ingest because a fetch failed would be a worse
+// failure than the one being prevented.
+func syncPreflight(ctx context.Context, opts RunOptions) error {
+	if opts.Sync == nil || !opts.Sync.Enabled() {
+		return nil
+	}
+	err := opts.Sync.Pull(ctx)
+	if err == nil {
+		return nil
+	}
+	var d *gitsync.Diverged
+	if errors.As(err, &d) {
+		return d
+	}
+	slog.Warn("agent: sync preflight pull failed, continuing", "err", err)
+	return nil
+}
+
+// abortedRun builds and persists the record for a run that never started, so the
+// failure reaches the user. An unrecorded failure is a silent one: the briefing
+// decides to send mail by finding rec.Error, and with no record it emits nothing
+// and the mailer stays quiet.
+// runType must match what the completed run would have recorded: the briefing
+// picks the latest non-decisions run (cmd/agent_briefing.go), so mislabelling an
+// aborted decisions run as "daily" would let it stand in for the daily digest.
+func abortedRun(opts RunOptions, runID, runType string, startedAt time.Time, cause error) RunRecord {
+	rec := RunRecord{
+		RunID:      runID,
+		RunType:    runType,
+		StartedAt:  startedAt,
+		FinishedAt: time.Now().UTC(),
+		Error:      cause.Error(),
+	}
+	if opts.RunsPath != "" {
+		if err := AppendRun(opts.RunsPath, rec); err != nil {
+			slog.Warn("could not append run record", "err", err)
+		}
+	}
+	return rec
 }
 
 // RunFeeds executes one full agent cycle:
@@ -80,6 +136,14 @@ func RunFeeds(ctx context.Context, opts RunOptions) (RunRecord, error) {
 	startedAt := time.Now().UTC()
 
 	slog.Info("agent run started", "run_id", runID, "feeds", len(opts.AgentCfg.Feeds))
+
+	// A diverged clone stops the run before any feed is polled. Ingesting into a
+	// fork buries the articles on a branch that is about to be replayed or
+	// dropped, and the push at the end cannot land anyway.
+	if err := syncPreflight(ctx, opts); err != nil {
+		slog.Error("agent run aborted: clone diverged", "run_id", runID, "err", err)
+		return abortedRun(opts, runID, "daily", startedAt, err), nil
+	}
 
 	// Build library context (recent titles + top tags).
 	libCtx, err := BuildLibraryContext(ctx, opts.DB, opts.ArcConfig.DataRoot)
@@ -683,6 +747,14 @@ func RunDecisions(ctx context.Context, opts RunOptions, decisionsPath string) (R
 
 	runID := NewRunID()
 	startedAt := time.Now().UTC()
+
+	// Same gate as RunFeeds — a decisions run ingests too, so it must not write
+	// into a fork either.
+	if err := syncPreflight(ctx, opts); err != nil {
+		slog.Error("decisions run aborted: clone diverged", "run_id", runID, "err", err)
+		return abortedRun(opts, runID, "decisions", startedAt, err), nil
+	}
+
 	rec := RunRecord{
 		RunID:       runID,
 		RunType:     "decisions",
