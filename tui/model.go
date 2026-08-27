@@ -661,6 +661,7 @@ type Model struct {
 	askxCollapsed      map[int]bool       // set of collapsed box indices
 	askxResetPending   bool               // true when /reset confirmation is awaiting y/n
 	askxResetTurnCount int                // number of active (non-commented) turns shown in confirmation
+	askxSaver          *askxSaver         // serialises history writes; pointer so bubbletea's Model copies share it
 	populateRunning    bool               // true while workspace populate LLM is in flight
 	populateLabel      string             // label shown in wave indicator during populate
 	ingestRunning      bool               // true while an article ingest is in flight
@@ -2099,6 +2100,7 @@ func New(svc *service.Service, cfg config.Config, cfgPath, themeMode string) Mod
 		paramIdx:            -1,
 		chatAutoScroll:      true,
 		programSend:         &sendFn,
+		askxSaver:           &askxSaver{},
 		ttsPlayer:           tts.NewPlayer(cfg.TTSVoice, cfg.TTSRate),
 	}
 	return m
@@ -2183,6 +2185,10 @@ func (m Model) SaveState() {
 // Call after p.Run() exits.
 func (m Model) Cleanup() {
 	m.ttsPlayer.Stop()
+
+	// Before the xlock goes: a queued askX write must land in this session's
+	// tree, not the next one's.
+	m.askxSaver.wait()
 
 	// Best effort only: flush pending flag pushes and release the xlock. Nothing
 	// depends on this running — that is what the other machine's takeover timer

@@ -270,6 +270,10 @@ var gitignorePatterns = []string{
 	"/tui_state.json",
 	"/command_history",
 	"/cookies/",
+	// Transient temp files from atomicfile.Write. Unanchored: they appear
+	// wherever a file is replaced. CommitAll runs `git add -A`, so without this
+	// a commit racing a write commits a temp file that is gone a moment later.
+	".*.tmp*",
 	// Anchored to the root. An unanchored "config.jsonc" matches at every depth,
 	// which silently excluded agent/config.jsonc and every
 	// workspaces/*/chat/config.jsonc — the per-workspace chat profile and

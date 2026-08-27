@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/internal/atomicfile"
 	"github.com/jrniemiec/arc/internal/jsonc"
 )
 
@@ -250,11 +251,7 @@ func SaveAskXHistory(dataRoot, workspace string, h *AskXHistory) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.Write(path, data, 0644)
 }
 
 // askxSummaryMeta is the JSON envelope persisted alongside the summary text.
@@ -295,11 +292,7 @@ func SaveAskXSummary(dataRoot, workspace string, text string, coversThrough time
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.Write(path, data, 0644)
 }
 
 // ReadWorkspaceMeta reads meta.json from a workspace directory.

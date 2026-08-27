@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/jrniemiec/arc/internal/atomicfile"
 )
 
 // ArticleChatConfig is the per-article chat configuration stored in
@@ -46,11 +48,7 @@ func WriteArticleChatConfig(articlesRoot, slug string, cfg ArticleChatConfig) er
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, "config.json.tmp")
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(dir, "config.json"))
+	return atomicfile.Write(filepath.Join(dir, "config.json"), data, 0644)
 }
 
 // HasArticleChat returns true if the article has a non-empty chat history

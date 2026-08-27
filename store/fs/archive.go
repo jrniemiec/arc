@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/jrniemiec/arc/internal/atomicfile"
 )
 
 // ArchiveMessage is one message in an archived chat session.
@@ -67,11 +69,7 @@ func WriteArchiveState(dataRoot string, s ArchiveState) error {
 	if err != nil {
 		return err
 	}
-	tmp := archiveStatePath(dataRoot) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, archiveStatePath(dataRoot))
+	return atomicfile.Write(archiveStatePath(dataRoot), data, 0644)
 }
 
 // AppendArchiveRunEntry appends a run-delimiter entry to chat_archive.jsonl.

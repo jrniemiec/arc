@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jrniemiec/arc/ingest/feed"
+	"github.com/jrniemiec/arc/internal/atomicfile"
 	"github.com/jrniemiec/arc/internal/jsonc"
 )
 
@@ -297,38 +298,13 @@ func saveFeeds(path string, feeds []FeedConfig) error {
 	return writeFileAtomic(path, out)
 }
 
-// writeFileAtomic replaces path in one step: write a temp file alongside it,
-// then rename. A plain write truncates first, so an interrupted one leaves a
-// half-written config — and this file now holds the prompt as well as the
-// feeds, which is more than a crash should be able to take.
+// writeFileAtomic replaces path in one step rather than truncating it, so an
+// interrupted write cannot leave a half-written config — and this file now
+// holds the prompt as well as the feeds, which is more than a crash should be
+// able to take.
 func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp*")
-	if err != nil {
-		return fmt.Errorf("create temp config: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write temp config: %w", err)
-	}
-	// Flush before the rename, so a crash cannot leave the new name pointing
-	// at a file whose contents never reached the disk.
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("sync temp config: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp config: %w", err)
-	}
-	// CreateTemp makes the file 0600; configs are 0644 like the rest.
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return fmt.Errorf("chmod temp config: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace agent config: %w", err)
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
+		return fmt.Errorf("write agent config: %w", err)
 	}
 	return nil
 }

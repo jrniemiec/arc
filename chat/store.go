@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jrniemiec/arc/internal/atomicfile"
 )
 
 // ChatStore persists chat state for a single workspace.
@@ -129,11 +131,7 @@ func (s *ChatStore) SaveSummary(text string, coversThrough time.Time) error {
 		return err
 	}
 	content := fmt.Sprintf("covers_through_ts: %s\n---\n%s", coversThrough.UTC().Format(time.RFC3339Nano), text)
-	tmp := s.summaryPath() + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.summaryPath())
+	return atomicfile.Write(s.summaryPath(), []byte(content), 0644)
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -191,9 +189,5 @@ func saveHistoryFile(path string, h *History) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.Write(path, b, 0644)
 }

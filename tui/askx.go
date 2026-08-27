@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -19,6 +20,7 @@ import (
 	chatprovider "github.com/jrniemiec/arc/chat/provider"
 	"github.com/jrniemiec/arc/chat/strategy"
 	"github.com/jrniemiec/arc/config"
+	"github.com/jrniemiec/arc/service"
 	storefs "github.com/jrniemiec/arc/store/fs"
 	"github.com/jrniemiec/arc/tts"
 )
@@ -224,7 +226,6 @@ func (m *Model) cmdAskXAddNote(text string) {
 	m.saveAskXHistory()
 }
 
-// saveAskXHistory persists the current askxMsgs to JSON.
 // saveAskXHistory persists askX history without blocking the event loop.
 //
 // In multi-client mode the write can take seconds — the first one of a session
@@ -233,15 +234,74 @@ func (m *Model) cmdAskXAddNote(text string) {
 // render loop was not running. Errors come back through programSend so they are
 // still surfaced.
 func (m *Model) saveAskXHistory() {
-	ws := m.askxWorkspace()
-	h := msgsToAskXHistory(m.askxMsgs)
-	svc := m.svc
-	send := m.programSend
+	m.askxSaver.save(m.svc, askxSaveJob{
+		workspace: m.askxWorkspace(),
+		history:   msgsToAskXHistory(m.askxMsgs),
+	}, m.programSend)
+}
+
+// askxSaveJob is one queued snapshot of the askX history.
+type askxSaveJob struct {
+	workspace string
+	history   *storefs.AskXHistory
+}
+
+// askxSaver runs askX history writes one at a time, newest snapshot first.
+//
+// Two saves fire per query — the user message, then the reply — each from its
+// own goroutine. When the sync gate has to claim the xlock it parks both behind
+// writeMu for a network round trip and then releases them together, so they ran
+// concurrently over the same file and the older snapshot could land last.
+//
+// Queued writes are coalesced rather than replayed in order: every job is the
+// whole history, so the newest one subsumes the ones it replaces.
+type askxSaver struct {
+	mu      sync.Mutex
+	pending *askxSaveJob // newest snapshot not yet written; nil when caught up
+	running bool         // a writer goroutine is draining pending
+	idle    sync.WaitGroup
+}
+
+// save queues a snapshot, starting the writer goroutine if it is idle.
+func (s *askxSaver) save(svc *service.Service, job askxSaveJob, send *func(tea.Msg)) {
+	s.mu.Lock()
+	s.pending = &job
+	if s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.running = true
+	s.idle.Add(1)
+	s.mu.Unlock()
+
 	go func() {
-		if err := svc.SaveAskXHistory(context.Background(), ws, h); err != nil && send != nil {
-			(*send)(cmdDoneMsg{err: "askX save: " + syncErrorMessage(err)})
+		defer s.idle.Done()
+		for {
+			s.mu.Lock()
+			next := s.pending
+			s.pending = nil
+			if next == nil {
+				s.running = false
+				s.mu.Unlock()
+				return
+			}
+			s.mu.Unlock()
+
+			if err := svc.SaveAskXHistory(context.Background(), next.workspace, next.history); err != nil && send != nil {
+				(*send)(cmdDoneMsg{err: "askX save: " + syncErrorMessage(err)})
+			}
 		}
 	}()
+}
+
+// wait blocks until every queued write has been attempted. Called on exit,
+// before the xlock is released, so the last turn of a session is on disk and
+// inside the commit that goes with it.
+func (s *askxSaver) wait() {
+	if s == nil {
+		return
+	}
+	s.idle.Wait()
 }
 
 // ── @token parsing ──────────────────────────────────────────────────────────

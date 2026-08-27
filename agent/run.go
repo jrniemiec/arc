@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/jrniemiec/arc/internal/atomicfile"
 )
 
 // RunRecord is one entry appended to agent/runs.jsonl after each agent run.
@@ -192,12 +194,8 @@ func DeleteRun(runsPath, decisionsDir, runID string) error {
 		buf = append(buf, '\n', '\n')
 	}
 
-	tmp := runsPath + ".tmp"
-	if err := os.WriteFile(tmp, buf, 0o644); err != nil {
-		return fmt.Errorf("write runs file: %w", err)
-	}
-	if err := os.Rename(tmp, runsPath); err != nil {
-		return fmt.Errorf("replace runs file: %w", err)
+	if err := atomicfile.Write(runsPath, buf, 0o644); err != nil {
+		return fmt.Errorf("rewrite runs file: %w", err)
 	}
 
 	decisionsPath := filepath.Join(decisionsDir, "decisions-"+runID+".json")
