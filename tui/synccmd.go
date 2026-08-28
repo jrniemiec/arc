@@ -219,7 +219,7 @@ func syncErrorMessage(err error) string {
 	var diverged *gitsync.Diverged
 	if errors.As(err, &diverged) {
 		return "diverged: this machine has unpushed commits the remote does not have — " +
-			"repair in the terminal with: git fetch origin && git merge origin/main && git push"
+			"run 'arc sync repair' in the terminal to merge both sides"
 	}
 	switch {
 	case errors.Is(err, gitsync.ErrDirtyTree):

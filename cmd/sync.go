@@ -17,8 +17,11 @@ import (
 )
 
 func init() {
+	syncRepairCmd.Flags().BoolVar(&repairDryRun, "dry-run", false, "show the plan, change nothing")
+	syncRepairCmd.Flags().BoolVar(&repairYes, "yes", false, "skip the confirmation prompt")
+
 	syncCmd.AddCommand(syncInitCmd, syncEnableCmd, syncDisableCmd,
-		syncStatusCmd, syncPullCmd, syncPushCmd)
+		syncStatusCmd, syncPullCmd, syncPushCmd, syncRepairCmd)
 	rootCmd.AddCommand(syncCmd)
 }
 
@@ -363,12 +366,9 @@ lets --ff-only reveal whether the tree diverged while this machine was away.`,
 				// This command diagnoses only. Saying so is the point: the message
 				// it replaces pointed the user back at 'arc sync enable' itself.
 				fmt.Fprintf(errOut,
-					"\nThis command does not repair. In %s run:\n"+
-						"  git fetch origin && git merge origin/main && git push\n"+
-						"to keep both sides, after checking what each has with\n"+
-						"  git log --oneline HEAD..origin/main\n"+
-						"Fetch first: origin/main is only as current as the last fetch.\n",
-					cfg.DataRoot)
+					"\nThis command does not repair. Run:\n"+
+						"  arc sync repair\n"+
+						"It fetches, shows what each side has, and merges once you confirm.\n")
 				return errors.New("diverged clone: manual repair required")
 			}
 			return err
@@ -498,6 +498,273 @@ var syncPushCmd = &cobra.Command{
 		fmt.Fprintln(cmd.OutOrStdout(), "pushed")
 		return nil
 	},
+}
+
+// -----------------------------------------------------------------------------
+// repair
+// -----------------------------------------------------------------------------
+
+var (
+	repairDryRun bool
+	repairYes    bool
+)
+
+var syncRepairCmd = &cobra.Command{
+	Use:   "repair",
+	Short: "Merge a diverged tree back together",
+	Long: `Rejoin a tree that has forked, by merging the remote into this machine.
+
+A fork happens when another machine pushes while this one has unpushed work.
+Until it is repaired arc refuses to open, so this command must stay usable in
+exactly the state that stops everything else.
+
+It only ever merges. Rebasing rewrites the auto-commits and can collide on
+num_id; resetting discards whichever side you point it away from. Both remain
+manual git commands, because only you can judge which side of a fork is
+disposable — they are rarely the same size.
+
+  arc sync repair --dry-run    show the plan, change nothing
+  arc sync repair --yes        skip the confirmation`,
+	RunE: func(cmd *cobra.Command, args []string) error { return runRepair(cmd) },
+}
+
+// runRepair automates this sequence:
+//
+//	cd <data root>
+//
+//	# 1. fetch — stop here if it fails
+//	git fetch origin main
+//
+//	# 2. classify
+//	git rev-list --left-right --count origin/main...HEAD   # behind<TAB>ahead
+//
+//	#    0 0  -> nothing to do
+//	#    0 N  -> git merge --ff-only origin/main ; stop
+//	#    N 0  -> git push ; stop
+//	#    N M  -> real fork, continue
+//
+//	# 3. show both sides, then confirm
+//	git log --oneline origin/main..HEAD    # only this machine
+//	git log --oneline HEAD..origin/main    # only the remote
+//
+//	# 4. backup ref
+//	git tag arc-pre-repair-$(date +%Y%m%d-%H%M%S)
+//
+//	# 5. union-merge the append-only log
+//	grep -q 'events.jsonl merge=union' .gitattributes 2>/dev/null || \
+//	  echo 'events.jsonl merge=union' >> .gitattributes
+//	git add .gitattributes && git commit -m "Union-merge events.jsonl" || true
+//
+//	# 6. merge
+//	git merge origin/main
+//
+//	# 7. on conflict
+//	git diff --name-only --diff-filter=U   # list them
+//	git merge --abort
+//
+//	# 8. reindex if articles moved
+//	git diff --name-only HEAD@{1} HEAD -- articles/ && arc reindex
+//
+//	# 9. push
+//	git push
+func runRepair(cmd *cobra.Command) error {
+	cfg := cfgFrom(cmd)
+	ctx := cmd.Context()
+	out := cmd.OutOrStdout()
+
+	if !cfg.Sync.MultiClient() {
+		return errors.New("not in multi-client mode — nothing to repair")
+	}
+	branch := cfg.Sync.Branch
+	if branch == "" {
+		branch = "main"
+	}
+	g := &gitsync.Git{Dir: cfg.DataRoot, Remote: "origin", Branch: branch}
+	if !g.IsRepo(ctx) || g.RemoteURL(ctx) == "" {
+		return fmt.Errorf("this tree is not set up for sync — run 'arc sync init <repo-url>' first")
+	}
+	remoteRef := "origin/" + branch
+
+	// Uncommitted work would be swept into the merge. Capture it first, as every
+	// other sync path does.
+	if !repairDryRun {
+		if committed, err := g.CommitAll(ctx, "arc: local changes"); err != nil {
+			return err
+		} else if committed {
+			fmt.Fprintln(out, "committed uncommitted changes first")
+		}
+	}
+
+	// 1. Fetch. Fatal on failure: every check below reads the remote-tracking
+	// ref, and merging a stale one reproduces the non-fast-forward rejection
+	// this command exists to clear.
+	if err := g.Fetch(ctx); err != nil {
+		return fmt.Errorf("fetch failed, cannot repair against a stale ref: %w", err)
+	}
+
+	// 2. Classify. Three of the four cases are not forks.
+	ahead, behind, err := g.Divergence(ctx)
+	if err != nil {
+		return err
+	}
+	switch {
+	case ahead == 0 && behind == 0:
+		fmt.Fprintln(out, "already in sync — nothing to repair")
+		return nil
+	case ahead == 0:
+		if repairDryRun {
+			fmt.Fprintf(out, "would fast-forward %d commit(s)\n", behind)
+			return nil
+		}
+		if err := g.MergeFFOnly(ctx); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "fast-forwarded %d commit(s)\n", behind)
+		return reindexIfArticlesChanged(cmd, g)
+	case behind == 0:
+		if repairDryRun {
+			fmt.Fprintf(out, "would push %d commit(s)\n", ahead)
+			return nil
+		}
+		if err := g.Push(ctx); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "pushed %d commit(s)\n", ahead)
+		return nil
+	}
+
+	// 3. A real fork. Show both sides before touching anything — they are rarely
+	// the same size, and the asymmetry is the whole basis for the decision.
+	mine, _ := g.LogRange(ctx, remoteRef+"..HEAD")
+	theirs, _ := g.LogRange(ctx, "HEAD.."+remoteRef)
+	fmt.Fprintf(out, "\nDIVERGED: %d commit(s) here, %d on the remote.\n\n", ahead, behind)
+	printCommits(out, "only on this machine:", mine)
+	printCommits(out, "only on the remote:", theirs)
+
+	if repairDryRun {
+		fmt.Fprintln(out, "would merge the remote into this machine, keeping both sides")
+		return nil
+	}
+	if !repairYes {
+		fmt.Fprint(out, "merge both sides? [y/N] ")
+		var answer string
+		fmt.Fscanln(cmd.InOrStdin(), &answer)
+		if !strings.EqualFold(strings.TrimSpace(answer), "y") {
+			fmt.Fprintln(out, "aborted — nothing changed")
+			return nil
+		}
+	}
+
+	// 4. Backup ref. Free: the objects stay reachable from the branch anyway.
+	tag := "arc-pre-repair-" + time.Now().Format("20060102-150405")
+	if err := g.Tag(ctx, tag); err != nil {
+		return fmt.Errorf("could not tag the pre-repair state: %w", err)
+	}
+
+	// 5. events.jsonl is append-only, so both sides are always right and it
+	// conflicts on every fork. A union merge is the correct resolution and
+	// removes the only conflict most repairs would ever hit.
+	if err := ensureUnionMerge(ctx, g, cfg.DataRoot); err != nil {
+		return err
+	}
+
+	// 6/7. Merge, and on conflict restore rather than guess. arc cannot judge
+	// which side of a summary or a workspace file is correct.
+	if err := g.Merge(ctx, remoteRef); err != nil {
+		conflicts, _ := g.ConflictedFiles(ctx)
+		if abortErr := g.MergeAbort(ctx); abortErr != nil {
+			return fmt.Errorf("merge conflicted and could not be undone: %v (abort: %w)", err, abortErr)
+		}
+		errOut := cmd.ErrOrStderr()
+		fmt.Fprintf(errOut, "\nmerge conflicted — nothing changed. Resolve by hand:\n")
+		for _, f := range conflicts {
+			fmt.Fprintf(errOut, "  %s\n", f)
+		}
+		fmt.Fprintf(errOut, "\n  cd %s && git merge %s\n", cfg.DataRoot, remoteRef)
+		fmt.Fprintf(errOut, "  # fix the files above, then: git add -A && git commit && git push\n")
+		fmt.Fprintf(errOut, "  # to undo entirely: git reset --hard %s\n", tag)
+		return errors.New("merge conflict: manual resolution required")
+	}
+	fmt.Fprintln(out, "merged")
+
+	// 8. Reindex only if article files moved.
+	if err := reindexIfArticlesChanged(cmd, g); err != nil {
+		return err
+	}
+
+	// 9. Push, retrying once if the remote moved while we were merging.
+	if err := g.Push(ctx); err != nil {
+		fmt.Fprintln(out, "push rejected, remote moved — merging again")
+		if err := g.Fetch(ctx); err != nil {
+			return err
+		}
+		if err := g.Merge(ctx, remoteRef); err != nil {
+			return fmt.Errorf("second merge failed: %w", err)
+		}
+		if err := g.Push(ctx); err != nil {
+			return fmt.Errorf("push still rejected: %w", err)
+		}
+	}
+
+	fmt.Fprintf(out, "pushed — repaired\n\nundo with: git reset --hard %s\ndelete the tag when satisfied: git tag -d %s\n", tag, tag)
+	return nil
+}
+
+func printCommits(out io.Writer, heading string, commits []string) {
+	fmt.Fprintf(out, "  %s\n", heading)
+	if len(commits) == 0 {
+		fmt.Fprintln(out, "    (none)")
+	}
+	for _, c := range commits {
+		fmt.Fprintf(out, "    %s\n", c)
+	}
+	fmt.Fprintln(out)
+}
+
+// ensureUnionMerge adds the events.jsonl union rule to .gitattributes if absent,
+// committing it so the merge that follows picks it up.
+func ensureUnionMerge(ctx context.Context, g *gitsync.Git, dataRoot string) error {
+	const rule = "events.jsonl merge=union"
+	path := filepath.Join(dataRoot, ".gitattributes")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if strings.Contains(string(existing), rule) {
+		return nil
+	}
+	body := string(existing)
+	if body != "" && !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	body += rule + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		return err
+	}
+	_, err = g.CommitAll(ctx, "Union-merge events.jsonl so append-only logs never conflict")
+	return err
+}
+
+// reindexIfArticlesChanged re-reads only what a merge or fast-forward touched.
+func reindexIfArticlesChanged(cmd *cobra.Command, g *gitsync.Git) error {
+	changed, err := g.ChangedFiles(cmd.Context(), "HEAD@{1}", "HEAD")
+	if err != nil {
+		return nil // no reflog entry to compare against; nothing to do
+	}
+	touched := false
+	for _, f := range changed {
+		if strings.Contains(f, "articles/") {
+			touched = true
+			break
+		}
+	}
+	if !touched {
+		return nil
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "article files changed — reindexing")
+	_, err = svcFrom(cmd).Reindex(cmd.Context(), nil)
+	return err
 }
 
 // writeSyncMode persists the sync block to config.jsonc.

@@ -35,7 +35,7 @@ func TestNoticeRendersTitleAndBody(t *testing.T) {
 	out := m.View()
 	for _, want := range []string{
 		"Sync stopped",
-		"git merge origin/main",
+		"arc sync repair",
 		"press any key to continue",
 	} {
 		if !strings.Contains(out, want) {
@@ -59,11 +59,14 @@ func TestNoticeSurvivesNarrowTerminal(t *testing.T) {
 // "…&& git push" down to "…&& git pus" at 64 columns — still copy-pasteable,
 // and broken. Narrow terminals wrap it instead.
 func TestNoticeNeverTruncatesACommand(t *testing.T) {
+	// A synthetic command rather than the live message: this guards the renderer,
+	// so it must keep testing wrapping even when the wording gets shorter.
 	const want = "git fetch origin && git merge origin/main && git push"
+	body := []string{"To repair, in the arc data directory:", "    " + want}
 
 	for _, width := range []int{100, 80, 64, 50, 40} {
 		m := &Model{focus: paneContent, width: width, height: 30}
-		m.showNotice("k", "Sync stopped", divergedNoticeLines())
+		m.showNotice("k", "Sync stopped", body)
 
 		// Collapse the wrap: the command may span lines, but every token must
 		// survive and stay in order. Border columns sit between those lines, so

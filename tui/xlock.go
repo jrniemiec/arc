@@ -122,11 +122,14 @@ func divergedNoticeLines() []string {
 		"Nothing is lost — both sides are in git. Until it is repaired, arc " +
 			"will not save anything new, and it will not open again on this tree.",
 		"",
-		"To repair, in the arc data directory:",
-		"    git fetch origin && git merge origin/main && git push",
+		"To repair, in the terminal:",
+		"    arc sync repair",
 		"",
-		"Fetch first — origin/main is only as current as the last fetch. Check what " +
-			"each side has with 'git log --oneline HEAD..origin/main' before merging.",
+		"It fetches, shows what each side has, waits for your OK, then merges and " +
+			"pushes. Use 'arc sync repair --dry-run' to see the plan without changing anything.",
+		"",
+		"Or do it by hand: git fetch origin && git merge origin/main && git push. " +
+			"arc prints the full sequence next time it starts.",
 	}
 }
 

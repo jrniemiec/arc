@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -147,5 +148,75 @@ func TestNoDivergenceOnCleanClone(t *testing.T) {
 
 	if diverged {
 		t.Error("clean clone reported as diverged")
+	}
+}
+
+// Merge joins a fork; MergeAbort restores it. Repair depends on the abort being
+// total — it reports "nothing changed" and must be telling the truth.
+func TestMergeAndAbortRestoreTheFork(t *testing.T) {
+	g := forkedClones(t)
+	ctx := context.Background()
+	if err := g.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both sides touched the same path, so this merge conflicts.
+	commit(t, g.Dir, "shared.txt", "mine")
+	git(t, g.Dir, "fetch", "origin", "main")
+	before := git(t, g.Dir, "rev-parse", "HEAD")
+
+	if err := g.Merge(ctx, "origin/main"); err == nil {
+		// No conflict on this fixture: the merge is legitimate, so just check it
+		// moved HEAD and leave the abort case to the conflicting run below.
+		if after := git(t, g.Dir, "rev-parse", "HEAD"); after == before {
+			t.Error("Merge reported success but HEAD did not move")
+		}
+		return
+	}
+
+	if err := g.MergeAbort(ctx); err != nil {
+		t.Fatalf("MergeAbort: %v", err)
+	}
+	if after := git(t, g.Dir, "rev-parse", "HEAD"); after != before {
+		t.Error("HEAD moved across a conflicted merge that was aborted")
+	}
+}
+
+// LogRange feeds the "what each side has" output. Getting the direction backwards
+// would show the user the wrong side to keep.
+func TestLogRangeReportsEachSideSeparately(t *testing.T) {
+	g := forkedClones(t)
+	ctx := context.Background()
+	if err := g.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	mine, err := g.LogRange(ctx, "origin/main..HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := g.LogRange(ctx, "HEAD..origin/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(mine) != 1 || !strings.Contains(mine[0], "from-a") {
+		t.Errorf("origin/main..HEAD = %v, want the local commit", mine)
+	}
+	if len(theirs) != 1 || !strings.Contains(theirs[0], "from-b") {
+		t.Errorf("HEAD..origin/main = %v, want the remote commit", theirs)
+	}
+}
+
+// The pre-repair tag is the only way back if a merge goes wrong.
+func TestTagMarksHead(t *testing.T) {
+	g := forkedClones(t)
+	if err := g.Tag(context.Background(), "arc-pre-repair-test"); err != nil {
+		t.Fatalf("Tag: %v", err)
+	}
+	head := strings.TrimSpace(git(t, g.Dir, "rev-parse", "HEAD"))
+	tagged := strings.TrimSpace(git(t, g.Dir, "rev-parse", "arc-pre-repair-test"))
+	if head != tagged {
+		t.Errorf("tag points at %s, HEAD is %s", tagged, head)
 	}
 }

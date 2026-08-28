@@ -195,6 +195,52 @@ func (g *Git) MergeFFOnly(ctx context.Context) error {
 	return err
 }
 
+// Merge merges ref into the current branch, creating a merge commit when the
+// histories have diverged. Unlike MergeFFOnly this can conflict; callers are
+// expected to inspect ConflictedFiles and decide.
+func (g *Git) Merge(ctx context.Context, ref string) error {
+	_, err := g.run(ctx, "merge", "--no-edit", ref)
+	return err
+}
+
+// MergeAbort restores the pre-merge state after a conflict.
+func (g *Git) MergeAbort(ctx context.Context) error {
+	_, err := g.run(ctx, "merge", "--abort")
+	return err
+}
+
+// ConflictedFiles lists paths left unmerged by a conflicted merge.
+func (g *Git) ConflictedFiles(ctx context.Context) ([]string, error) {
+	out, err := g.run(ctx, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// Tag creates a lightweight tag at HEAD.
+func (g *Git) Tag(ctx context.Context, name string) error {
+	_, err := g.run(ctx, "tag", name)
+	return err
+}
+
+// LogRange returns one-line summaries for a revision range, newest first.
+func (g *Git) LogRange(ctx context.Context, rng string) ([]string, error) {
+	out, err := g.run(ctx, "log", "--oneline", rng)
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 // ChangedFiles lists paths that changed between two commits, as "STATUS\tpath".
 func (g *Git) ChangedFiles(ctx context.Context, from, to string) ([]string, error) {
 	if from == to {

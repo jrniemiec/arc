@@ -119,8 +119,8 @@ type Diverged struct {
 func (d *Diverged) Error() string {
 	return fmt.Sprintf(
 		"this machine has %d unpushed commit(s) the remote does not have — "+
-			"another machine wrote while this one was away; repair in the arc data "+
-			"directory with: git fetch origin && git merge origin/main && git push",
+			"another machine wrote while this one was away; run 'arc sync repair' "+
+			"in the terminal to merge both sides",
 		len(d.Commits))
 }
 
