@@ -7,6 +7,9 @@ bin/
 *.out
 
 
+# Machine-local build settings (build tags), included by the Makefile if present
+Makefile.local
+
 # Go workspace
 go.work
 go.work.sum

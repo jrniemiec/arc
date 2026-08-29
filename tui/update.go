@@ -48,6 +48,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// An add-on's own message types, before the built-in switch — it cannot add
+	// cases to it. Nil unless one was compiled in.
+	if addonMsg != nil {
+		if cmd, handled := addonMsg(msg); handled {
+			return m, cmd
+		}
+	}
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -1418,7 +1426,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case msg.String() == "ctrl+c" && m.focus == paneCommand && m.input.Value() != "":
 		m.copyToClipboard(m.input.Value())
 		return nil
-	case key.Matches(msg, keys.Quit) && !(m.focus == paneCommand && msg.String() == "q"):
+	// The command pane still has to swallow the letter — typing a capital Q into
+	// a query must not quit. /exit is the way out from there, which is also the
+	// one that matches how every other action is invoked.
+	case key.Matches(msg, keys.Quit) && !(m.focus == paneCommand && msg.String() == "Q"):
 		return tea.Quit
 	case key.Matches(msg, keys.Back):
 		// Resource overlay: Esc closes and restores previous focus.
@@ -1627,6 +1638,14 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			"focus_after", m.focus,
 			"achatFocused", m.achatFocused)
 		return nil
+	}
+
+	// An add-on pane takes keys before the built-ins, since its focus value is
+	// not one of the cases below.
+	if addonKey != nil {
+		if cmd, handled := addonKey(m, msg); handled {
+			return cmd
+		}
 	}
 
 	// Pane-specific keys
@@ -5456,8 +5475,19 @@ func (m *Model) dispatchCommand(val string) tea.Cmd {
 		return syncCmd
 	}
 
+	// Add-on commands, for the same reason. Nil unless one was compiled in.
+	if addonDispatch != nil {
+		if addonCmd, handled := addonDispatch(m, cmd, arg); handled {
+			return addonCmd
+		}
+	}
+
 	// ── Global commands (available in any context) ──────────────────────────
 	switch cmd {
+	case "/exit", "/quit":
+		// Same path as Q: bubbletea returns from Run and cmd/tui.go does the
+		// cleanup — chat history, UI state, and the xlock release.
+		return tea.Quit
 	case "/arc-home":
 		m.statusMsg = m.cfg.DataRoot
 		return nil
@@ -9440,7 +9470,8 @@ func (m *Model) contextKeys(all bool) []string {
 		{"↑ / ↓", "", "recall command history (in command pane)"},
 		{"?", "", "show context key bindings"},
 		{"/?", "", "show all key bindings"},
-		{"q / ctrl+c", "", "quit"},
+		{"Q / ctrl+c", "", "quit"},
+		{"/exit", "", "quit (also /quit)"},
 	}
 
 	articleKeys := []cmdCompletion{

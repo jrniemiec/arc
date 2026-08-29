@@ -171,8 +171,11 @@ var keys = keyMap{
 		key.WithKeys("alt+3", "£"), // £ = macOS Option+3
 		key.WithHelp("alt+3", "tab bar"),
 	),
+	// Uppercase so that lowercase q is free to mean "close this" everywhere.
+	// It already did in the overlays and the review prompts, which left q
+	// meaning quit in some contexts and close in others.
 	Quit: key.NewBinding(
-		key.WithKeys("q", "ctrl+c"),
-		key.WithHelp("q", "quit"),
+		key.WithKeys("Q", "ctrl+c"),
+		key.WithHelp("Q", "quit"),
 	),
 }

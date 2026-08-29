@@ -1,21 +1,45 @@
 GO      ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS ?= -X main.version=$(VERSION)
 BINARY   := arc
 INSTALL  := $(HOME)/dev/bin/$(BINARY)
 BINDIR   ?= $(HOME)/dev/bin
 SCRIPTS  := $(wildcard scripts/*.sh)
 SCRIPT_BINS := $(patsubst scripts/%.sh,$(BINDIR)/%,$(SCRIPTS))
 
-.PHONY: build install install-scripts run test fmt vet clean feedprobe dist release
+# Optional build tags, empty by default so a clone builds the shipping binary.
+#
+# Makefile.local is gitignored and sets TAGS for one machine, so 'make install'
+# there produces the personal build without anyone having to remember a second
+# target. Override with 'make install TAGS=' to get the plain binary anyway.
+TAGS ?=
+-include Makefile.local
+
+# The tag is stamped into --version because both builds produce bin/arc, and
+# without it there is no way to tell which one is installed.
+# go build -tags takes a comma-separated list, so TAGS goes through verbatim.
+TAGFLAGS := $(if $(TAGS),-tags $(TAGS),)
+LDFLAGS  ?= -X main.version=$(VERSION)$(if $(TAGS),+$(TAGS),)
+
+.PHONY: build build-sessions install install-sessions install-scripts run test test-sessions fmt vet clean feedprobe dist release
 
 build:
 	@mkdir -p bin
-	$(GO) build -ldflags '$(LDFLAGS)' -o bin/$(BINARY) .
+	$(GO) build $(TAGFLAGS) -ldflags '$(LDFLAGS)' -o bin/$(BINARY) .
+
+# Explicit personal build, for when TAGS is not set locally.
+build-sessions:
+	@$(MAKE) build TAGS=arcsessions
 
 install: build install-scripts
 	ln -sf $(CURDIR)/bin/$(BINARY) $(INSTALL)
-	@echo "Installed: $(INSTALL)"
+	@echo "Installed: $(INSTALL) $(if $(TAGS),($(TAGS)),)"
+
+install-sessions:
+	@$(MAKE) install TAGS=arcsessions
+
+# Always runs the tagged suite, whatever TAGS is set to locally.
+test-sessions:
+	$(GO) test -tags arcsessions ./...
 
 install-scripts:
 	@mkdir -p $(BINDIR)
@@ -30,13 +54,13 @@ run: build
 	bin/$(BINARY)
 
 test:
-	$(GO) test ./...
+	$(GO) test $(TAGFLAGS) ./...
 
 fmt:
 	$(GO) fmt ./...
 
 vet:
-	$(GO) vet ./...
+	$(GO) vet $(TAGFLAGS) ./...
 
 feedprobe:
 	@mkdir -p bin

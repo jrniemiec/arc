@@ -314,6 +314,13 @@ func (m Model) View() string {
 		return m.renderNotice()
 	}
 
+	// An add-on pane, when one is compiled in and open.
+	if addonView != nil {
+		if s, ok := addonView(m); ok {
+			return s
+		}
+	}
+
 	// Build each section into a []string of exactly the right line count.
 	botLines := m.renderBottomLines()
 	mainHeight := m.height - topBarHeight - len(botLines)
@@ -3256,13 +3263,13 @@ func (m Model) renderStatusLine() string {
 func (m Model) hintsFor() string {
 	switch m.activeTab {
 	case tabLibrary:
-		return " j/k navigate · Tab pane · s speak · / command · 1·2·3 tabs · q quit · ? help"
+		return " j/k navigate · Tab pane · s speak · / command · 1·2·3 tabs · Q quit · ? help"
 	case tabAgent:
-		return " j/k navigate · R run · D dry-run · 1·2·3 tabs · q quit · ? help"
+		return " j/k navigate · R run · D dry-run · 1·2·3 tabs · Q quit · ? help"
 	case tabStats:
-		return " j/k navigate · r refresh · 1·2·3 tabs · q quit · ? help"
+		return " j/k navigate · r refresh · 1·2·3 tabs · Q quit · ? help"
 	default:
-		return " 1·2·3 tabs · q quit · ? help"
+		return " 1·2·3 tabs · Q quit · ? help"
 	}
 }
 

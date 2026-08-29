@@ -1340,7 +1340,7 @@ func (m *Model) dispatchChatCommand(val string) tea.Cmd {
 			lines = append(lines, line)
 		}
 		lines = append(lines, "")
-		lines = append(lines, "Keys: ↑/↓ scroll · Esc focus input · Tab switch pane · q quit")
+		lines = append(lines, "Keys: ↑/↓ scroll · Esc focus input · Tab switch pane · Q quit")
 		m.setStatusLines(lines)
 		return nil
 

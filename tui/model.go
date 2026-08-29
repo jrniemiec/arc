@@ -797,6 +797,7 @@ var globalCommands = []cmdCompletion{
 	{"/chats-archive", "", "archive pending AskX + article chat messages"},
 	{"/chats-history", "", "browse archived chat sessions (overlay)"},
 	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
+	{"/exit", "", "quit arc (same as Q)"},
 }
 
 // articleCommands are available when the Articles sub-tab is active.
@@ -953,6 +954,7 @@ var chatCommands = []cmdCompletion{
 	{"/chats-archive", "", "archive pending AskX + article chat messages"},
 	{"/chats-history", "", "browse archived chat sessions (overlay)"},
 	{"/chats-export", "[--md|--text]", "export chat archive to file and open in $EDITOR"},
+	{"/exit", "", "quit arc (same as Q)"},
 	{"/help", "", "show chat commands"},
 }
 
