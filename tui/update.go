@@ -9471,7 +9471,7 @@ func (m *Model) contextKeys(all bool) []string {
 		{"?", "", "show context key bindings"},
 		{"/?", "", "show all key bindings"},
 		{"Q / ctrl+c", "", "quit"},
-		{"/exit", "", "quit (also /quit)"},
+		{"/exit  /quit", "", "quit"},
 	}
 
 	articleKeys := []cmdCompletion{

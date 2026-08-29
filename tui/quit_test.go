@@ -63,20 +63,26 @@ func TestExitCommandQuits(t *testing.T) {
 
 // Registration has to reach the completion lists too, or the command works but
 // cannot be discovered.
-func TestExitIsListed(t *testing.T) {
+//
+// Both names need their own entry, not one mentioning the other: completion
+// matches on the command prefix (update.go), so an alias that is only described
+// in someone else's help text offers nothing when you start typing it.
+func TestBothQuitCommandsAreListed(t *testing.T) {
 	for name, list := range map[string][]cmdCompletion{
 		"globalCommands": globalCommands,
 		"chatCommands":   chatCommands,
 	} {
-		found := false
-		for _, c := range list {
-			if c.cmd == "/exit" {
-				found = true
-				break
+		for _, want := range []string{"/exit", "/quit"} {
+			found := false
+			for _, c := range list {
+				if c.cmd == want {
+					found = true
+					break
+				}
 			}
-		}
-		if !found {
-			t.Errorf("/exit missing from %s", name)
+			if !found {
+				t.Errorf("%s missing from %s", want, name)
+			}
 		}
 	}
 }
